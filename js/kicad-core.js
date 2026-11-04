@@ -579,6 +579,15 @@
       }
     });
 
+    // Point lists, kept for step-by-step tracing (which items touch which points).
+    sh.pointLists = [];
+    nodes.forEach((n) => { n.pts = []; });
+    for (const list of pointMap.values()) {
+      const uniq = Array.from(new Set(list)), pi = sh.pointLists.length;
+      sh.pointLists.push(uniq);
+      for (const n of uniq) nodes[n].pts.push(pi);
+    }
+
     // Assign compact group ids.
     const groupOfRoot = new Map();
     const groups = [];

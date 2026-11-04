@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.6.1';
+  const VERSION = '1.7.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -395,13 +395,14 @@
     const s = state.sel, inst = state.inst;
     updateAnnot();
     if (!s || !inst) { view.setHighlight(null); return; }
-    if (s.type === 'net') view.setHighlight(groupsFor(s.net, inst), -1, -1);
+    if (s.type === 'net') { const its = traceIts(s, inst); if (its) view.setHighlight(null, -1, -1, null, its); else view.setHighlight(groupsFor(s.net, inst), -1, -1); }
     else if (s.type === 'symbol') view.setHighlight(null, s.inst === inst ? s.si : -1, -1);
     else if (s.type === 'sheet') view.setHighlight(null, -1, s.inst === inst ? s.idx : -1);
     else if (s.type === 'graphic') view.setHighlight(null, -1, -1, s.inst === inst ? s.it : null);
   }
   function selectNet(net, item) {
     state.sel = { type: 'net', net, item: item || null };
+    if (traceStep && item) startTrace(state.sel, false);
     applyHighlight();
     if (state.panelOpen && (state.tab === 'info' || state.tab === 'parts')) showTab('nets');
     renderSelectionUI();
@@ -422,6 +423,108 @@
     if (state.panelOpen && state.tab === 'nets') showTab('info');
     renderSelectionUI();
   }
+  // ---- step-by-step tracing: follow a net from the tapped wire to the first connector, then on
+  let traceStep = Store.pref('traceStep') === true;
+  function startNodeOf(inst, item) {
+    if (!item) return -1;
+    const sh = inst.sheet;
+    const o = item.type === 'wire' ? sh.wires[item.idx] : item.type === 'label' ? sh.labels[item.idx] : item.type === 'junction' ? sh.junctions[item.idx]
+      : item.type === 'nc' ? sh.noConnects[item.idx] : item.type === 'pin' ? (sh.symbols[item.si] && K.symbolPins(sh.symbols[item.si])[item.pi]) : null;
+    return o && o.node !== undefined ? o.node : -1;
+  }
+  function startTrace(s, render) {
+    const node = startNodeOf(state.inst, s.item);
+    if (node < 0) return false;
+    s.step = { inst: state.inst.idx, node, k: 0 };
+    s._tr = null;
+    if (!traceOf(s)) { s.step = null; return false; }
+    if (render) { applyHighlight(); renderSelectionUI(); }
+    return true;
+  }
+  function traceOf(s) {
+    if (!s || s.type !== 'net' || !s.step) return null;
+    const P = state.project;
+    if (!s._tr || s._tr.P !== P) {
+      const inst = P.instances[s.step.inst];
+      let tr = null;
+      try { tr = inst ? Loom.traceSteps(P, inst, s.step.node) : null; } catch (e) { console.error(e); }
+      s._tr = { P, tr: tr && tr.steps.length ? tr : null };
+      if (s._tr.tr) s.step.k = Math.min(s.step.k, s._tr.tr.steps.length - 1);
+    }
+    return s._tr.tr;
+  }
+  function traceIts(s, inst, only) {
+    const tr = traceOf(s); if (!tr) return null;
+    const its = new Set();
+    const from = only ? s.step.k : 0;
+    for (let k = from; k <= s.step.k; k++) {
+      const set = tr.steps[k].items.get(inst.idx); if (!set) continue;
+      for (const n of set) { const t = tr.tagOf(inst.idx, n); if (t) its.add(t); }
+    }
+    return its;
+  }
+  function itsBox(inst, its) {
+    const S = sceneFor(inst);
+    let bb = null;
+    const grow = (b) => { bb = bb ? [Math.min(bb[0], b[0]), Math.min(bb[1], b[1]), Math.max(bb[2], b[2]), Math.max(bb[3], b[3])] : b.slice(); };
+    for (const list of [S.strokes, S.circles, S.hitLabels]) for (const o of list) if (o.it && its.has(o.it)) grow(o.bb);
+    if (!bb) return null;
+    const cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2, w = Math.max(bb[2] - bb[0], 70) + 10, hh = Math.max(bb[3] - bb[1], 45) + 10;
+    return [cx - w / 2, cy - hh / 2, cx + w / 2, cy + hh / 2];
+  }
+  // Shows the newest step: on this sheet if it reaches here, otherwise on the sheet it reaches most.
+  function showTraceStep(s) {
+    const tr = traceOf(s); if (!tr) return;
+    const step = tr.steps[s.step.k];
+    let inst = step.items.has(state.inst.idx) ? state.inst : null;
+    if (!inst) { let best = -1; for (const [ii, set] of step.items) if (set.size > best) { best = set.size; inst = state.project.instances[ii]; } }
+    if (!inst) return;
+    if (inst !== state.inst) { showInstance(inst); toast(`Continues on sheet ${inst.page}: ${instLabel(inst)}`); }
+    applyHighlight();
+    const b = itsBox(inst, traceIts(s, inst, true));
+    if (b) view.animateTo(b);
+  }
+  function traceMove(d) {
+    const s = state.sel, tr = traceOf(s); if (!tr) return;
+    const k = Math.max(0, Math.min(tr.steps.length - 1, s.step.k + d));
+    if (k === s.step.k) return;
+    s.step.k = k;
+    renderSelectionUI();
+    showTraceStep(s);
+  }
+  function setTraceStep(on) {
+    traceStep = on; Store.pref('traceStep', on);
+    const s = state.sel;
+    if (s && s.type === 'net') { if (on) startTrace(s, false); else { s.step = null; s._tr = null; } applyHighlight(); renderSelectionUI(); }
+  }
+  function traceSummary(s) {
+    const tr = traceOf(s); if (!tr) return '';
+    const n = tr.steps.length, k = s.step.k, step = tr.steps[k];
+    if (n === 1) return 'Step 1 of 1 · whole net · ';
+    const conns = step.stops.filter((x) => x.kind === 'conn').map((x) => x.ref + '.' + x.number);
+    const jump = step.stops.find((x) => x.kind === 'jump');
+    const parts = [];
+    if (k < n - 1) {
+      if (conns.length) parts.push('to ' + conns.slice(0, 3).join(', ') + (conns.length > 3 ? ` +${conns.length - 3}` : ''));
+      if (jump) parts.push('⇢ ' + jump.name + ' elsewhere');
+    } else parts.push('whole net');
+    const away = Array.from(step.items.keys()).filter((ii) => ii !== state.inst.idx).map((ii) => state.project.instances[ii].page);
+    if (away.length) parts.push('also p' + away.slice(0, 3).join(', p'));
+    return `Step ${k + 1} of ${n} · ` + parts.join(' · ') + ' · ';
+  }
+  function traceActions(s) {
+    const tr = traceOf(s);
+    if (tr) {
+      const last = tr.steps.length - 1;
+      return [
+        { label: 'CONTINUE', icon: 'i-next', primary: true, disabled: s.step.k >= last, run: () => traceMove(1) },
+        { label: 'BACK', icon: 'i-undo', disabled: s.step.k === 0, run: () => traceMove(-1) },
+        { label: 'ALL', icon: 'i-net', run: () => setTraceStep(false) }
+      ];
+    }
+    return startNodeOf(state.inst, s.item) >= 0 && !s.net.bus ? [{ label: 'STEP', icon: 'i-steps', run: () => setTraceStep(true) }] : [];
+  }
+
   function clearSelection() {
     state.sel = null;
     applyHighlight();
@@ -1125,6 +1228,7 @@
       A.push({ label: 'ZOOM', icon: 'i-target', run: zoomToSelection });
     } else if (s.type === 'net') {
       const it = s.item, o = itemObj(it);
+      A.unshift(...traceActions(s));
       if (it && it.type === 'label' && o) {
         A.push({ label: 'RENAME', icon: 'i-edit', run: () => labelDialog({ rename: o }) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'label ' + o.text }) });
@@ -1143,7 +1247,7 @@
         A.push({ label: 'WIRE', icon: 'i-wire', run: () => { setMode('wire'); state.wire = { anchors: [o.pos.slice()], flips: [false] }; updateWireOverlay(o.pos); } });
       }
       A.push({ label: 'ZOOM', icon: 'i-target', run: zoomToSelection });
-      if (s.net.inst.size > 1) A.push({ label: 'NEXT', icon: 'i-next', run: () => nextSheetForNet(s.net) });
+      if (s.net.inst.size > 1) A.push({ label: 'NEXT SHEET', icon: 'i-next', run: () => nextSheetForNet(s.net) });
     } else if (s.type === 'sheet') {
       const sheet = sh.sheets[s.idx];
       const child = s.inst.children.find((c) => c.sheetSym === sheet);
@@ -1338,7 +1442,7 @@
       const it = s.item, o = itemObj(it);
       const what = it && o ? (it.type === 'label' ? 'Label · ' : it.type === 'wire' ? 'Wire · ' : it.type === 'pin' ? `Pin ${o.number} · ` : it.type === 'nc' ? 'No-connect · ' : it.type === 'junction' ? 'Junction · ' : '') : '';
       const wno = state.A && state.A.wireNo[net.id];
-      t2.textContent = what + (wno && !net.named ? `Wire ${wno} · ` : '') + (net.bus ? `Bus · ${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`) + ` · ${sheets} sheet${sheets === 1 ? '' : 's'}`;
+      t2.textContent = traceSummary(s) + what + (wno && !net.named ? `Wire ${wno} · ` : '') + (net.bus ? `Bus · ${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`) + ` · ${sheets} sheet${sheets === 1 ? '' : 's'}`;
     } else if (s.type === 'symbol') {
       const inst = s.inst, sym = inst.sheet.symbols[s.si], ref = inst.refs[s.si].ref;
       const unit = sym.lib && sym.lib.unitCount > 1 ? K.unitLetter(inst.refs[s.si].unit || sym.unit) : '';
@@ -1377,6 +1481,7 @@
   }
   function zoomToSelection() {
     const s = state.sel; if (!s) return;
+    if (s.type === 'net' && traceOf(s)) { showTraceStep(s); return; }
     if (s.type === 'net') { const here = s.net.inst.has(state.inst.idx) ? state.inst : state.project.instances[s.net.inst.keys().next().value]; goToNetOn(here, s.net); }
     else if (s.type === 'symbol') { if (s.inst !== state.inst) showInstance(s.inst); const b = symBox(s.inst, s.si); if (b) { view.animateTo(b); view.flashBox(b); } }
     else if (s.type === 'sheet' && s.inst === state.inst) { const b = sceneFor(s.inst).sheets.find((x) => x.idx === s.idx); if (b) view.animateTo(b.bb); }
@@ -1852,7 +1957,7 @@
   const show = Object.assign({ wireNos: true, xrefs: true, markers: true, install: false }, Store.pref('show') || {});
   state.show = show;
   function setShow(k, v) { show[k] = v; Store.pref('show', show); updateAnnot(); if (state.panelOpen) { state._keepScroll = true; renderPanel(); } }
-  const COL = { wireNo: ['#1f5f8b', '#8cc3ec'], xref: ['#7a3d8f', '#d29be6'], fitted: '#2a7ab0', tested: '#1e9e5a', partial: '#e39b00', added: '#1e9e5a', changed: '#e39b00', net: '#9b3fc4' };
+  const COL = { wireNo: ['#1f5f8b', '#8cc3ec'], xref: ['#7a3d8f', '#d29be6'], fitted: '#2a7ab0', tested: '#1e9e5a', partial: '#e39b00', added: '#1e9e5a', changed: '#e39b00', net: '#9b3fc4', ahead: ['#f0c9a8', '#6b4a33'], stop: '#e8590c' };
 
   function analyzeNow() {
     try { state.A = Loom.analyze(state.project); } catch (e) { console.error(e); state.A = null; }
@@ -1918,6 +2023,11 @@
         if (x.tested || x.fitted) an.symMarks.set(sy.si, { color: x.tested ? COL.tested : COL.fitted });
       }
     }
+    const s = state.sel, tr = s && s.type === 'net' && traceOf(s);
+    if (tr) {
+      if (s.step.k < tr.steps.length - 1) for (const g of groupsFor(s.net, inst)) an.groupColor.set(g, COL.ahead[d]);
+      for (const st of tr.steps[s.step.k].stops) if (st.kind === 'conn' && st.inst === inst.idx) an.symMarks.set(st.si, { color: COL.stop, dash: true });
+    }
     view.setAnnot(an);
   }
 
@@ -1928,6 +2038,7 @@
       { label: 'Cross-references', icon: show.xrefs ? 'i-check' : 'i-none', checked: show.xrefs, run: () => setShow('xrefs', !show.xrefs) },
       { label: 'Check markers', icon: show.markers ? 'i-check' : 'i-none', checked: show.markers, run: () => setShow('markers', !show.markers) },
       { label: 'Install status', icon: show.install ? 'i-check' : 'i-none', checked: show.install, run: () => setShow('install', !show.install) },
+      { label: 'Trace in steps', icon: traceStep ? 'i-check' : 'i-none', checked: traceStep, run: () => setTraceStep(!traceStep) },
       { label: 'Grid dots', icon: view.showGrid ? 'i-check' : 'i-none', checked: view.showGrid, run: () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); } },
       { sep: true },
       { label: 'Reports', icon: 'i-report', run: () => showTab('reports', true) },

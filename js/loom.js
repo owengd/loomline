@@ -354,6 +354,116 @@
     }
     return { modules, chans, ebus, ebusUnknown, supply };
   }
+  // ---------------------------------------------------------------- step-by-step tracing
+  // Splits a net into steps from a starting item, the way a run is followed on the boat: a step
+  // follows drawn wires (and same-sheet labels and sheet pins, which are the same conductor) and
+  // stops at connector or terminal pins and at off-page jumps (global labels, power symbols).
+  // The next step carries on through those. Returns { steps: [{ items: Map(instIdx -> Set(node)),
+  // stops: [{ inst, kind: 'conn' | 'jump', ref, number, name, si }] }], tagOf } or null.
+  const nodeTag = (n) => n.kind === 'wire' ? 'W' + n.ref : n.kind === 'junction' ? 'J' + n.ref : n.kind === 'label' ? 'L' + n.ref : n.kind === 'nc' ? 'N' + n.ref
+    : n.kind === 'entry' ? 'E' + n.ref : n.kind === 'pin' ? 'P' + n.ref[0] + ':' + n.ref[1] : n.kind === 'sheetpin' ? 'HP' + n.ref[0] + ':' + n.ref[1] : null;
+  function traceSteps(P, startInst, startNode, opts) {
+    opts = opts || {};
+    const maxSteps = opts.maxSteps || 500;
+    const sheetOf = (ii) => P.instances[ii].sheet;
+    const nodeAt = (ii, n) => sheetOf(ii).nodes[n];
+    const sn = nodeAt(startInst.idx, startNode); if (!sn) return null;
+    const netId = startInst.netOf[sn.group];
+    const net = P.nets[netId]; if (!net || net.bus) return null;
+    const connCache = new Map();
+    const pinInfo = (ii, n) => {
+      const nd = nodeAt(ii, n); if (nd.kind !== 'pin') return null;
+      const inst = P.instances[ii], si = nd.ref[0], sym = inst.sheet.symbols[si];
+      const pin = K.symbolPins(sym)[nd.ref[1]];
+      const ref = inst.refs[si].ref;
+      const k = ii + ':' + si;
+      let conn = connCache.get(k);
+      if (conn === undefined) connCache.set(k, conn = !!(sym.lib && !sym.lib.power && !ref.startsWith('#') && isConnector(sym, ref)));
+      return { inst, si, sym, pin, ref, conn, power: !!(sym.lib && sym.lib.power) };
+    };
+    // Off-page jump points in this net: power symbol pins and global labels, on every sheet.
+    const jumps = [];
+    for (const [ii, groups] of net.inst) {
+      const sh = sheetOf(ii), gs = new Set(groups);
+      sh.labels.forEach((l) => { if (l.kind === 'global' && gs.has(l.group)) jumps.push([ii, l.node]); });
+      sh.symbols.forEach((sym, si) => { if (sym.lib && sym.lib.power) for (const pin of K.symbolPins(sym)) if (gs.has(pin.group)) jumps.push([ii, pin.node]); });
+    }
+    const isJump = (ii, n) => { const nd = nodeAt(ii, n); if (nd.kind === 'label') return sheetOf(ii).labels[nd.ref].kind === 'global'; const pi = pinInfo(ii, n); return !!(pi && pi.power); };
+    // Same-conductor links: local labels of one name on a sheet, sheet pins and hierarchical labels.
+    const links = (ii, n) => {
+      const inst = P.instances[ii], sh = inst.sheet, nd = sh.nodes[n], out = [];
+      if (nd.kind === 'label') {
+        const l = sh.labels[nd.ref];
+        if (l.kind === 'local') sh.labels.forEach((o) => { if (o !== l && o.kind === 'local' && o.netName === l.netName) out.push([ii, o.node]); });
+        if (l.kind === 'hier' && inst.parent && inst.sheetSym) inst.sheetSym.pins.forEach((sp) => { if (sp.netName === l.netName) out.push([inst.parent.idx, sp.node]); });
+      } else if (nd.kind === 'sheetpin') {
+        const sp = sh.sheets[nd.ref[0]].pins[nd.ref[1]];
+        const child = inst.children && inst.children.find((c) => c.sheetSym === sh.sheets[nd.ref[0]]);
+        if (child) child.sheet.labels.forEach((l) => { if (l.kind === 'hier' && l.netName === sp.netName) out.push([child.idx, l.node]); });
+      }
+      return out;
+    };
+    const seen = new Set(), ptDone = new Set();
+    const steps = [];
+    let seeds = [[startInst.idx, startNode]], freePts = [];
+    // Pins joined inside a connector (same number on both sides, or a jumper group).
+    const jumperPins = (ii, n) => {
+      const pi = pinInfo(ii, n), lib = pi && pi.sym.lib; if (!lib) return [];
+      const pins = K.symbolPins(pi.sym), num = pi.pin.number;
+      const grp = (lib.jumperGroups || []).find((g) => g.includes(num));
+      return pins.filter((q) => q !== pi.pin && ((lib.dupPinJumpers && q.number === num) || (grp && grp.includes(q.number)))).map((q) => q.node);
+    };
+    let jumped = false;
+    while ((seeds.length || freePts.length) && steps.length < maxSteps) {
+      const step = { items: new Map(), stops: [] };
+      const nextSeeds = [], nextPts = [];
+      const queue = [];
+      const take = (ii, n) => {
+        const k = ii + ':' + n; if (seen.has(k)) return false; seen.add(k);
+        let set = step.items.get(ii); if (!set) step.items.set(ii, set = new Set()); set.add(n);
+        return true;
+      };
+      const expandPoint = (ii, pt, free) => {
+        const list = sheetOf(ii).pointLists[pt];
+        if (!free) {
+          // A connector pin not yet passed stops the step here; the rest of the point waits.
+          const conns = list.filter((m) => { const pi = pinInfo(ii, m); return pi && pi.conn && !seen.has(ii + ':' + m); });
+          if (conns.length) {
+            for (const m of conns) {
+              take(ii, m);
+              const pi = pinInfo(ii, m);
+              step.stops.push({ inst: ii, kind: 'conn', ref: pi.ref, number: pi.pin.number, name: pi.pin.name, si: pi.si });
+              for (const q of jumperPins(ii, m)) nextSeeds.push([ii, q]);
+            }
+            nextPts.push([ii, pt]);
+            return;
+          }
+        }
+        for (const m of list) if (take(ii, m)) queue.push([ii, m]);
+      };
+      for (const [ii, n] of seeds) if (take(ii, n)) queue.push([ii, n]);
+      for (const [ii, pt] of freePts) { ptDone.add(ii + ':' + pt); expandPoint(ii, pt, true); }
+      while (queue.length) {
+        const [ii, n] = queue.shift();
+        const nd = nodeAt(ii, n);
+        for (const pt of nd.pts) { const k = ii + ':' + pt; if (ptDone.has(k)) continue; ptDone.add(k); expandPoint(ii, pt, false); }
+        for (const [jj, m] of links(ii, n)) if (take(jj, m)) queue.push([jj, m]);
+        if (isJump(ii, n)) {
+          const l = nd.kind === 'label' ? sheetOf(ii).labels[nd.ref] : null;
+          const name = l ? l.netName : (pinInfo(ii, n) || {}).sym && (pinInfo(ii, n).sym.props.find((p) => p.name === 'Value') || {}).value;
+          let any = false;
+          for (const [jj, m] of jumps) if (!seen.has(jj + ':' + m)) { nextSeeds.push([jj, m]); any = true; }
+          if (any && !jumped) step.stops.push({ inst: ii, kind: 'jump', name: plain(name || net.shortName) });
+          if (any) jumped = true;
+        }
+      }
+      if (step.items.size) steps.push(step);
+      seeds = nextSeeds; freePts = nextPts;
+      if (!step.items.size && !seeds.length && !freePts.length) break;
+    }
+    return { net, steps, tagOf: (ii, n) => nodeTag(nodeAt(ii, n)) };
+  }
+
   // ---------------------------------------------------------------- comparison
   function partSig(P, A) {
     const m = new Map();
@@ -422,6 +532,6 @@
     return [cols, ...rows].map((r) => r.map(q).join(',')).join('\r\n') + '\r\n';
   }
 
-  root.Loom = { analyze, check, zoneOf, isConnector, bom, wireList, connectors, looms, issuesTable, plcIO, channelOf, diff, csv };
+  root.Loom = { analyze, check, zoneOf, isConnector, traceSteps, bom, wireList, connectors, looms, issuesTable, plcIO, channelOf, diff, csv };
   if (typeof module !== 'undefined') module.exports = root.Loom;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -185,7 +185,7 @@
     // ---- wires, buses, entries, junctions, no-connects
     sh.wires.forEach((w, i) => stroke([w.a, w.b], w.st.w, 'wire', { it: 'W' + i, g: w.group, color: colorCss(w.st.color), dash: w.st.type !== 'default' && w.st.type !== 'solid' ? w.st.type : null, kind: 'wire' }));
     for (const b of sh.buses) stroke([b.a, b.b], b.st.w, 'bus', { g: b.group, color: colorCss(b.st.color), kind: 'bus' });
-    for (const e of sh.entries) stroke([e.a, e.b], e.st.w, 'wire', { g: e.group, kind: 'wire' });
+    sh.entries.forEach((e, i) => stroke([e.a, e.b], e.st.w, 'wire', { it: 'E' + i, g: e.group, kind: 'wire' }));
     sh.junctions.forEach((j, i) => { const r = (j.d > 0 ? j.d : 0.9144) / 2; circle(j.p, r, 0, j.bus ? 'bus' : 'junction', { it: 'J' + i, fill: j.bus ? 'bus' : 'junction', g: j.group, kind: 'junction' }); });
     sh.noConnects.forEach((nc, ncI) => { curIt = 'N' + ncI;
       const s = 0.6096, [x, y] = nc.p;
@@ -433,7 +433,8 @@
         const a = ((Math.round(f.a) % 180) + 180) % 180;
         text(f.p[0], f.p[1], val, f.fx.h, a === 90, f.fx.ha, f.fx.va, isName ? 'sheetname' : isFile ? 'sheetfile' : 'field', { sheet: idx, bold: f.fx.bold });
       }
-      for (const pin of s.pins) {
+      s.pins.forEach((pin, pi) => {
+        curIt = 'HP' + idx + ':' + pi;
         const size = pin.fx.h;
         hierShape(pin.p[0], pin.p[1], pin.shape, pin.spin, size, pin.group, 'sheetpin', true);
         const dist = 0.15 * size + pin.fx.w;
@@ -442,8 +443,9 @@
         const ha = pin.spin === 'right' || pin.spin === 'up' ? 'left' : 'right';
         text(pin.p[0] + off[0], pin.p[1] + off[1], K.unescape(pin.name), size, vert, ha, 'center', 'sheetpin', { g: pin.group });
         const t = S.texts[S.texts.length - 1];
-        if (t) S.hitLabels.push({ bb: [Math.min(t.bb[0], pin.p[0] - size), Math.min(t.bb[1], pin.p[1] - size), Math.max(t.bb[2], pin.p[0] + size), Math.max(t.bb[3], pin.p[1] + size)], g: pin.group, sheetPin: pin });
-      }
+        if (t) S.hitLabels.push({ bb: [Math.min(t.bb[0], pin.p[0] - size), Math.min(t.bb[1], pin.p[1] - size), Math.max(t.bb[2], pin.p[0] + size), Math.max(t.bb[3], pin.p[1] + size)], g: pin.group, sheetPin: pin, it: curIt });
+        curIt = 'H' + idx;
+      });
       S.sheets.push({ idx, bb: [x, y, x + w, y + h], sheet: s });
     });
     curIt = '';
@@ -525,8 +527,9 @@
       for (const m of a.markers) { const d = Math.hypot(m.x * this.scale + this.ox - x, m.y * this.scale + this.oy - y); if (d < bd) { bd = d; best = m; } }
       return best;
     }
-    setHighlight(groups, symIdx, sheetIdx, selIt) {
+    setHighlight(groups, symIdx, sheetIdx, selIt, its) {
       this.hlGroups = groups && groups.size ? groups : null;
+      this.hlIts = its || null;   // Set of item tags (W3, P2:1, L0…) for a partial (step) trace
       this.selSym = symIdx === undefined ? -1 : symIdx;
       this.selSheet = sheetIdx === undefined ? -1 : sheetIdx;
       this.selIt = selIt || null;
@@ -812,10 +815,10 @@
         }
       }
 
-      const hl = this.hlGroups, selSym = this.selSym, selSheet = this.selSheet, selIt = this.selIt;
-      const anyHl = !!hl || selSym >= 0 || selSheet >= 0 || !!selIt;
+      const hl = this.hlGroups, selSym = this.selSym, selSheet = this.selSheet, selIt = this.selIt, hlIts = this.hlIts;
+      const anyHl = !!hl || selSym >= 0 || selSheet >= 0 || !!selIt || !!hlIts;
       const dim = anyHl && this.dimOthers ? (this.dark ? 0.32 : 0.28) : 1;
-      const isHl = (o) => (hl && o.g >= 0 && hl.has(o.g)) || (selSym >= 0 && o.sym === selSym) || (selSheet >= 0 && o.sheet === selSheet) || (selIt && o.it === selIt);
+      const isHl = (o) => (hl && o.g >= 0 && hl.has(o.g)) || (selSym >= 0 && o.sym === selSym) || (selSheet >= 0 && o.sheet === selSheet) || (selIt && o.it === selIt) || (hlIts && o.it && (o.g >= 0 || o.it[0] === 'P') && hlIts.has(o.it));
       const col = (o) => o.color || P[o.role] || P.note;
       const pv = this.preview;
       const isPrev = pv ? (o) => (pv.sym >= 0 && o.sym === pv.sym) || (o.it && pv.its && pv.its.has(o.it)) : () => false;
@@ -900,17 +903,18 @@
       if (later.length) {
         ctx.globalAlpha = 1;
         ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * this.ox, dpr * this.oy);
+        const onNet = (o) => (o.g >= 0 && hl && hl.has(o.g)) || (hlIts && o.it && (o.g >= 0 || o.it[0] === 'P') && hlIts.has(o.it));
         for (const o of later) {
           if (isPrev(o)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); }
           if (o.p) {
-            const net = o.g >= 0 && hl && hl.has(o.g);
+            const net = onNet(o);
             ctx.strokeStyle = net ? P.hl : selIt && o.it === selIt ? P.sel : col(o);
             ctx.lineWidth = Math.max(o.w * (net ? 1.5 : 1.2), (net ? 2.2 : 1.4) * px);
             this._dash(o.dash, px);
             this._path(o.p, false);
             ctx.stroke();
           } else if (o.c) {
-            const net = o.g >= 0 && hl && hl.has(o.g);
+            const net = onNet(o);
             if (selIt && o.it === selIt) this._circle(o, Object.assign({}, P, { hl: P.sel }), px, true);
             else this._circle(o, P, px, net);
           }
@@ -918,7 +922,7 @@
         }
         ctx.setLineDash([]);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        for (const o of later) if (o.runs) this._text(o, o.g >= 0 && hl && hl.has(o.g) ? P.hl : selIt && o.it === selIt ? P.sel : col(o), true, isPrev(o) ? pv.d : null);
+        for (const o of later) if (o.runs) this._text(o, onNet(o) ? P.hl : selIt && o.it === selIt ? P.sel : col(o), true, isPrev(o) ? pv.d : null);
       }
       // annotation tags (wire numbers, cross-references) and check markers, in screen space
       if (an && an.tags && an.tags.length) {
