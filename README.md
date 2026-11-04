@@ -181,10 +181,10 @@ check it against the drawing for nets where the order of terminations matters.
 
 ### Beckhoff I/O
 
-**Add a part → Beckhoff I/O** has 54 Beckhoff parts: the C6017-0030 Industrial PC, the EK1100 coupler, power and
+**Add a part → Beckhoff I/O** has 59 Beckhoff parts: the C6017-0030 Industrial PC, the EK1100 coupler, power and
 E-bus supply terminals (EL9100, EL9110, EL9400, EL9410), and digital in and out, relay, analog
 in and out, RTD and load-cell terminals (EL1002…EL1889, EL2002…EL2809, EL2622, EL3001…EL3124,
-EL3202, EL3356, EL4002…EL4038). Each is a box with one pin per terminal point, numbered as on
+EL3202, EL3356, EL4002…EL4038), plus the EL2535 PWM valve output, EL2838 8-channel 2 A output, EL3078 8-channel multi-function analog input, EL6021 RS422/RS485 serial and EL6751 CANopen master (its pins are the 9-pin D-sub: 2 CAN_L, 7 CAN_H, 3/6 CAN GND, 9 optional supply). Each is a box with one pin per terminal point, numbered as on
 the terminal itself and named by channel (DI3, AO1, AI2+, R1+, UD+…), with order code,
 signal type and channel count in its fields. Terminal point assignments were taken from
 Beckhoff's own documentation; if you use a variant (-0010 and so on), check its datasheet.
