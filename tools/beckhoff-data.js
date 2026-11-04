@@ -41,6 +41,8 @@ module.exports = {
     { code: 'EL2622', type: 'RELAY', desc: '2-channel relay output, make contacts, 230 V AC / 30 V DC, 5 A, no power contacts', signal: 'NO contact, 230 V AC / 30 V DC, 5 A', pins: P('REL1 NO, REL1 C, NC, PE, REL2 NO, REL2 C, NC, PE') },
     { code: 'EL2808', type: 'DO', desc: '8-channel digital output, 24 V DC, 0.5 A, with 0 V for each channel (HD)', signal: '24 V DC, 0.5 A', pins: P('DO1, DO2, DO3, DO4, DO5, DO6, DO7, DO8, 0V, 0V, 0V, 0V, 0V, 0V, 0V, 0V') },
     { code: 'EL2809', type: 'DO', desc: '16-channel digital output, 24 V DC, 0.5 A (HD)', signal: '24 V DC, 0.5 A', pins: P('DO1, DO2, DO3, DO4, DO5, DO6, DO7, DO8, DO9, DO10, DO11, DO12, DO13, DO14, DO15, DO16') },
+    { code: 'EL2838', type: 'DO', desc: '8-channel digital output, 24 V DC, 2 A, with channel diagnostics (HD, 16 terminal points; 0 V points linked to the 0 V power contact)', signal: '24 V DC, 2 A per channel (10 A total), high-side', pins: P('DO1, DO2, DO3, DO4, DO5, DO6, DO7, DO8, 0V, 0V, 0V, 0V, 0V, 0V, 0V, 0V'), ebus: 85 },
+    { code: 'EL2535', type: 'PWM', head: '2 × PWM out, 2 × DI', desc: '2-channel PWM output, 24 V DC, 1 A, current-controlled, for single and double-coil proportional valves; 2 digital 24 V inputs', signal: '±1 A per channel, 30 kHz PWM; coil A across A1/A2, coil B across B1/B2', pins: P('A1, B1, 0V, DI1, A2, B2, 0V, DI2'), ebus: 110 },
     // ---- analog input
     { code: 'EL3001', type: 'AI', desc: '1-channel analog input, ±10 V, single-ended, 12 bit', signal: '±10 V, single-ended, 12 bit', pins: P('AI1, 0V, GND, SH, NC, +24V, GND, SH') },
     { code: 'EL3002', type: 'AI', desc: '2-channel analog input, ±10 V, single-ended, 12 bit', signal: '±10 V, single-ended, 12 bit', pins: P('AI1, 0V, GND, SH, AI2, +24V, GND, SH') },
@@ -52,6 +54,7 @@ module.exports = {
     { code: 'EL3022', type: 'AI', desc: '2-channel analog input, 4…20 mA, differential, 12 bit', signal: '4…20 mA, differential, 12 bit', pins: P('AI1+, AI1-, GND, SH, AI2+, AI2-, GND, SH') },
     { code: 'EL3024', type: 'AI', desc: '4-channel analog input, 4…20 mA, differential, 12 bit', signal: '4…20 mA, differential, 12 bit', pins: P('AI1+, AI1-, AI3+, AI3-, AI2+, AI2-, AI4+, AI4-') },
     { code: 'EL3054', type: 'AI', desc: '4-channel analog input, 4…20 mA, single-ended, 12 bit, 24 V supply for 2-wire sensors', signal: '4…20 mA, single-ended, 12 bit', pins: P('AI1, +24V, AI3, +24V, AI2, +24V, AI4, +24V') },
+    { code: 'EL3078', type: 'AI', desc: '8-channel analog input, multi-function ±10 V / ±20 mA (0/4…20 mA), 16 bit, single-ended (HD, 16 terminal points)', signal: '-10/0…+10 V on Un, -20/0/+4…+20 mA on In, 16 bit, single-ended', pins: P('AI1 U, AI2 U, AI3 U, AI4 U, AI5 U, AI6 U, AI7 U, AI8 U, AI1 I, AI2 I, AI3 I, AI4 I, AI5 I, AI6 I, AI7 I, AI8 I'), ebus: 90 },
     { code: 'EL3064', type: 'AI', desc: '4-channel analog input, 0…10 V, single-ended, 12 bit', signal: '0…10 V, single-ended, 12 bit', pins: P('AI1, GND, AI3, GND, AI2, GND, AI4, GND') },
     { code: 'EL3101', type: 'AI', desc: '1-channel analog input, ±10 V, differential, 16 bit', signal: '±10 V, differential, 16 bit', pins: P('AI1+, AI1-, GND, SH, NC, NC, GND, SH') },
     { code: 'EL3102', type: 'AI', desc: '2-channel analog input, ±10 V, differential, 16 bit', signal: '±10 V, differential, 16 bit', pins: P('AI1+, AI1-, GND, SH, AI2+, AI2-, GND, SH') },
@@ -74,6 +77,9 @@ module.exports = {
     { code: 'EL4024', type: 'AO', desc: '4-channel analog output, 4…20 mA, 12 bit', signal: '4…20 mA, 12 bit', pins: P('AO1, 0V, AO3, 0V, AO2, 0V, AO4, 0V') },
     { code: 'EL4032', type: 'AO', desc: '2-channel analog output, ±10 V, 12 bit', signal: '±10 V, 12 bit', pins: P('AO1, NC, 0V, SH, AO2, NC, 0V, SH') },
     { code: 'EL4034', type: 'AO', desc: '4-channel analog output, ±10 V, 12 bit', signal: '±10 V, 12 bit', pins: P('AO1, 0V, AO3, 0V, AO2, 0V, AO4, 0V') },
-    { code: 'EL4038', type: 'AO', desc: '8-channel analog output, ±10 V, 12 bit', signal: '±10 V, 12 bit', pins: P('AO1, AO3, AO5, AO7, AO2, AO4, AO6, AO8') }
+    { code: 'EL4038', type: 'AO', desc: '8-channel analog output, ±10 V, 12 bit', signal: '±10 V, 12 bit', pins: P('AO1, AO3, AO5, AO7, AO2, AO4, AO6, AO8') },
+    // ---- communication
+    { code: 'EL6021', type: 'SERIAL', desc: 'Serial interface, 1 channel, RS422/RS485, up to 115.2 kbaud (RS485: link TxD+ to RxD+ and TxD- to RxD-)', signal: 'RS422 full duplex / RS485 half duplex, up to 115.2 kbaud', pins: P('TxD+, RxD+, GND, SH, TxD-, RxD-, GND, SH'), ebus: 170 },
+    { code: 'EL6751', type: 'CAN', head: 'CANopen master', desc: 'CANopen master/slave terminal, 9-pin D-sub (pins: 2 CAN_L, 7 CAN_H, 3 and 6 CAN GND, 9 optional aux supply up to 30 V; shield via the plug housing). 24 mm wide', signal: 'CANopen, D-sub 9-pin (CiA 303-1), galvanically isolated', pins: P('NC, CAN_L, CAN_GND, NC, NC, CAN_GND, CAN_H, NC, V+, SH'), nums: P('1, 2, 3, 4, 5, 6, 7, 8, 9, SH'), ebus: 230 }
   ]
 };

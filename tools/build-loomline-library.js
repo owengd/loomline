@@ -12,16 +12,19 @@ const font = (size, extra) => `(effects (font (size ${size} ${size})${extra && e
 const prop = (name, value, x, y, opts) => `(property ${q(name)} ${q(value)} (at ${f(x)} ${f(y)} 0) ${font(opts && opts.size || 1.27, opts)})`;
 
 // ---- Beckhoff EtherCAT terminals: a box with one pin per terminal point, numbered as on the terminal
-const TYPE_TEXT = { COUPLER: 'EtherCAT coupler', SUPPLY: 'Power supply', DI: 'Digital in', DO: 'Digital out', DIO: 'Digital in/out', RELAY: 'Relay out', AI: 'Analog in', AO: 'Analog out', RTD: 'RTD in', BRIDGE: 'Load cell in', IPC: 'Industrial PC' };
+const TYPE_TEXT = { COUPLER: 'EtherCAT coupler', SUPPLY: 'Power supply', DI: 'Digital in', DO: 'Digital out', DIO: 'Digital in/out', RELAY: 'Relay out', AI: 'Analog in', AO: 'Analog out', RTD: 'RTD in', BRIDGE: 'Load cell in', IPC: 'Industrial PC', PWM: 'PWM valve out', SERIAL: 'Serial RS422/485', CAN: 'CANopen' };
 function pinType(name) {
   if (/^NC$/.test(name)) return 'no_connect';
+  if (/^(CAN_H|CAN_L)$/.test(name)) return 'bidirectional';
+  if (/^TxD[+-]$/.test(name) || /^[AB][12]$/.test(name)) return 'output';
+  if (/^RxD[+-]$/.test(name) || /^AI\d+ [UI]$/.test(name)) return 'input';
   if (/^(DI|AI|R|RL|UD|UREF)\d*[+-]?$/.test(name.replace(/\s.*/, ''))) return 'input';
   if (/^(DO|AO)\d+$/.test(name)) return 'output';
   return 'passive';
 }
 function channels(p) {
   const s = new Set();
-  for (const n of p.pins) { const m = /^(DI|DO|AI|AO|REL)(\d+)/.exec(n); if (m) s.add(m[1] + m[2]); if (/^R\d/.test(n)) s.add('RTD' + n.match(/\d+/)[0]); if (/^UD/.test(n)) s.add('BR1'); }
+  for (const n of p.pins) { const m = /^(DI|DO|AI|AO|REL)(\d+)/.exec(n); if (m) s.add(m[1] + m[2]); if (/^[AB][12]$/.test(n)) s.add('PWM' + n[0]); if (/^(TxD|RxD)/.test(n)) s.add('COM1'); if (/^CAN_[HL]$/.test(n)) s.add('CAN1'); if (/^R\d/.test(n)) s.add('RTD' + n.match(/\d+/)[0]); if (/^UD/.test(n)) s.add('BR1'); }
   return s.size;
 }
 function beckhoffSymbol(p, src) {
@@ -30,7 +33,7 @@ function beckhoffSymbol(p, src) {
   const top = yOf(1) + 2.54 * 2, bottom = yOf(n) - 2.54;
   const w = p.extra ? 10.16 : 7.62;
   const ch = channels(p);
-  const head = ['COUPLER', 'SUPPLY'].includes(p.type) ? TYPE_TEXT[p.type] : `${ch} × ${TYPE_TEXT[p.type].toLowerCase()}`;
+  const head = p.head || (['COUPLER', 'SUPPLY', 'SERIAL', 'CAN'].includes(p.type) ? TYPE_TEXT[p.type] : `${ch} × ${TYPE_TEXT[p.type].toLowerCase()}`);
   const fields = [
     prop('Reference', 'A', 0, top + 3.81, { size: 1.27 }),
     prop('Value', p.code, 0, top + 1.27, { size: 1.27 }),
@@ -52,7 +55,7 @@ function beckhoffSymbol(p, src) {
     `(polyline (pts (xy ${f(-w)} ${f(top - 2.54)}) (xy ${f(w)} ${f(top - 2.54)})) (stroke (width 0) (type default)) (fill (type none)))`,
     `(text ${q(head)} (at 0 ${f(top - 1.27)} 0) ${font(1.27, {})})`
   ];
-  const pins = p.pins.map((name, i) => `(pin ${pinType(name)} line (at ${f(-w - 2.54)} ${f(yOf(i + 1))} 0) (length 2.54) (name ${q(name)} ${font(1.27)}) (number ${q(String(i + 1))} ${font(1.27)}))`);
+  const pins = p.pins.map((name, i) => `(pin ${pinType(name)} line (at ${f(-w - 2.54)} ${f(yOf(i + 1))} 0) (length 2.54) (name ${q(name)} ${font(1.27)}) (number ${q(p.nums ? p.nums[i] : String(i + 1))} ${font(1.27)}))`);
   (p.extra || []).forEach(([num, name], i) => pins.push(`(pin bidirectional line (at ${f(w + 2.54)} ${f(yOf(1) - 2.54 * i)} 180) (length 2.54) (name ${q(name)} ${font(1.27)}) (number ${q(num)} ${font(1.27)}))`));
   return `(symbol ${q(p.code)} (pin_names (offset 0.508)) (exclude_from_sim yes) (in_bom yes) (on_board yes) ${fields.join(' ')} ` +
     `(symbol ${q(p.code + '_0_1')} ${body.join(' ')}) (symbol ${q(p.code + '_1_1')} ${pins.join(' ')}))`;
