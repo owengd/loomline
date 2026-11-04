@@ -741,27 +741,35 @@
     return [`(property ${qstr(name)} ${qstr(value)}`, `\t(at ${fnum(at[0])} ${fnum(at[1])} ${angle})`].concat(eff, [')']);
   }
   // The flag is a short stem with a dot beside the wire, and the visible text runs along the wire
-  // from the dot: above a horizontal wire, or to the left of a vertical one reading upwards.
-  function cableFlagLines(p, vertical, fields, v8, id, extra) {
+  // from the dot. Side 'a' is above a horizontal wire or left of a vertical one (reading upwards);
+  // side 'b' is below or to the right, for when 'a' would clash with something.
+  function cableSideOf(label) { return label.angle === 180 || label.angle === 270 ? 'b' : 'a'; }
+  function cableTextAt(p, vertical, side) {
+    const L = 1.27, d = side === 'b' ? 1 : -1;
+    return vertical ? [p[0] + d * L, p[1] - 0.762] : [p[0] + 0.762, p[1] + d * L];
+  }
+  function cableFlagLines(p, vertical, fields, v8, id, extra, side) {
     const L = 1.27;
-    const angle = vertical ? 90 : 0;
-    const at = vertical ? [p[0] - L, p[1] - 0.762] : [p[0] + 0.762, p[1] - L];
+    const angle = vertical ? (side === 'b' ? 270 : 90) : (side === 'b' ? 180 : 0);
+    const just = side === 'b' ? '(justify right bottom)' : '(justify left bottom)';
+    const at = cableTextAt(p, vertical, side);
+    const fangle = vertical ? 90 : 0;
     const shown = fields.Cable_Type ? 'Cable_Type' : CABLE_FIELDS.find((f) => fields[f]);
     const lines = ['(netclass_flag ""', `\t(length ${fnum(L)})`, '\t(shape dot)', `\t(at ${fnum(p[0])} ${fnum(p[1])} ${angle})`];
-    if (v8) lines.push('\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', '\t\t(justify left bottom)', '\t)');
-    else lines.push('\t(effects (font (size 1.27 1.27)) (justify left bottom))');
+    if (v8) lines.push('\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', '\t\t' + just, '\t)');
+    else lines.push(`\t(effects (font (size 1.27 1.27)) ${just})`);
     lines.push(`\t(uuid ${qstr(id || uuid())})`);
-    for (const f of CABLE_FIELDS) if (fields[f]) for (const l of cableFieldLines(f, fields[f], at, angle, f !== shown, v8)) lines.push('\t' + l);
+    for (const f of CABLE_FIELDS) if (fields[f]) for (const l of cableFieldLines(f, fields[f], at, fangle, f !== shown, v8)) lines.push('\t' + l);
     for (const x of extra || []) lines.push('\t' + x);
     lines.push(')');
     return lines;
   }
   /** Adds a cable flag at p (on wire w, which is split there if p is inside it). */
-  function addCableFlag(sheet, w, p, fields) {
+  function addCableFlag(sheet, w, p, fields, side) {
     const v8 = !sheet.version || sheet.version >= 20231120;
     const vertical = Math.abs(w.a[0] - w.b[0]) < 1e-3;
     const sp = new Splicer(sheet.text);
-    const out = [cableFlagLines(p, vertical, fields, v8)];
+    const out = [cableFlagLines(p, vertical, fields, v8, null, null, side || 'a')];
     if (interior(p, w)) {
       const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
       setXY(sp, xys[w.seg + 1], p[0], p[1]);
@@ -771,7 +779,7 @@
     return { path: sheet.path, text: sp.apply() };
   }
   /** Rewrites an existing cable flag with new values (and the in-line layout); other fields it has are kept. */
-  function setCableFields(sheet, label, fields) {
+  function setCableFields(sheet, label, fields, side) {
     const v8 = !sheet.version || sheet.version >= 20231120;
     const text = sheet.text;
     const vertical = label.angle === 90 || label.angle === 270;
@@ -779,12 +787,12 @@
     const r = nodeRange(text, label.src);
     const ind = indentAt(text, label.src.s);
     const sp = new Splicer(text);
-    sp.replace(r[0], r[1], block(cableFlagLines(label.p, vertical, fields, v8, label.uuid, extra), ind));
+    sp.replace(r[0], r[1], block(cableFlagLines(label.p, vertical, fields, v8, label.uuid, extra, side || cableSideOf(label)), ind));
     return { path: sheet.path, text: sp.apply() };
   }
 
   root.KiEdit = {
-    CABLE_FIELDS, addCableFlag, setCableFields,
+    CABLE_FIELDS, addCableFlag, setCableFields, cableSideOf, cableTextAt,
     GRID, snap, same, fnum, qstr, uuid, connectionPoints,
     setSymbolFields, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addLabel, addNoConnect, nextReference,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty

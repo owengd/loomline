@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.8.1';
+  const VERSION = '1.8.2';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -555,6 +555,47 @@
     for (const inst of state.project.instances) for (const l of inst.sheet.labels) if (Loom.isCableFlag(l)) { const f = Loom.cableFields(l); const k = f.Cable_PN || f.Cable_Type; if (k && !seen.has(k)) seen.set(k, f); }
     return Array.from(seen.values());
   }
+  // Where a new cable tag goes: on one of the section's wires, near the middle of the longest, on
+  // whichever side (and as little way along) keeps its text clear of other text, tags, parts and wires.
+  function cableSpot(wires, shown) {
+    const S = sceneFor(state.inst);
+    const obst = [];
+    for (const t of S.texts) if (t.role !== 'frameText') obst.push(t.bb);
+    for (const sy of S.syms) obst.push(sy.body || sy.bb);
+    for (const st of S.strokes) if (st.role === 'wire' || st.role === 'bus' || st.role === 'directive' || st.role === 'sheet') obst.push(st.bb);
+    for (const c of S.circles) if (c.role === 'directive') obst.push(c.bb);
+    const tw = 0.75 * 1.27 * String(shown || '').length + 1.2;     // rough italic text width, mm
+    const boxFor = (p, vertical, side) => {
+      const a = E.cableTextAt(p, vertical, side), hh = 0.95;
+      return vertical ? [a[0] - hh, a[1] - tw, a[0] + hh, p[1] + 0.2] : [p[0] - 0.2, a[1] - hh, a[0] + tw, a[1] + hh];
+    };
+    const hits = (b) => obst.reduce((n, o) => n + (o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1] ? 1 : 0), 0);
+    const ortho = (w) => Math.abs(w.a[0] - w.b[0]) < 1e-3 || Math.abs(w.a[1] - w.b[1]) < 1e-3;
+    const list = wires.slice().sort((a, b) => Math.hypot(b.b[0] - b.a[0], b.b[1] - b.a[1]) - Math.hypot(a.b[0] - a.a[0], a.b[1] - a.a[1]));
+    let best = null;
+    for (const w of list) {
+      const len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
+      if (!ortho(w) || len < 2 * E.GRID) continue;
+      const vertical = Math.abs(w.a[0] - w.b[0]) < 1e-3;
+      const steps = Math.floor(len / E.GRID), mid = Math.round(steps / 2);
+      // Middle first, then outwards in 2-grid steps; each spot tries side a, then side b.
+      for (let k = 0; k <= steps; k += 2) for (const dir of k ? [1, -1] : [1]) {
+        const n = mid + dir * k;
+        if (n < 1 || n > steps - 1) continue;
+        const t = n * E.GRID / len;
+        const p = [w.a[0] + (w.b[0] - w.a[0]) * t, w.a[1] + (w.b[1] - w.a[1]) * t];
+        for (const side of ['a', 'b']) {
+          const score = hits(boxFor(p, vertical, side)) * 100000 + k + (side === 'b' ? 1 : 0) + (w === list[0] ? 0 : 5);
+          if (!best || score < best.score) best = { w, p, side, score };
+          if (score < 100000 && w === list[0] && k === 0) return best;   // the obvious spot is clear
+        }
+      }
+      if (best && best.score < 100000) return best;
+    }
+    if (best) return best;
+    const w = list[0]; if (!w) return null;
+    return { w, p: [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2], side: 'a' };
+  }
   function cableDialog(s) {
     const c = cableOfSel(s); if (!c) return;
     const sh = state.inst.sheet;
@@ -592,17 +633,9 @@
         return;
       }
       if (empty) return;
-      // Put the flag on the longest wire of the section, on the grid, near its middle.
-      const w = c.wires.slice().sort((a, b) => Math.hypot(b.b[0] - b.a[0], b.b[1] - b.a[1]) - Math.hypot(a.b[0] - a.a[0], a.b[1] - a.a[1]))[0];
-      if (!w) { banner('err', 'Tap a wire to add cable details.'); return; }
-      const len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
-      const n = Math.max(0, Math.round(len / 2 / E.GRID));
-      const t = len ? Math.min(1, n * E.GRID / len) : 0;
-      const ortho = Math.abs(w.a[0] - w.b[0]) < 1e-3 || Math.abs(w.a[1] - w.b[1]) < 1e-3;
-      // Step along the wire from one end in grid steps, so the flag stays exactly on it.
-      const p = ortho ? [w.a[0] + (w.b[0] - w.a[0]) * t, w.a[1] + (w.b[1] - w.a[1]) * t] : [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2];
-      if (E.same(p, w.a) || E.same(p, w.b)) { const q = [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2]; p[0] = q[0]; p[1] = q[1]; }
-      run('Cable details', () => E.addCableFlag(sh, w, p, f));
+      const spot = cableSpot(c.wires, f.Cable_Type || Loom.CABLE.map((k) => f[k]).find(Boolean));
+      if (!spot) { banner('err', 'Tap a wire to add cable details.'); return; }
+      run('Cable details', () => E.addCableFlag(sh, spot.w, spot.p, f, spot.side));
     };
     const acts = [{ label: 'CANCEL', run: closeDialog }];
     if (c.flag) acts.unshift({ label: 'REMOVE', run: () => { closeDialog(); run('Remove cable details', () => E.deleteItems(sh, [{ type: 'label', label: c.flag }]), { anchor: null }); } });
@@ -1317,6 +1350,7 @@
       A.unshift(...ta);
       if (it && it.type === 'label' && o && o.kind === 'directive') {
         A.push({ label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) });
+        if (Loom.isCableFlag(o)) A.push({ label: 'FLIP SIDE', icon: 'i-flip', run: () => run('Flip cable tag', () => E.setCableFields(sh, o, Loom.cableFields(o), E.cableSideOf(o) === 'a' ? 'b' : 'a')) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'cable flag' }) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete cable flag', () => E.deleteItems(sh, [{ type: 'label', label: o }]), { anchor: null }) });
       } else if (it && it.type === 'label' && o) {
