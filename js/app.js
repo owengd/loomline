@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.0.0';
+  const VERSION = '1.2.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -51,7 +51,6 @@
     scenes: new Map(), views: new Map(), index: null,
     token: null, gh: Store.pref('gh') || { repo: '', ref: '', remember: true },
     ghProjects: null, ghHead: null, ghError: null, history: null, localProjects: null,
-    insExpanded: false
   };
   try { state.token = Store.pref('ghToken') || sessionStorage.getItem('st.ghToken') || null; } catch (e) { state.token = Store.pref('ghToken'); }
 
@@ -65,12 +64,7 @@
       if (hit && hit.type === 'sheet') openChildSheet(hit.idx);
       else view.zoomBy(2, x, y);
     },
-    getInsets: () => {
-      const ins = $('inspector');
-      if (ins.hidden) return { top: 0, right: 0, bottom: 0, left: 0 };
-      if (narrow()) return { top: 0, right: 0, bottom: ins.offsetHeight, left: 0 };
-      return { top: 0, right: ins.offsetWidth + 24, bottom: 0, left: 72 };
-    }
+    onView: () => { if (!state._scaleRaf) state._scaleRaf = requestAnimationFrame(() => { state._scaleRaf = 0; renderScale(); }); }
   });
 
   // ------------------------------------------------------------------ theme
@@ -81,10 +75,11 @@
     const dark = t === 'dark' || (t === 'auto' && mq.matches);
     view.setTheme(dark);
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = dark ? '#0b151c' : '#10202a';
+    if (meta) meta.content = dark ? '#1d1f22' : '#f7f5f0';
   }
   mq.addEventListener && mq.addEventListener('change', applyTheme);
-  view.dimOthers = Store.pref('dim') !== false;
+  view.dimOthers = Store.pref('dim') === true;
+  view.showGrid = Store.pref('grid') !== false;
   applyTheme();
   if (document.fonts && document.fonts.load) {
     Promise.all([document.fonts.load('16px "Plex Condensed"'), document.fonts.load('600 16px "Plex Condensed"')]).then(() => {
@@ -130,7 +125,7 @@
     let inst = project.root;
     if (hash.p && source && hash.p === source.key && hash.s) inst = project.instances.find((i) => i.namePath === hash.s) || inst;
     showInstance(inst);
-    hideInspector();
+    renderSelectionUI();
     if (hash.p && source && hash.p === source.key) {
       if (hash.n) { const net = project.nets.find((n) => n.name === hash.n); if (net) selectNet(net); }
       else if (hash.r) { const hit = findRef(hash.r); if (hit) selectSymbol(hit.inst, hit.si, true); }
@@ -142,6 +137,8 @@
   function updateHeader() {
     const p = state.project, s = state.source;
     $('projName').textContent = p ? p.name : 'Schematic Tracer';
+    $('netCount').textContent = p ? p.nets.filter((n) => !n.bus && (n.named || n.pins.length > 1)).length : 0;
+    $('partCount').textContent = p && state.index ? state.index.parts.length : 0;
     let rev = 'No project open';
     if (s && s.kind === 'github') rev = `${s.ref} · ${s.head.sha.slice(0, 7)} · ${ago(s.projCommit ? s.projCommit.date : s.head.date)}`;
     else if (s && s.kind === 'local') rev = 'From this device';
@@ -335,11 +332,12 @@
     if (keepView && same) { /* keep */ } else if (v) { view.scale = v.scale; view.ox = v.ox; view.oy = v.oy; } else view.fit();
     applyHighlight();
     $('sheetPage').textContent = inst.page + '/' + state.project.pageCount;
-    $('sheetName').textContent = inst.parent ? inst.name : (inst.orphan ? inst.name : 'Root · ' + state.project.name);
-    $('sheetPath').textContent = inst.parent ? inst.namePath : K.basename(inst.sheet.path);
+    $('sheetName').textContent = inst.parent ? inst.name : (inst.orphan ? inst.name : 'Root');
+    $('btnSheets').title = inst.namePath + ' · ' + K.basename(inst.sheet.path);
     $('btnUp').disabled = !inst.parent;
     writeHash();
-    if (!$('drawerSheets').hidden) renderSheets();
+    renderStatus();
+    if (state.panelOpen && state.tab !== 'info') { state._keepScroll = true; renderPanel(); }
   }
   function openChildSheet(sheetIdx) {
     const child = state.inst.children.find((c) => c.sheetSym === state.inst.sheet.sheets[sheetIdx]);
@@ -376,45 +374,38 @@
   }
   function applyHighlight() {
     const s = state.sel, inst = state.inst;
-    if (!s || !inst) { view.setHighlight(null); $('btnZoomNet').hidden = true; return; }
-    if (s.type === 'net') {
-      const g = groupsFor(s.net, inst);
-      view.setHighlight(g, -1, -1);
-      $('btnZoomNet').hidden = !g.size;
-    } else if (s.type === 'symbol') {
-      view.setHighlight(null, s.inst === inst ? s.si : -1, -1);
-      $('btnZoomNet').hidden = true;
-    } else if (s.type === 'sheet') {
-      view.setHighlight(null, -1, s.inst === inst ? s.idx : -1);
-      $('btnZoomNet').hidden = true;
-    }
+    if (!s || !inst) { view.setHighlight(null); return; }
+    if (s.type === 'net') view.setHighlight(groupsFor(s.net, inst), -1, -1);
+    else if (s.type === 'symbol') view.setHighlight(null, s.inst === inst ? s.si : -1, -1);
+    else if (s.type === 'sheet') view.setHighlight(null, -1, s.inst === inst ? s.idx : -1);
   }
   function selectNet(net) {
     state.sel = { type: 'net', net };
     applyHighlight();
-    renderInspector();
+    if (state.panelOpen && (state.tab === 'info' || state.tab === 'parts')) showTab('nets');
+    renderSelectionUI();
     writeHash();
-    if (!$('drawerSheets').hidden) renderSheets();
   }
   function selectSymbol(inst, si, focus) {
     if (inst !== state.inst) showInstance(inst);
     state.sel = { type: 'symbol', inst, si };
     applyHighlight();
-    renderInspector();
+    if (state.panelOpen && state.tab === 'nets') showTab('info');
+    renderSelectionUI();
     writeHash();
     if (focus) { const b = symBox(inst, si); if (b) { view.animateTo(b); view.flashBox(b); } }
   }
   function selectSheet(inst, idx) {
     state.sel = { type: 'sheet', inst, idx };
     applyHighlight();
-    renderInspector();
+    if (state.panelOpen && state.tab === 'nets') showTab('info');
+    renderSelectionUI();
   }
   function clearSelection() {
     state.sel = null;
     applyHighlight();
-    hideInspector();
+    renderSelectionUI();
     writeHash();
-    if (!$('drawerSheets').hidden) renderSheets();
   }
   function symBox(inst, si) { const s = sceneFor(inst).syms.find((x) => x.si === si); return s ? s.bb : null; }
   function goToNetOn(inst, net) {
@@ -437,190 +428,94 @@
     }
   }
 
-  // ------------------------------------------------------------------ inspector
-  function hideInspector() {
-    $('inspector').hidden = true;
-    $('zoomctl').classList.remove('lifted');
+  // ------------------------------------------------------------------ side panel + tool rail
+  // The rail on the right (bottom on phones) opens a panel next to it, like the KiCad Editor app.
+  const wideLayout = () => window.matchMedia('(min-width: 761px)').matches;
+  const TAB_TITLES = { sheets: 'SHEETS', nets: 'NET NAVIGATOR', parts: 'PARTS', info: 'PROPERTIES' };
+  state.tab = 'sheets';
+  state.panelOpen = false;
+  function setPanel(open) {
+    state.panelOpen = open;
+    $('panel').hidden = !open;
+    for (const b of document.querySelectorAll('.rail-btn')) b.setAttribute('aria-pressed', String(open && b.dataset.tab === state.tab));
+    if (open) renderPanel();
+    requestAnimationFrame(() => view.resize());
   }
-  function showInspector() {
-    const ins = $('inspector');
-    const wasHidden = ins.hidden;
-    ins.hidden = false;
-    if (wasHidden) state.insExpanded = false;
-    ins.classList.toggle('collapsed', narrow() && !state.insExpanded);
-    $('zoomctl').classList.toggle('lifted', narrow());
+  function showTab(tab, open) {
+    state.tab = tab;
+    $('panelTitle').textContent = TAB_TITLES[tab] || '';
+    if (open && !state.panelOpen) setPanel(true);
+    else { for (const b of document.querySelectorAll('.rail-btn')) b.setAttribute('aria-pressed', String(state.panelOpen && b.dataset.tab === tab)); renderPanel(); }
   }
-  $('grab').addEventListener('click', () => { state.insExpanded = !state.insExpanded; $('inspector').classList.toggle('collapsed', !state.insExpanded); });
-  $('insClose').addEventListener('click', clearSelection);
-  $('insCopy').addEventListener('click', () => { if (state.copyText) copy(state.copyText); });
+  // On a phone the panel covers the drawing, so close it after a pick.
+  function afterPick() { if (!wideLayout() && state.panelOpen) setPanel(false); }
+  for (const b of document.querySelectorAll('.rail-btn')) b.addEventListener('click', () => {
+    const tab = b.dataset.tab;
+    if (tab === 'more') { openDrawer('drawerProjects'); return; }
+    if (state.panelOpen && state.tab === tab) setPanel(false); else showTab(tab, true);
+  });
+  $('panelClose').addEventListener('click', () => setPanel(false));
 
   function section(title, extra, ...kids) {
     return h('div', { class: 'section' }, h('h3', null, h('span', { text: title }), extra ? h('span', { text: extra }) : null), ...kids);
   }
   function instLabel(inst) { return inst.parent ? inst.name : inst.orphan ? inst.name + ' (not in hierarchy)' : 'Root'; }
+  function renderPanel() {
+    if (!state.panelOpen) return;
+    const body = $('panelBody');
+    const top = body.scrollTop;
+    body.replaceChildren();
+    if (!state.project) { body.append(h('p', { class: 'empty', text: 'Open a project first.' })); return; }
+    if (state.tab === 'sheets') renderHierarchy(body);
+    else if (state.tab === 'nets') renderNetNavigator(body);
+    else if (state.tab === 'parts') renderParts(body);
+    else renderProperties(body);
+    if (state._keepScroll) body.scrollTop = top;
+    state._keepScroll = false;
+  }
+  // ---- Parts tab
+  function renderParts(body) {
+    const input = h('input', { class: 'input', type: 'search', placeholder: 'Filter: ref, value, footprint', value: state.partFilter || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+    const list = h('div', { class: 'rows' });
+    const sel = state.sel && state.sel.type === 'symbol' ? state.sel : null;
+    const fill = () => {
+      const q = input.value.trim().toLowerCase();
+      state.partFilter = input.value;
+      list.replaceChildren();
+      const terms = q.split(/\s+/).filter(Boolean);
+      const all = state.index.parts.filter((p) => terms.every((t) => p.hay.includes(t)));
+      for (const p of all.slice(0, 300)) list.append(h('button', { class: 'row' + (sel && sel.inst === p.inst && sel.si === p.si ? ' current' : ''), onclick: () => { selectSymbol(p.inst, p.si, true); afterPick(); } },
+        h('span', { class: 'main' }, h('span', { class: 'ref', text: p.ref + p.unit }), h('span', { class: 'nm', text: p.val })),
+        h('span', { class: 'meta', text: 'p' + p.inst.page })));
+      if (all.length > 300) list.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: `${all.length - 300} more; type to narrow the list` })));
+      if (!all.length) list.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: 'No parts match.' })));
+    };
+    input.addEventListener('input', fill);
+    fill();
+    body.append(input, list);
+  }
 
-  function renderInspector() {
-    const s = state.sel;
-    if (!s) { hideInspector(); return; }
-    const body = $('insBody'); body.replaceChildren();
-    const eyebrow = $('insEyebrow'); eyebrow.replaceChildren();
+  // ---- Hierarchy tab
+  function renderHierarchy(body) {
     const P = state.project;
-    if (s.type === 'net') {
-      const net = s.net;
-      eyebrow.append(h('span', { class: 'swatch' }), net.bus ? 'Bus' : 'Net');
-      $('insTitle').replaceChildren(markup(net.shortName));
-      const sheets = Array.from(net.inst.keys()).map((i) => P.instances[i]).sort((a, b) => a.order - b.order);
-      const sub = [];
-      if (net.name !== net.shortName) sub.push(net.name);
-      sub.push(net.bus ? `${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`);
-      sub.push(`${sheets.length} sheet${sheets.length === 1 ? '' : 's'}`);
-      $('insSub').textContent = sub.join(' · ');
-      state.copyText = plain(net.name);
-      const kinds = new Set(net.names.map((n) => n.kind));
-      const chips = h('div', { class: 'chips' });
-      if (kinds.has('power') || kinds.has('hiddenpower')) chips.append(h('span', { class: 'chip signal', text: 'Power' }));
-      if (kinds.has('global')) chips.append(h('span', { class: 'chip', text: 'Global label' }));
-      if (kinds.has('hier') || kinds.has('sheetpin')) chips.append(h('span', { class: 'chip', text: 'Crosses sheets' }));
-      if (net.noConnect) chips.append(h('span', { class: 'chip', text: 'No-connect flag' }));
-      if (!net.bus && net.pins.length === 1 && !net.noConnect && !net.hasPower) chips.append(h('span', { class: 'chip warn', text: 'Only one pin' }));
-      if (chips.childNodes.length) body.append(chips);
-      const here = net.inst.has(state.inst.idx);
-      body.append(h('div', { class: 'actions' },
-        h('button', { class: 'btn primary small', onclick: () => goToNetOn(here ? state.inst : sheets[0], net) }, icon('i-target'), here ? 'Zoom to net' : 'Go to net'),
-        h('button', { class: 'btn small', onclick: () => copyLink() }, icon('i-link'), 'Copy link')));
-      // Names this net carries across the hierarchy
-      const names = new Map();
-      for (const n of net.names) { const k = n.name; if (!names.has(k)) names.set(k, new Set()); names.get(k).add(n.kind); }
-      if (names.size > 1) {
-        const c = h('div', { class: 'chips' });
-        const label = { global: 'global', local: 'label', hier: 'hier. label', sheetpin: 'sheet pin', power: 'power', localpower: 'local power', hiddenpower: 'hidden pin' };
-        for (const [n, ks] of names) c.append(h('span', { class: 'chip', title: Array.from(ks).map((k) => label[k] || k).join(', ') }, markup(n)));
-        body.append(section('Also named', null, c));
-      }
-      const rows = h('div', { class: 'rows' });
-      for (const inst of sheets) {
-        const count = net.inst.get(inst.idx).length;
-        rows.append(h('button', { class: 'row' + (inst === state.inst ? ' current' : ''), onclick: () => goToNetOn(inst, net) },
-          h('span', { class: 'main' }, h('span', { class: 'pin', text: inst.page }), h('span', { class: 'nm', text: instLabel(inst) })),
-          h('span', { class: 'meta', text: inst === state.inst ? 'this sheet' : count + (count === 1 ? ' segment' : ' segments') })));
-      }
-      body.append(section('On sheets', String(sheets.length), rows));
-      if (net.bus) {
-        const mr = h('div', { class: 'rows' });
-        for (const m of net.members || []) {
-          const mn = m.net >= 0 ? P.nets[m.net] : null;
-          mr.append(h(mn ? 'button' : 'div', { class: 'row', onclick: mn ? () => selectNet(mn) : null },
-            h('span', { class: 'main' }, h('span', { class: 'nm' }, markup(m.name))),
-            h('span', { class: 'meta', text: mn ? `${mn.pins.length} pins` : 'not used' })));
-        }
-        body.append(section('Members', String((net.members || []).length), mr));
-      } else {
-        const pr = h('div', { class: 'rows' });
-        const multi = sheets.length > 1;
-        for (const p of net.pins) {
-          pr.append(h('button', { class: 'row', onclick: () => goToPin(p) },
-            h('span', { class: 'main' }, h('span', { class: 'ref', text: p.fullRef || p.ref }), h('span', { class: 'pin', text: p.number }), h('span', { class: 'nm' }, p.name && p.name !== '~' ? markup(p.name) : '')),
-            h('span', { class: 'meta', text: (p.type || '').replace('_', ' ') + (multi ? ' · p' + P.instances[p.inst].page : '') })));
-        }
-        if (!net.pins.length) pr.append(h('div', { class: 'row' }, h('span', { class: 'nm', text: 'No component pins on this net.' })));
-        body.append(section('Pins', String(net.pins.length), pr));
-      }
-    } else if (s.type === 'symbol') {
-      const inst = s.inst, sym = inst.sheet.symbols[s.si];
-      const ref = inst.refs[s.si].ref;
-      const lib = sym.lib;
-      const unit = lib && lib.unitCount > 1 ? K.unitLetter(inst.refs[s.si].unit || sym.unit) : '';
-      const prop = (n) => { const f = sym.props.find((p) => p.name === n); return f ? K.unescape(K.resolveVars(f.value, { inst, sym, ref })) : ''; };
-      eyebrow.append(lib && lib.power ? 'Power symbol' : 'Part');
-      $('insTitle').textContent = ref + unit;
-      $('insSub').textContent = prop('Value');
-      state.copyText = ref;
-      const chips = h('div', { class: 'chips' });
-      if (sym.dnp) chips.append(h('span', { class: 'chip warn', text: 'Do not populate' }));
-      if (!sym.inBom) chips.append(h('span', { class: 'chip', text: 'Not in BOM' }));
-      if (!sym.onBoard) chips.append(h('span', { class: 'chip', text: 'Not on board' }));
-      if (unit) chips.append(h('span', { class: 'chip', text: `Unit ${unit} of ${lib.unitCount}` }));
-      if (chips.childNodes.length) body.append(chips);
-      body.append(h('div', { class: 'actions' },
-        h('button', { class: 'btn primary small', onclick: () => { if (inst !== state.inst) showInstance(inst); const b = symBox(inst, s.si); if (b) { view.animateTo(b); view.flashBox(b); } } }, icon('i-target'), 'Zoom to part'),
-        h('button', { class: 'btn small', onclick: () => copyLink() }, icon('i-link'), 'Copy link')));
-      const dl = h('dl', { class: 'kv' });
-      const add = (k, v, link) => { if (!v || v === '~') return; dl.append(h('dt', { text: k }), h('dd', null, link && /^https?:\/\//i.test(v) ? h('a', { href: v, target: '_blank', rel: 'noopener', text: v }) : v)); };
-      add('Footprint', prop('Footprint'));
-      add('Datasheet', prop('Datasheet'), true);
-      add('Description', prop('Description') || (lib && lib.props.ki_description) || '');
-      for (const f of sym.props) {
-        if (['Reference', 'Value', 'Footprint', 'Datasheet', 'Description'].includes(f.name) || f.name.startsWith('ki_') || f.name.startsWith('Sim.')) continue;
-        add(f.name, K.unescape(K.resolveVars(f.value, { inst, sym, ref })), true);
-      }
-      add('Symbol', sym.libId);
-      add('Sheet', inst.namePath + ' (page ' + inst.page + ')');
-      body.append(section('Fields', null, dl));
-      const pins = K.symbolPins(sym).slice().sort((a, b) => K.naturalCmp(a.number, b.number));
-      const pr = h('div', { class: 'rows' });
-      for (const pin of pins) {
-        const net = P.nets[inst.netOf[pin.group]];
-        pr.append(h('button', { class: 'row', onclick: () => selectNet(net) },
-          h('span', { class: 'main' }, h('span', { class: 'pin', text: pin.number }), h('span', { class: 'nm' }, pin.name && pin.name !== '~' ? markup(pin.name) : '')),
-          h('span', { class: 'net' }, markup(net ? net.shortName : '–'))));
-      }
-      body.append(section('Pins', String(pins.length), pr));
-    } else if (s.type === 'sheet') {
-      const inst = s.inst, sheet = inst.sheet.sheets[s.idx];
-      const child = inst.children.find((c) => c.sheetSym === sheet);
-      eyebrow.append('Sheet');
-      $('insTitle').textContent = sheet.name || '(unnamed sheet)';
-      $('insSub').textContent = sheet.file + (child ? ' · page ' + child.page : '');
-      state.copyText = sheet.name;
-      body.append(h('div', { class: 'actions' },
-        h('button', { class: 'btn primary small', disabled: !child, onclick: () => child && showInstance(child) }, icon('i-open'), child ? 'Open sheet' : 'File not found')));
-      const pr = h('div', { class: 'rows' });
-      for (const pin of sheet.pins) {
-        const net = P.nets[inst.netOf[pin.group]];
-        pr.append(h('button', { class: 'row', onclick: () => selectNet(net) },
-          h('span', { class: 'main' }, h('span', { class: 'nm' }, markup(pin.name))),
-          h('span', { class: 'meta', text: pin.shape.replace('_', ' ') })));
-      }
-      if (sheet.pins.length) body.append(section('Sheet pins', String(sheet.pins.length), pr));
-    }
-    showInspector();
-  }
-
-  // ------------------------------------------------------------------ drawers
-  function openDrawer(id) {
-    for (const d of ['drawerProjects', 'drawerSheets']) $(d).hidden = d !== id;
-    $('scrim').hidden = false;
-    if (id === 'drawerProjects') renderProjects(); else renderSheets();
-  }
-  function closeDrawers() { $('drawerProjects').hidden = true; $('drawerSheets').hidden = true; $('scrim').hidden = true; }
-  $('scrim').addEventListener('click', closeDrawers);
-  document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeDrawers));
-  $('btnProjects').addEventListener('click', () => openDrawer('drawerProjects'));
-  $('btnSheets').addEventListener('click', () => { if (state.project) openDrawer('drawerSheets'); });
-  $('btnUp').addEventListener('click', () => { if (state.inst && state.inst.parent) showInstance(state.inst.parent); });
-
-  function renderSheets() {
-    const body = $('sheetsBody'); body.replaceChildren();
-    const P = state.project; if (!P) return;
     const net = state.sel && state.sel.type === 'net' ? state.sel.net : null;
     const tree = h('div', { class: 'rows tree' });
     const orphans = [];
     const walk = (inst) => {
       if (inst.orphan) { orphans.push(inst); return; }
       const count = net && net.inst.has(inst.idx) ? net.inst.get(inst.idx).length : 0;
-      tree.append(h('button', { class: 'row' + (inst === state.inst ? ' current' : ''), style: `padding-left:${12 + inst.depth * 18}px`, onclick: () => { showInstance(inst); if (net && count) goToNetOn(inst, net); closeDrawers(); } },
+      tree.append(h('button', { class: 'row' + (inst === state.inst ? ' current' : ''), style: `padding-left:${10 + inst.depth * 16}px`, onclick: () => { showInstance(inst); if (net && count) goToNetOn(inst, net); afterPick(); } },
         h('span', { class: 'pg', text: inst.page }),
-        h('span', { class: 'nm2' }, h('b', { text: inst.parent ? inst.name : P.name }), h('small', { text: inst.parent ? inst.namePath : K.basename(inst.sheet.path) })),
-        count ? h('span', { class: 'count', title: 'Traced net on this sheet', text: count }) : h('span')));
+        h('span', { class: 'nm2' }, h('b', { text: inst.parent ? inst.name : P.name }), h('small', { text: inst.parent ? K.basename(inst.sheet.path) : K.basename(inst.sheet.path) })),
+        count ? h('span', { class: 'count', title: 'Highlighted net on this sheet', text: count }) : h('span')));
       for (const c of inst.children) walk(c);
     };
     for (const inst of P.instances) if (!inst.parent) walk(inst);
-    body.append(section('Hierarchy', P.instances.length + ' sheets', tree));
-    if (net) body.prepend(h('p', { class: 'hint' }, 'Sheets carrying ', h('b', null, markup(net.shortName)), ' show a count.'));
+    body.append(section('Schematic hierarchy', P.instances.filter((i) => !i.orphan).length + ' sheets', tree));
     if (orphans.length) {
       const o = h('div', { class: 'rows tree' });
       const walkO = (inst) => {
-        o.append(h('button', { class: 'row' + (inst === state.inst ? ' current' : ''), style: `padding-left:${12 + inst.depth * 18}px`, onclick: () => { showInstance(inst); closeDrawers(); } },
+        o.append(h('button', { class: 'row' + (inst === state.inst ? ' current' : ''), style: `padding-left:${10 + inst.depth * 16}px`, onclick: () => { showInstance(inst); afterPick(); } },
           h('span', { class: 'pg', text: '–' }), h('span', { class: 'nm2' }, h('b', { text: inst.name }), h('small', { text: K.basename(inst.sheet.path) })), h('span')));
         for (const c of inst.children) walkO(c);
       };
@@ -628,6 +523,251 @@
       body.append(section('Not in hierarchy', null, h('p', { class: 'hint', text: 'Schematic files in this folder that no sheet uses. KiCad ignores them; their nets are kept separate.' }), o));
     }
   }
+
+  // ---- Net Navigator tab
+  function renderNetNavigator(body) {
+    const P = state.project;
+    const s = state.sel;
+    if (!s || s.type !== 'net') { renderNetList(body); return; }
+    const net = s.net;
+    const sheets = Array.from(net.inst.keys()).map((i) => P.instances[i]).sort((a, b) => a.order - b.order);
+    body.append(h('div', { class: 'head' },
+      h('div', { class: 'titles' },
+        h('div', { class: 'eyebrow' }, h('span', { class: 'swatch' }), net.bus ? 'Highlighted bus' : 'Highlighted net'),
+        h('div', { class: 'title net' }, markup(net.shortName)),
+        h('div', { class: 'sub', text: [net.name !== net.shortName ? net.name : null, net.bus ? `${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`, `${sheets.length} sheet${sheets.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ') })),
+      h('button', { class: 'iconbtn', 'aria-label': 'Copy net name', onclick: () => copy(plain(net.name)) }, icon('i-copy')),
+      h('button', { class: 'iconbtn', 'aria-label': 'Clear highlight', onclick: clearSelection }, icon('i-close'))));
+    const kinds = new Set(net.names.map((n) => n.kind));
+    const chips = h('div', { class: 'chips' });
+    if (kinds.has('power') || kinds.has('hiddenpower')) chips.append(h('span', { class: 'chip trace', text: 'Power' }));
+    if (kinds.has('global')) chips.append(h('span', { class: 'chip', text: 'Global label' }));
+    if (kinds.has('hier') || kinds.has('sheetpin')) chips.append(h('span', { class: 'chip', text: 'Crosses sheets' }));
+    if (net.noConnect) chips.append(h('span', { class: 'chip', text: 'No-connect flag' }));
+    if (!net.bus && net.pins.length === 1 && !net.noConnect && !net.hasPower) chips.append(h('span', { class: 'chip warn', text: 'Only one pin' }));
+    if (chips.childNodes.length) body.append(chips);
+    const names = new Map();
+    for (const n of net.names) { if (!names.has(n.name)) names.set(n.name, new Set()); names.get(n.name).add(n.kind); }
+    if (names.size > 1) {
+      const c = h('div', { class: 'chips' });
+      const label = { global: 'global', local: 'label', hier: 'hier. label', sheetpin: 'sheet pin', power: 'power', localpower: 'local power', hiddenpower: 'hidden pin' };
+      for (const [n, ks] of names) c.append(h('span', { class: 'chip', title: Array.from(ks).map((k) => label[k] || k).join(', ') }, markup(n)));
+      body.append(section('Also named', null, c));
+    }
+    body.append(h('div', { class: 'actions' }, h('button', { class: 'btn small', onclick: () => copyLink() }, icon('i-link'), 'Copy link')));
+    if (net.bus) {
+      const mr = h('div', { class: 'rows' });
+      for (const m of net.members || []) {
+        const mn = m.net >= 0 ? P.nets[m.net] : null;
+        mr.append(h(mn ? 'button' : 'div', { class: 'row', onclick: mn ? () => selectNet(mn) : null },
+          h('span', { class: 'main' }, h('span', { class: 'nm' }, markup(m.name))), h('span', { class: 'meta', text: mn ? `${mn.pins.length} pins` : 'not used' })));
+      }
+      body.append(section('Members', String((net.members || []).length), mr));
+    }
+    // Like KiCad's Net Navigator: the net's items grouped by sheet
+    const tree = h('div', { class: 'rows' });
+    for (const inst of sheets) {
+      tree.append(h('button', { class: 'row group' + (inst === state.inst ? ' current' : ''), onclick: () => { goToNetOn(inst, net); afterPick(); } },
+        h('span', { class: 'main' }, h('span', { class: 'pin', text: inst.page }), h('span', { class: 'nm', text: instLabel(inst) })),
+        h('span', { class: 'meta', text: inst === state.inst ? 'this sheet' : 'go' })));
+      for (const p of net.pins.filter((x) => x.inst === inst.idx)) {
+        tree.append(h('button', { class: 'row indent', onclick: () => { goToPin(p); afterPick(); } },
+          h('span', { class: 'main' }, h('span', { class: 'ref', text: p.fullRef || p.ref }), h('span', { class: 'pin', text: p.number }), h('span', { class: 'nm' }, p.name && p.name !== '~' && p.name !== p.number ? markup(p.name) : '')),
+          h('span', { class: 'meta', text: (p.type || '').replace('_', ' ') })));
+      }
+      const labels = net.names.filter((n) => n.inst === inst.idx && !n.member && ['global', 'local', 'hier', 'power', 'localpower'].includes(n.kind));
+      const seen = new Set();
+      for (const l of labels) {
+        const k = l.kind + l.name; if (seen.has(k)) continue; seen.add(k);
+        const kindText = { global: 'global label', local: 'label', hier: 'hierarchical label', power: 'power', localpower: 'local power' }[l.kind];
+        tree.append(h('div', { class: 'row indent' }, h('span', { class: 'main' }, h('span', { class: 'nm' }, markup(l.name))), h('span', { class: 'meta', text: kindText })));
+      }
+    }
+    body.append(section('Items by sheet', null, tree));
+  }
+  // With nothing highlighted, the navigator lists every net so you can pick one.
+  function renderNetList(body) {
+    const P = state.project;
+    const input = h('input', { class: 'input filter', type: 'search', placeholder: 'Filter nets', value: state.netFilter || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+    const list = h('div', { class: 'rows' });
+    const fill = () => {
+      const q = input.value.trim().toLowerCase();
+      state.netFilter = input.value;
+      list.replaceChildren();
+      const all = state.index.nets.filter((n) => n.net.named && (!q || n.hay.includes(q)));
+      for (const n of all.slice(0, 250)) list.append(h('button', { class: 'row', onclick: () => { selectNet(n.net); const here = n.net.inst.has(state.inst.idx) ? state.inst : P.instances[Array.from(n.net.inst.keys()).sort((a, b) => P.instances[a].order - P.instances[b].order)[0]]; goToNetOn(here, n.net); afterPick(); } },
+        h('span', { class: 'main' }, h('span', { class: 'nm' }, markup(n.net.name))), h('span', { class: 'meta', text: n.net.bus ? 'bus' : n.net.pins.length + ' pins' })));
+      if (all.length > 250) list.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: `${all.length - 250} more; type to narrow the list` })));
+      if (!all.length) list.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: 'No named nets match.' })));
+    };
+    input.addEventListener('input', fill);
+    fill();
+    body.append(h('p', { class: 'hint', text: 'Tap a wire on the schematic, or pick a net below, to highlight it.' }), input, list);
+  }
+
+  // ---- Properties tab
+  function renderProperties(body) {
+    const s = state.sel, P = state.project;
+    if (!s || s.type === 'net') {
+      body.append(h('p', { class: 'empty', text: s ? 'A net is highlighted. Tap a part or sheet to see its properties.' : 'Tap a part or sheet on the schematic to see its properties.' }));
+      return;
+    }
+    if (s.type === 'symbol') {
+      const inst = s.inst, sym = inst.sheet.symbols[s.si], ref = inst.refs[s.si].ref, lib = sym.lib;
+      const unit = lib && lib.unitCount > 1 ? K.unitLetter(inst.refs[s.si].unit || sym.unit) : '';
+      const prop = (n) => { const f = sym.props.find((p) => p.name === n); return f ? K.unescape(K.resolveVars(f.value, { inst, sym, ref })) : ''; };
+      body.append(h('div', { class: 'head' },
+        h('div', { class: 'titles' }, h('div', { class: 'eyebrow', text: lib && lib.power ? 'Power symbol' : 'Symbol' }), h('div', { class: 'title', text: ref + unit }), h('div', { class: 'sub', text: prop('Value') })),
+        h('button', { class: 'iconbtn', 'aria-label': 'Copy reference', onclick: () => copy(ref) }, icon('i-copy')),
+        h('button', { class: 'iconbtn', 'aria-label': 'Clear selection', onclick: clearSelection }, icon('i-close'))));
+      const chips = h('div', { class: 'chips' });
+      if (sym.dnp) chips.append(h('span', { class: 'chip warn', text: 'Do not populate' }));
+      if (!sym.inBom) chips.append(h('span', { class: 'chip', text: 'Not in BOM' }));
+      if (!sym.onBoard) chips.append(h('span', { class: 'chip', text: 'Not on board' }));
+      if (unit) chips.append(h('span', { class: 'chip', text: `Unit ${unit} of ${lib.unitCount}` }));
+      if (chips.childNodes.length) body.append(chips);
+      body.append(h('div', { class: 'actions' },
+        h('button', { class: 'btn small', onclick: () => { if (inst !== state.inst) showInstance(inst); const b = symBox(inst, s.si); if (b) { view.animateTo(b); view.flashBox(b); } afterPick(); } }, icon('i-target'), 'Zoom to symbol'),
+        h('button', { class: 'btn small', onclick: () => copyLink() }, icon('i-link'), 'Copy link')));
+      const dl = h('dl', { class: 'props' });
+      const add = (k, v, link) => { if (!v || v === '~') return; dl.append(h('dt', { text: k }), h('dd', null, link && /^https?:\/\//i.test(v) ? h('a', { href: v, target: '_blank', rel: 'noopener', text: v }) : v)); };
+      add('Reference', ref + unit);
+      add('Value', prop('Value'));
+      add('Footprint', prop('Footprint'));
+      add('Datasheet', prop('Datasheet'), true);
+      add('Description', prop('Description') || (lib && lib.props.ki_description) || '');
+      for (const f of sym.props) {
+        if (['Reference', 'Value', 'Footprint', 'Datasheet', 'Description'].includes(f.name) || f.name.startsWith('ki_') || f.name.startsWith('Sim.')) continue;
+        add(f.name, K.unescape(K.resolveVars(f.value, { inst, sym, ref })), true);
+      }
+      add('Library link', sym.libId);
+      add('Sheet', inst.namePath + ' (page ' + inst.page + ')');
+      body.append(section('Fields', null, dl));
+      const pins = K.symbolPins(sym).slice().sort((a, b) => K.naturalCmp(a.number, b.number));
+      const pr = h('div', { class: 'rows' });
+      for (const pin of pins) {
+        const net = P.nets[inst.netOf[pin.group]];
+        pr.append(h('button', { class: 'row', onclick: () => { selectNet(net); } },
+          h('span', { class: 'main' }, h('span', { class: 'pin', text: pin.number }), h('span', { class: 'nm' }, pin.name && pin.name !== '~' ? markup(pin.name) : '')),
+          h('span', { class: 'net' }, markup(net ? net.shortName : '–'))));
+      }
+      body.append(section('Pins', String(pins.length) + ' · tap to highlight', pr));
+    } else if (s.type === 'sheet') {
+      const inst = s.inst, sheet = inst.sheet.sheets[s.idx];
+      const child = inst.children.find((c) => c.sheetSym === sheet);
+      body.append(h('div', { class: 'head' },
+        h('div', { class: 'titles' }, h('div', { class: 'eyebrow', text: 'Hierarchical sheet' }), h('div', { class: 'title', text: sheet.name || '(unnamed sheet)' }), h('div', { class: 'sub', text: sheet.file + (child ? ' · page ' + child.page : '') })),
+        h('button', { class: 'iconbtn', 'aria-label': 'Clear selection', onclick: clearSelection }, icon('i-close'))));
+      body.append(h('div', { class: 'actions' }, h('button', { class: 'btn primary small', disabled: !child, onclick: () => { if (child) { showInstance(child); afterPick(); } } }, icon('i-open'), child ? 'Enter sheet' : 'File not found')));
+      const pr = h('div', { class: 'rows' });
+      for (const pin of sheet.pins) {
+        const net = P.nets[inst.netOf[pin.group]];
+        pr.append(h('button', { class: 'row', onclick: () => selectNet(net) },
+          h('span', { class: 'main' }, h('span', { class: 'nm' }, markup(pin.name))), h('span', { class: 'meta', text: pin.shape.replace('_', ' ') })));
+      }
+      if (sheet.pins.length) body.append(section('Sheet pins', String(sheet.pins.length) + ' · tap to highlight', pr));
+    }
+  }
+
+  // ---- Status bar (bottom), like the KiCad Editor app
+  function statusAction(label, ico, fn, disabled) {
+    return h('button', { class: 'sa', onclick: fn, disabled: !!disabled }, icon(ico), label);
+  }
+  function renderStatus() {
+    const s = state.sel, P = state.project;
+    const ico = $('statusIco'), t1 = $('st1'), t2 = $('st2'), acts = $('statusActions');
+    acts.replaceChildren();
+    ico.classList.remove('trace', 'part');
+    t1.classList.remove('trace');
+    const setIco = (id) => { ico.firstElementChild.setAttribute('href', '#' + id); };
+    if (!P) { setIco('i-hand'); t1.textContent = 'No project open'; t2.textContent = 'Connect GitHub or open files'; return; }
+    if (!s) {
+      setIco('i-hand');
+      t1.textContent = 'Nothing selected';
+      t2.textContent = 'Drag to pan, tap a wire to trace';
+      acts.append(statusAction('FIT', 'i-fit', () => view.fit()));
+      return;
+    }
+    if (s.type === 'net') {
+      const net = s.net;
+      setIco('i-net'); ico.classList.add('trace'); t1.classList.add('trace');
+      t1.replaceChildren(markup(net.shortName));
+      const sheets = net.inst.size;
+      t2.textContent = (net.bus ? `Bus · ${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`) + ` · ${sheets} sheet${sheets === 1 ? '' : 's'}` + (net.name !== net.shortName ? ' · ' + plain(net.name) : '');
+      acts.append(statusAction('ZOOM', 'i-target', () => zoomToSelection()));
+      if (sheets > 1) acts.append(statusAction('NEXT', 'i-next', () => nextSheetForNet(net)));
+      acts.append(statusAction('CLEAR', 'i-close', clearSelection));
+    } else if (s.type === 'symbol') {
+      const inst = s.inst, sym = inst.sheet.symbols[s.si], ref = inst.refs[s.si].ref;
+      const unit = sym.lib && sym.lib.unitCount > 1 ? K.unitLetter(inst.refs[s.si].unit || sym.unit) : '';
+      const val = K.unescape((sym.props.find((p) => p.name === 'Value') || {}).value || '');
+      const fp = ((sym.props.find((p) => p.name === 'Footprint') || {}).value || '').split(':').pop();
+      setIco('i-chip'); ico.classList.add('part');
+      t1.textContent = ref + unit + (val ? '  ' + val : '');
+      t2.textContent = fp || sym.libId;
+      acts.append(statusAction('ZOOM', 'i-target', () => zoomToSelection()), statusAction('CLEAR', 'i-close', clearSelection));
+    } else if (s.type === 'sheet') {
+      const sheet = s.inst.sheet.sheets[s.idx];
+      const child = s.inst.children.find((c) => c.sheetSym === sheet);
+      setIco('i-hier'); ico.classList.add('part');
+      t1.textContent = sheet.name;
+      t2.textContent = sheet.file + ' · ' + sheet.pins.length + ' pins';
+      acts.append(statusAction('ENTER', 'i-open', () => child && showInstance(child), !child), statusAction('CLEAR', 'i-close', clearSelection));
+    }
+  }
+  $('statusMain').addEventListener('click', () => {
+    if (!state.project) { openDrawer('drawerProjects'); return; }
+    const s = state.sel;
+    showTab(!s ? 'sheets' : s.type === 'net' ? 'nets' : 'info', true);
+  });
+  function nextSheetForNet(net) {
+    const P = state.project;
+    const list = Array.from(net.inst.keys()).map((i) => P.instances[i]).sort((a, b) => a.order - b.order);
+    const i = list.indexOf(state.inst);
+    const next = list[(i + 1) % list.length];
+    goToNetOn(next, net);
+    toast(`Sheet ${next.page}: ${instLabel(next)}`);
+  }
+  function zoomToSelection() {
+    const s = state.sel; if (!s) return;
+    if (s.type === 'net') { const here = s.net.inst.has(state.inst.idx) ? state.inst : state.project.instances[s.net.inst.keys().next().value]; goToNetOn(here, s.net); }
+    else if (s.type === 'symbol') { if (s.inst !== state.inst) showInstance(s.inst); const b = symBox(s.inst, s.si); if (b) { view.animateTo(b); view.flashBox(b); } }
+    else if (s.type === 'sheet' && s.inst === state.inst) { const b = sceneFor(s.inst).sheets.find((x) => x.idx === s.idx); if (b) view.animateTo(b.bb); }
+  }
+  // Scale chip (bottom left): a ruler one grid-dot apart, like the reference app
+  function renderScale() {
+    const chip = $('scaleChip');
+    if (!state.project) { chip.hidden = true; return; }
+    chip.hidden = false;
+    chip.classList.toggle('off', !view.showGrid);
+    const step = view.gridStep || 1.27;
+    const px = Math.max(8, Math.min(140, step * view.scale));
+    $('scaleRuler').style.width = px.toFixed(0) + 'px';
+    $('scaleText').textContent = view.showGrid ? `dots ${step < 10 ? step.toFixed(2) : step.toFixed(1)} mm` : `${step < 10 ? step.toFixed(2) : step.toFixed(1)} mm · grid off`;
+  }
+  $('scaleChip').addEventListener('click', () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); });
+
+  function renderSelectionUI() {
+    renderStatus();
+    if (state.panelOpen) { state._keepScroll = state.tab === 'sheets'; renderPanel(); }
+  }
+
+  // ------------------------------------------------------------------ drawers
+  function openDrawer(id) {
+    $(id).hidden = false;
+    $('scrim').hidden = false;
+    if (id === 'drawerProjects') renderProjects();
+  }
+  function closeDrawers() { $('drawerProjects').hidden = true; $('scrim').hidden = true; }
+  $('scrim').addEventListener('click', closeDrawers);
+  document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeDrawers));
+  $('btnProjects').addEventListener('click', () => openDrawer('drawerProjects'));
+  $('btnTitle').addEventListener('click', () => openDrawer('drawerProjects'));
+  $('btnSettings').addEventListener('click', () => openDrawer('drawerProjects'));
+  $('btnSheets').addEventListener('click', () => { if (state.project) showTab('sheets', true); });
+  $('chipNets').addEventListener('click', () => { if (state.project) showTab('nets', true); });
+  $('chipParts').addEventListener('click', () => { if (state.project) showTab('parts', true); });
+  $('btnUp').addEventListener('click', () => { if (state.inst && state.inst.parent) showInstance(state.inst.parent); });
 
   function renderProjects() {
     const body = $('projectsBody'); body.replaceChildren();
@@ -721,7 +861,8 @@
     const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Theme' });
     for (const [v, l] of [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]) seg.append(h('button', { 'aria-pressed': String(theme === v), onclick: () => { Store.pref('theme', v); applyTheme(); renderProjects(); }, text: l }));
     const dim = h('input', { type: 'checkbox', checked: view.dimOthers, onchange: (e) => { view.dimOthers = e.target.checked; Store.pref('dim', e.target.checked); view.redraw(); } });
-    body.append(section('Display', null, seg, h('label', { class: 'check' }, dim, 'Fade everything except the traced net')));
+    const grid = h('input', { type: 'checkbox', checked: view.showGrid, onchange: (e) => { view.showGrid = e.target.checked; Store.pref('grid', e.target.checked); view.redraw(); } });
+    body.append(section('Display', null, seg, h('label', { class: 'check' }, grid, 'Show grid'), h('label', { class: 'check' }, dim, 'Fade everything except the highlighted net')));
     body.append(section('Storage', null,
       h('p', { class: 'hint', text: 'Downloaded schematics are kept on this device so the last revision opens offline.' }),
       h('button', { class: 'btn small', onclick: async () => { await Store.clearPrefix('blob:'); await Store.clearPrefix('tree:'); await Store.clearPrefix('manifest:'); toast('Downloaded schematics cleared'); } }, 'Clear downloaded schematics')));
@@ -761,7 +902,7 @@
     $('search').hidden = false; $('scrim').hidden = false;
     const inp = $('searchInput'); inp.value = state.lastQuery || ''; runSearch(); setTimeout(() => inp.focus(), 30);
   }
-  function closeSearch() { $('search').hidden = true; if ($('drawerProjects').hidden && $('drawerSheets').hidden) $('scrim').hidden = true; }
+  function closeSearch() { $('search').hidden = true; if ($('drawerProjects').hidden) $('scrim').hidden = true; }
   $('btnSearch').addEventListener('click', openSearch);
   $('searchClose').addEventListener('click', closeSearch);
   $('scrim').addEventListener('click', closeSearch);
@@ -828,10 +969,7 @@
   function copyLink() { writeHash(); copy(location.href); }
 
   // ------------------------------------------------------------------ controls
-  $('btnZoomIn').addEventListener('click', () => view.zoomBy(1.6));
-  $('btnZoomOut').addEventListener('click', () => view.zoomBy(1 / 1.6));
   $('btnFit').addEventListener('click', () => view.fit());
-  $('btnZoomNet').addEventListener('click', () => { if (state.sel && state.sel.type === 'net') goToNetOn(state.inst, state.sel.net); });
   $('wConnect').addEventListener('click', () => openDrawer('drawerProjects'));
   $('wOpen').addEventListener('click', () => $('fileInput').click());
   $('wSample').addEventListener('click', loadSample);
@@ -844,19 +982,9 @@
     else if (e.key === '-') view.zoomBy(1 / 1.4);
     else if (e.key === '0') view.fit();
   });
-  // Drag the bottom sheet handle on phones
-  (function () {
-    const g = $('grab'); let y0 = null;
-    g.addEventListener('pointerdown', (e) => { y0 = e.clientY; });
-    window.addEventListener('pointerup', (e) => {
-      if (y0 === null) return;
-      const dy = e.clientY - y0; y0 = null;
-      if (Math.abs(dy) > 30) { state.insExpanded = dy < 0; $('inspector').classList.toggle('collapsed', !state.insExpanded); }
-    });
-  })();
-  window.addEventListener('resize', () => { if (!$('inspector').hidden) $('inspector').classList.toggle('collapsed', narrow() && !state.insExpanded); $('zoomctl').classList.toggle('lifted', narrow() && !$('inspector').hidden); });
-
   // ------------------------------------------------------------------ boot
+  renderStatus();
+  renderScale();
   async function boot() {
     const last = Store.pref('last');
     if (last && last.kind === 'github' && state.gh.repo && state.token) { await connectAndOpen(last.key); if (state.project) return; }

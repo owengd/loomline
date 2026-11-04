@@ -11,22 +11,23 @@
   const BUS = 0.3048;
   const PITCH = 1.62;        // line spacing in text heights
 
+  // KiCad's "KiCad Default" schematic colour theme, plus a dark variant of it.
   const PALETTES = {
     light: {
-      bg: '#f7f6f1', paper: '#fffffc', frame: '#9a6b5f', frameText: '#7a5248',
-      wire: '#008f2a', bus: '#1f3fa8', junction: '#008f2a', body: '#8c1d1d', bodyfill: '#fffbd2',
-      pin: '#8c1d1d', pinnum: '#a33a2a', pinname: '#006a6a', ref: '#006a6a', value: '#006a6a', field: '#7d2f8a',
-      llabel: '#1c1c1c', glabel: '#8c1d1d', hlabel: '#7a5a00', sheet: '#7d2f8a', sheetname: '#006a6a', sheetfile: '#7a5a00',
-      sheetpin: '#7a5a00', note: '#1f2fb8', nc: '#1f3fa8', directive: '#7d2f8a', rule: '#7d2f8a',
-      hl: '#ff5a1f', hlHalo: 'rgba(255,90,31,0.22)', sel: '#ff5a1f', selFill: 'rgba(255,90,31,0.10)', flash: 'rgba(255,90,31,0.35)'
+      bg: '#e4e2dd', paper: '#fbfaf6', grid: 'rgba(120,118,112,0.55)', frame: '#9b2c2c', frameText: '#9b2c2c',
+      wire: '#009600', bus: '#000084', junction: '#009600', body: '#840000', bodyfill: '#ffffc2',
+      pin: '#840000', pinnum: '#a90000', pinname: '#006464', ref: '#006464', value: '#006464', field: '#840084',
+      llabel: '#0f0f0f', glabel: '#840000', hlabel: '#725600', sheet: '#840084', sheetname: '#006464', sheetfile: '#725600',
+      sheetpin: '#725600', note: '#0000c2', nc: '#000084', directive: '#840084', rule: '#840084',
+      hl: '#ff5a1f', sel: '#2a7ab0', selFill: 'rgba(42,122,176,0.16)', flash: 'rgba(255,90,31,0.35)'
     },
     dark: {
-      bg: '#14181d', paper: '#1a1f25', frame: '#7c5d57', frameText: '#9b7c75',
-      wire: '#4cc46e', bus: '#7b96ff', junction: '#4cc46e', body: '#d97a73', bodyfill: '#2a2820',
-      pin: '#d97a73', pinnum: '#e3988b', pinname: '#5cc8c8', ref: '#5cc8c8', value: '#5cc8c8', field: '#c48ad3',
-      llabel: '#e6e8ea', glabel: '#e88a80', hlabel: '#d9b45c', sheet: '#c48ad3', sheetname: '#5cc8c8', sheetfile: '#d9b45c',
-      sheetpin: '#d9b45c', note: '#8aa6ff', nc: '#7b96ff', directive: '#c48ad3', rule: '#c48ad3',
-      hl: '#ff8a3d', hlHalo: 'rgba(255,138,61,0.25)', sel: '#ff8a3d', selFill: 'rgba(255,138,61,0.12)', flash: 'rgba(255,138,61,0.4)'
+      bg: '#141618', paper: '#1d2023', grid: 'rgba(140,140,140,0.5)', frame: '#c46a6a', frameText: '#c46a6a',
+      wire: '#38c158', bus: '#6f8cff', junction: '#38c158', body: '#d26a6a', bodyfill: '#2d2a1d',
+      pin: '#d26a6a', pinnum: '#e08a80', pinname: '#4fc2c2', ref: '#4fc2c2', value: '#4fc2c2', field: '#c77ad6',
+      llabel: '#e6e6e6', glabel: '#e37d7d', hlabel: '#d6b25a', sheet: '#c77ad6', sheetname: '#4fc2c2', sheetfile: '#d6b25a',
+      sheetpin: '#d6b25a', note: '#7f9bff', nc: '#6f8cff', directive: '#c77ad6', rule: '#c77ad6',
+      hl: '#ff7a33', sel: '#5aa9de', selFill: 'rgba(90,169,222,0.18)', flash: 'rgba(255,122,51,0.4)'
     }
   };
 
@@ -475,7 +476,8 @@
       this.pal = PALETTES.light;
       this.hlGroups = null;  // Set of group ids highlighted on this sheet
       this.selSym = -1; this.selSheet = -1;
-      this.dimOthers = true;
+      this.dimOthers = false;
+      this.showGrid = true;
       this.flash = null;
       this.pointers = new Map();
       this._raf = 0;
@@ -572,7 +574,7 @@
       this.redraw();
     }
     toWorld(x, y) { return [(x - this.ox) / this.scale, (y - this.oy) / this.scale]; }
-    redraw() { if (this._raf) return; this._raf = requestAnimationFrame(() => { this._raf = 0; this._drawNow(); }); }
+    redraw() { if (this.opts.onView) this.opts.onView(this); if (this._raf) return; this._raf = requestAnimationFrame(() => { this._raf = 0; this._drawNow(); }); }
 
     // ---------------------------------------------------- input
     _bindInput() {
@@ -585,6 +587,7 @@
         if (this.pointers.size === 2) { this._pinch = this._pinchState(); this._moved = true; this._beginInteraction(); }
       });
       c.addEventListener('pointermove', (e) => {
+        if (this.opts.onHover && e.pointerType === 'mouse') { const r = c.getBoundingClientRect(); this.opts.onHover(this.toWorld(e.clientX - r.left, e.clientY - r.top)); }
         const p = this.pointers.get(e.pointerId);
         if (!p) return;
         const rect = c.getBoundingClientRect();
@@ -740,7 +743,24 @@
       // paper
       ctx.fillStyle = P.paper;
       ctx.fillRect(S.page[0], S.page[1], S.page[2], S.page[3]);
+      ctx.strokeStyle = P.frame; ctx.globalAlpha = 0.9; ctx.lineWidth = 1.5 * px;
+      ctx.strokeRect(S.page[0], S.page[1], S.page[2], S.page[3]);
+      ctx.globalAlpha = 1;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      // KiCad-style dot grid (50 mil), coarsened when zoomed out
+      if (this.showGrid) {
+        let step = 1.27;
+        while (step * sc < 14) step *= 2;
+        this.gridStep = step;
+        const x0 = Math.max(S.page[0] + step, Math.floor(view[0] / step) * step), x1 = Math.min(S.page[2] - step / 2, view[2]);
+        const y0 = Math.max(S.page[1] + step, Math.floor(view[1] / step) * step), y1 = Math.min(S.page[3] - step / 2, view[3]);
+        const n = ((x1 - x0) / step) * ((y1 - y0) / step);
+        if (n > 0 && n < 60000) {
+          ctx.fillStyle = P.grid;
+          const d = 1.2 * px;
+          for (let x = x0; x <= x1; x += step) for (let y = y0; y <= y1; y += step) ctx.fillRect(x - d / 2, y - d / 2, d, d);
+        }
+      }
 
       const hl = this.hlGroups, selSym = this.selSym, selSheet = this.selSheet;
       const anyHl = !!hl || selSym >= 0 || selSheet >= 0;
@@ -807,17 +827,11 @@
       if (later.length) {
         ctx.globalAlpha = 1;
         ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * this.ox, dpr * this.oy);
-        // halo
-        ctx.strokeStyle = P.hlHalo;
-        for (const o of later) {
-          if (o.p && o.g >= 0) { ctx.lineWidth = Math.max(o.w * 2.5, 9 * px); this._path(o.p, false); ctx.stroke(); }
-          else if (o.c && o.g >= 0) { ctx.fillStyle = P.hlHalo; ctx.beginPath(); ctx.arc(o.c[0], o.c[1], Math.max(o.r * 1.8, 6 * px), 0, Math.PI * 2); ctx.fill(); }
-        }
         for (const o of later) {
           if (o.p) {
             const net = o.g >= 0 && hl && hl.has(o.g);
             ctx.strokeStyle = net ? P.hl : col(o);
-            ctx.lineWidth = Math.max(o.w * (net ? 1.6 : 1.2), (net ? 2.6 : 1.4) * px);
+            ctx.lineWidth = Math.max(o.w * (net ? 1.5 : 1.2), (net ? 2.2 : 1.4) * px);
             this._dash(o.dash, px);
             this._path(o.p, false);
             ctx.stroke();
