@@ -112,8 +112,8 @@ and `0` to zoom.
 
 ## Updating the app
 
-After changing any file, bump `CACHE` in `sw.js` (for example `tracer-v1.0.1`) so installed
-copies pick up the new version.
+After changing any file, bump `CACHE` in `sw.js` and the `?v=` numbers on the CSS and script
+links in `index.html` (for example `1.2.2`), so installed copies pick up the new version straight away.
 
 ## Files
 

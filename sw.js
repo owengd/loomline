@@ -1,5 +1,5 @@
 /* Offline app shell. Schematic data is cached separately in IndexedDB by the app. */
-const CACHE = 'tracer-v1.2.0';
+const CACHE = 'tracer-v1.2.1';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'js/kicad-core.js', 'js/render.js', 'js/storage.js', 'js/zip.js', 'js/github.js', 'js/app.js',
@@ -19,7 +19,8 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // never touch GitHub API calls
   // Network first so a new deployment shows up straight away; fall back to the cache offline.
   e.respondWith(
-    fetch(e.request).then((res) => {
+    // Revalidate with the server so a new deployment is never mixed with stale cached files.
+    fetch(e.request, { cache: 'no-cache' }).then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
       return res;
     }).catch(() => caches.match(e.request, { ignoreSearch: true }).then((r) => r || caches.match('index.html')))
