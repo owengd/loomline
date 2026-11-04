@@ -102,6 +102,45 @@ to the open project, a banner offers to load it.
 On a keyboard: `/` to search, `Esc` to clear, `Backspace` for the parent sheet, `+`, `-`
 and `0` to zoom.
 
+## 4. Editing
+
+The three buttons at the top of the rail switch mode: **SELECT** (tap to select and trace),
+**WIRE** and **LABEL**. Every change is a small edit to the schematic text, so the rest of the
+file stays exactly as KiCad wrote it.
+
+| To | Do this |
+| --- | --- |
+| Edit reference, value or other fields | Select a part → **EDIT**. **ADD FIELD** adds a new one; DNP is a tick box |
+| Move | Select a part, label or wire → **MOVE**, drag, then **DONE**. Attached wires stretch to follow |
+| Rotate / mirror | Select a part → **ROTATE**, **MIRROR ↔** or **MIRROR ↕** (labels rotate too) |
+| Delete | Select → **DELETE**. Junctions that are no longer needed go with it |
+| Copy a part | Select it → **COPY**. The copy gets the next free reference and starts in move mode |
+| Draw a wire | **WIRE**, then tap points; it snaps to the 1.27 mm grid and finishes when it lands on a pin or wire. **FLIP** swaps the corner, **BACK** removes the last point |
+| Add a label | **LABEL**, tap a wire or pin, choose local, global or hierarchical and type the name |
+| No-connect flag | Tap a pin → **NO-CONN** |
+| Undo / redo | The arrows in the top bar, or `Ctrl+Z` / `Ctrl+Y` |
+
+If an edit joins two nets that were separate (for example rotating a big part with wires
+attached), the app says which nets merged and offers **UNDO**.
+
+The red chip in the top bar counts unsaved edits. They're kept on the device, so closing the
+tab doesn't lose them; next time you open the project it offers to restore them.
+
+### Saving
+
+Tap the red edits chip. **SAVE TO GITHUB** commits the changed files to a new branch
+(`tracer/<project>-<date>` by default) and opens a pull request into the branch you were
+viewing. Saving again from that branch adds another commit to the same pull request. Nothing
+is ever written to `main` directly.
+
+Saving needs a token with write access: a classic token with the `repo` scope, or a
+fine-grained token with **Contents: Read and write** and **Pull requests: Read and write**.
+Without one, **DOWNLOAD ZIP** gives you the edited files to commit yourself.
+
+Open the branch in KiCad and run ERC before merging the pull request. The editor covers
+common changes but isn't a replacement for eeschema: it doesn't add new parts from the
+library, edit buses or sheets, or update the PCB.
+
 ## Limits
 
 - KiCad 5 `.sch` files aren't supported. Open and save them once in KiCad 6 or newer.
@@ -113,7 +152,7 @@ and `0` to zoom.
 ## Updating the app
 
 After changing any file, bump `CACHE` in `sw.js` and the `?v=` numbers on the CSS and script
-links in `index.html` (for example `1.2.2`), so installed copies pick up the new version straight away.
+links in `index.html` (for example `1.3.1`), so installed copies pick up the new version straight away.
 
 ## Files
 
@@ -124,11 +163,13 @@ js/kicad-core.js      S-expression parser, schematic model, hierarchy and net co
 js/render.js          canvas renderer, gestures, hit-testing
 js/github.js          GitHub REST access and project discovery
 js/storage.js         IndexedDB cache for downloaded files
-js/zip.js             ZIP reader for "Download ZIP" archives
-js/app.js             UI: projects, sheets, inspector, search, deep links
+js/zip.js             ZIP reader for "Download ZIP" archives, and writer for edited files
+js/edit.js            schematic edits as text splices: fields, move, rotate, wires, labels, copy
+js/app.js             UI: projects, sheets, inspector, search, deep links, editing, saving
 sw.js                 offline app shell
 samples/              KiCad's complex_hierarchy demo (GPL-3.0, see NOTICE.md); safe to delete
 test/compare-pcb.js   node test: compares schematic nets with the pad nets in .kicad_pcb files
+test/edit-test.js     node test: applies edits, re-parses and checks connectivity
 fonts/                IBM Plex (SIL Open Font License, see OFL-LICENSE.txt)
 ```
 
