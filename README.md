@@ -78,17 +78,23 @@ Folders of schematics with no `.kicad_pro` are listed too.
 
 ## 3. Using it
 
+The layout follows the KiCad Editor Android app: chips along the top for the sheet, nets and
+parts; a tool rail on the right (along the bottom on a phone); and a status bar at the bottom
+showing what's selected.
+
 | To | Do this |
 | --- | --- |
-| Trace a net | Tap a wire, pin end, label or junction |
-| Inspect a part | Tap the part body or its reference |
-| Enter a sheet | Double-tap the sheet box, or tap it and choose **Open sheet** |
-| Go up | The ↑ button next to the sheet name |
-| Jump anywhere | 🔍 Search: refs (`U3`), values (`10k`), footprints, nets (`CAN_H`), sheets |
-| Follow a net | In the inspector, tap a sheet row to go there, or a pin row to fly to that pin |
-| Share a view | **Copy link** puts the project, sheet and net in the URL |
-| Older revision | Projects panel → *Recent changes*, then tap a commit |
-| Clear | Tap empty space, or ✕ in the inspector |
+| Trace a net | Tap a wire, pin end, label or junction. It's drawn bold orange on every sheet; nothing else fades |
+| Follow it to another sheet | **NEXT** in the status bar steps through each sheet the net reaches |
+| See every pin on the net | **NETS** in the rail (or tap the status bar) opens the Net Navigator |
+| Inspect a part | Tap the part body or its reference, then **INFO** for fields and pins |
+| Find a part | **PARTS** lists every part with a filter box; the search icon covers parts, nets and sheets |
+| Change sheet | The sheet chip at the top, or **SHEETS** in the rail; ↑ goes to the parent sheet |
+| Enter a sheet | Double-tap the sheet box, or tap it and press **ENTER** |
+| Grid dots | Tap the scale chip in the bottom-left corner |
+| Share a view | **Copy link** in the Net Navigator or Properties puts the project, sheet and net in the URL |
+| Older revision | ← (Projects) → *Recent changes*, then tap a commit |
+| Clear | **CLEAR** in the status bar, or tap empty space |
 
 When the app comes back to the foreground it checks GitHub. If someone has pushed a change
 to the open project, a banner offers to load it.
