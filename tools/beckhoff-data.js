@@ -8,6 +8,15 @@ const P = (s) => s.split(',').map((x) => x.trim());
 module.exports = {
   source: 'Beckhoff Information System and EtherCAT terminal manuals, checked November 2026',
   parts: [
+    // ---- controller (Industrial PC). Not an E-bus device: EtherCAT runs from a LAN port to the EK1100.
+    { code: 'C6017-0030', type: 'IPC', ipc: true,
+      desc: 'Ultra-compact Industrial PC, Intel Atom x6214RE 2-core 1.4 GHz (option x6416RE 4-core), 4 GB DDR4, 40 GB M.2 SSD, 24 V DC, TwinCAT 3 platform level 40 (50 with 4-core)',
+      signal: '24 V DC on X101 (at least 22 V at the plug), 2x2-pin plug 8 A, max 1.5 mm2',
+      power: [['1', 'PC-ON', 'input'], ['2', 'P-S', 'output'], ['3', '0V', 'passive'], ['4', '+24V', 'passive'], ['PE', 'PE', 'passive']],
+      ports: [['X102', 'LAN1 2.5G'], ['X103', 'LAN2 2.5G'], ['X104', 'DP'], ['X105', 'USB 3.1'], ['X106', 'USB 3.1'],
+        ['X201', 'LAN3 (opt)'], ['X202', 'LAN4 (opt)'], ['X203', 'USB 3.0 (opt)'], ['X204', 'USB 3.0 (opt)']],
+      options: 'C9900-E320 adds X201/X202 LAN + X203/X204 USB; C9900-E311 2 x RS232; C9900-U215 1 s UPS; C9900-C591 4-core + 8 GB',
+      datasheet: 'https://www.beckhoff.com/c6017' },
     // ---- coupler and system terminals
     { code: 'EK1100', type: 'COUPLER', desc: 'EtherCAT Coupler for EtherCAT Terminals (E-bus), supplies up to 2 A on the E-bus', signal: 'Us 24 V coupler supply, Up 24 V power contacts', pins: P('Us +24V, Up +24V, Up 0V, PE, Us 0V, Up +24V, Up 0V, PE'), extra: [['X1', 'ECAT IN'], ['X2', 'ECAT OUT']], ebusSupply: 2000 },
     { code: 'EL9100', type: 'SUPPLY', desc: 'Potential supply terminal, 24 V DC (feeds the power contacts)', signal: '24 V DC', pins: P('NC, +24V, 0V, PE, NC, +24V, 0V, PE') },

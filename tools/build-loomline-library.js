@@ -12,7 +12,7 @@ const font = (size, extra) => `(effects (font (size ${size} ${size})${extra && e
 const prop = (name, value, x, y, opts) => `(property ${q(name)} ${q(value)} (at ${f(x)} ${f(y)} 0) ${font(opts && opts.size || 1.27, opts)})`;
 
 // ---- Beckhoff EtherCAT terminals: a box with one pin per terminal point, numbered as on the terminal
-const TYPE_TEXT = { COUPLER: 'EtherCAT coupler', SUPPLY: 'Power supply', DI: 'Digital in', DO: 'Digital out', DIO: 'Digital in/out', RELAY: 'Relay out', AI: 'Analog in', AO: 'Analog out', RTD: 'RTD in', BRIDGE: 'Load cell in' };
+const TYPE_TEXT = { COUPLER: 'EtherCAT coupler', SUPPLY: 'Power supply', DI: 'Digital in', DO: 'Digital out', DIO: 'Digital in/out', RELAY: 'Relay out', AI: 'Analog in', AO: 'Analog out', RTD: 'RTD in', BRIDGE: 'Load cell in', IPC: 'Industrial PC' };
 function pinType(name) {
   if (/^NC$/.test(name)) return 'no_connect';
   if (/^(DI|AI|R|RL|UD|UREF)\d*[+-]?$/.test(name.replace(/\s.*/, ''))) return 'input';
@@ -58,6 +58,35 @@ function beckhoffSymbol(p, src) {
     `(symbol ${q(p.code + '_0_1')} ${body.join(' ')}) (symbol ${q(p.code + '_1_1')} ${pins.join(' ')}))`;
 }
 
+// ---- Beckhoff Industrial PC: X101 power plug (and PE) on the left, network/USB/display ports on the right
+function ipcSymbol(p, src) {
+  const rows = Math.max(p.power.length + 1, p.ports.length);
+  const yOf = (k) => 2.54 * (Math.floor(rows / 2) - k);         // row k (0-based), top to bottom
+  const top = yOf(0) + 2.54 * 2, bottom = yOf(rows - 1) - 2.54, w = 12.7;
+  const hidden = (n, v) => prop(n, v, 0, bottom - 2.54, { hide: true });
+  const fields = [
+    prop('Reference', 'A', 0, top + 3.81), prop('Value', p.code, 0, top + 1.27),
+    hidden('Footprint', ''), hidden('Datasheet', p.datasheet), hidden('Description', 'Beckhoff ' + p.code + ': ' + p.desc),
+    hidden('Manufacturer', 'Beckhoff'), hidden('MPN', p.code), hidden('IO_Type', p.type), hidden('IO_Signal', p.signal),
+    hidden('IO_Channels', '0'), hidden('Options', p.options), hidden('Source', src),
+    prop('ki_keywords', `Beckhoff Industrial PC IPC PLC controller TwinCAT ${p.code} C6017`, 0, 0, { hide: true })
+  ];
+  const yPE = yOf(p.power.length);                               // PE below the plug, after a one-row gap
+  const body = [
+    `(rectangle (start ${f(-w)} ${f(top)}) (end ${f(w)} ${f(bottom)}) (stroke (width 0.254) (type default)) (fill (type background)))`,
+    `(polyline (pts (xy ${f(-w)} ${f(top - 2.54)}) (xy ${f(w)} ${f(top - 2.54)})) (stroke (width 0) (type default)) (fill (type none)))`,
+    `(text ${q(TYPE_TEXT.IPC)} (at 0 ${f(top - 1.27)} 0) ${font(1.27, {})})`,
+    `(text "X101" (at ${f(-w - 0.635)} ${f(yOf(0) + 2.54)} 0) ${font(1.27, { justify: 'right' })})`
+  ];
+  const pins = p.power.map(([num, name, type], i) => {
+    const y = num === 'PE' ? yPE : yOf(i);
+    return `(pin ${type} line (at ${f(-w - 2.54)} ${f(y)} 0) (length 2.54) (name ${q(name)} ${font(1.27)}) (number ${q(num)} ${font(1.27)}))`;
+  });
+  p.ports.forEach(([num, name], i) => pins.push(`(pin bidirectional line (at ${f(w + 5.08)} ${f(yOf(i))} 180) (length 5.08) (name ${q(name)} ${font(1.27)}) (number ${q(num)} ${font(1.27)}))`));
+  return `(symbol ${q(p.code)} (pin_names (offset 0.508)) (exclude_from_sim yes) (in_bom yes) (on_board yes) ${fields.join(' ')} ` +
+    `(symbol ${q(p.code + '_0_1')} ${body.join(' ')}) (symbol ${q(p.code + '_1_1')} ${pins.join(' ')}))`;
+}
+
 // ---- pretty printer (KiCad layout: one list per line, tab indented)
 function splitTop(src) {
   const outp = []; let i = 1; const n = src.length - 1;
@@ -98,6 +127,11 @@ const B = require('./beckhoff-data.js');
 const beckhoff = {};
 const rows = [];
 for (const p of B.parts) {
+  if (p.ipc) {
+    beckhoff[p.code] = ipcSymbol(p, B.source);
+    rows.push([p.code, 'Beckhoff ' + p.code + ': ' + p.desc, 'Beckhoff Industrial PC IPC PLC controller CPU TwinCAT EtherCAT master', 'A', 1, p.power.length + p.ports.length, 0]);
+    continue;
+  }
   beckhoff[p.code] = beckhoffSymbol(p, B.source);
   rows.push([p.code, 'Beckhoff ' + p.code + ': ' + p.desc, `Beckhoff EtherCAT ${p.type} ${TYPE_TEXT[p.type]} PLC I/O terminal`, 'A', 1, p.pins.length + (p.extra || []).length, 0]);
 }
