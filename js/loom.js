@@ -157,6 +157,8 @@
       inst.sheet.symbols.forEach((sym, si) => {
         const ref = inst.refs[si].ref;
         if (!sym.lib || sym.lib.power || ref.startsWith('#')) return;
+        // Spare channels on I/O modules are normal; don't flag them.
+        if (prop(sym, 'IO_Type')) return;
         for (const pin of K.symbolPins(sym)) {
           if (pin.type === 'no_connect') continue;
           const net = P.nets[inst.netOf[pin.group]];
@@ -230,6 +232,15 @@
         }
       }
     }
+    // E-bus budget: terminals' stated consumption against the couplers' and power terminals' supply
+    try {
+      const io = plcIO(P, A);
+      if (io.supply && io.ebus > io.supply) {
+        const first = io.modules.find((m) => m.ebus && m.ebus[0] === '+');
+        const e = first && A.parts.get(first.ref);
+        if (e) add('warn', 'ebus', `E-bus load ${io.ebus} mA is more than the ${io.supply} mA supplied; add an EL9410 power terminal`, e.units[0].inst, e.sym.p, { ref: e.ref, si: e.units[0].si });
+      }
+    } catch (err) { /* not a PLC design */ }
     const rank = { error: 0, warn: 1 };
     out.sort((a, b) => rank[a.sev] - rank[b.sev] || P.instances[a.inst].order - P.instances[b.inst].order || a.p[1] - b.p[1] || a.p[0] - b.p[0]);
     return out;
@@ -298,6 +309,51 @@
     return { cols: ['Severity', 'Page', 'Zone', 'Problem'], rows: A.issues.map((i) => [i.sev === 'error' ? 'Error' : 'Warning', i.page, i.zone, i.msg]) };
   }
 
+
+  // ---------------------------------------------------------------- PLC I/O list
+  // Modules are parts with an IO_Type field (the Loomline Beckhoff library sets it); channels come
+  // from their pin names (DI3, AO1, AI2+, R1+, UD+, REL1 NO…).
+  function channelOf(name) {
+    let m;
+    if ((m = /^(DI|DO|AI|AO)(\d+)([+-]?)$/.exec(name))) return { id: m[1] + m[2], kind: m[1], main: m[3] !== '-' };
+    if ((m = /^REL(\d+)\s*(NO|NC|C)?$/.exec(name))) return { id: 'REL' + m[1], kind: 'RELAY', main: m[2] === 'NO' };
+    if ((m = /^R(L?)(\d+)([+-])$/.exec(name))) return { id: 'RTD' + m[2], kind: 'RTD', main: !m[1] && m[3] === '+' };
+    if ((m = /^(UD|UREF|UV)([+-])$/.exec(name))) return { id: 'BR1', kind: 'BRIDGE', main: m[1] === 'UD' && m[2] === '+' };
+    return null;
+  }
+  function plcIO(P, A) {
+    const modules = [], chans = [];
+    let ebus = 0, ebusUnknown = 0, supply = 0;
+    for (const e of Array.from(A.parts.values()).sort((a, b) => ncmp(a.ref, b.ref))) {
+      const type = prop(e.sym, 'IO_Type');
+      if (!type) continue;
+      const code = prop(e.sym, 'MPN') || prop(e.sym, 'Value');
+      const eb = prop(e.sym, 'Ebus_mA'), sup = prop(e.sym, 'Ebus_supply_mA');
+      if (sup) supply += +sup || 0;
+      else if (eb) ebus += +eb || 0;
+      else ebusUnknown++;
+      const byCh = new Map();
+      for (const u of e.units) for (const pin of K.symbolPins(u.sym)) {
+        const c = channelOf(pin.name || '');
+        if (!c) continue;
+        let ch = byCh.get(c.id);
+        if (!ch) byCh.set(c.id, ch = { id: c.id, kind: c.kind, pins: [], net: null, u });
+        const net = P.nets[u.inst.netOf[pin.group]];
+        ch.pins.push(pin.number);
+        if (c.main || !ch.net) ch.net = net;
+        if (net && (net.pins.length > 1 || net.named)) ch.used = true;
+      }
+      const list = Array.from(byCh.values()).sort((a, b) => ncmp(a.id, b.id));
+      for (const ch of list) {
+        const others = ch.net ? ch.net.pins.filter((p) => p.ref !== e.ref) : [];
+        chans.push({ ref: e.ref, code, type, ch: ch.id, kind: ch.kind, points: ch.pins.sort(ncmp).join(', '), signal: prop(e.sym, 'IO_Signal'),
+          wire: ch.net ? A.wireNo[ch.net.id] || '' : '', net: ch.net && (ch.net.named || ch.net.pins.length > 1) ? plain(ch.net.name) : '',
+          to: others.slice(0, 4).map((p) => p.ref + '.' + p.number).join(', ') + (others.length > 4 ? ` +${others.length - 4}` : ''), used: !!ch.used, page: ch.u.page });
+      }
+      modules.push({ ref: e.ref, code, type, desc: prop(e.sym, 'Description') || prop(e.sym, 'Value'), channels: list.length, used: list.filter((c) => c.used).length, ebus: sup ? '+' + sup : eb, page: e.units[0].page });
+    }
+    return { modules, chans, ebus, ebusUnknown, supply };
+  }
   // ---------------------------------------------------------------- comparison
   function partSig(P, A) {
     const m = new Map();
@@ -366,6 +422,6 @@
     return [cols, ...rows].map((r) => r.map(q).join(',')).join('\r\n') + '\r\n';
   }
 
-  root.Loom = { analyze, check, zoneOf, isConnector, bom, wireList, connectors, looms, issuesTable, diff, csv };
+  root.Loom = { analyze, check, zoneOf, isConnector, bom, wireList, connectors, looms, issuesTable, plcIO, channelOf, diff, csv };
   if (typeof module !== 'undefined') module.exports = root.Loom;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

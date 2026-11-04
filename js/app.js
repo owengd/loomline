@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.5.0';
+  const VERSION = '1.6.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1694,16 +1694,16 @@
     if (!meta) throw new Error(`${lib} isn't in the part library.`);
     let bundle = null;
     try {
-      const r = await fetch(LIB_BASE + 'kicad/' + meta.file);
+      const r = await fetch(LIB_BASE + (meta.dir || 'kicad/') + meta.file);
       if (r.ok) {
         const raw = new Uint8Array(await r.arrayBuffer());
         // Some servers decompress .gz on the way; only inflate when the gzip magic bytes are there.
         const txt = raw[0] === 0x1f && raw[1] === 0x8b ? await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'))).text() : new TextDecoder().decode(raw);
         bundle = JSON.parse(txt);
-        Store.set('libbundle:' + meta.file, bundle);
+        Store.set('libbundle:' + (meta.dir || '') + meta.file, bundle);
       }
     } catch (e) { /* offline */ }
-    if (!bundle) bundle = await Store.get('libbundle:' + meta.file);
+    if (!bundle) bundle = await Store.get('libbundle:' + (meta.dir || '') + meta.file);
     if (!bundle) throw new Error(`The ${meta.cat} parts aren't on this device yet. Connect to the internet once to download them.`);
     for (const [name, data] of Object.entries(bundle.libs)) libState.files.set(name, data);
     return libState.files.get(lib);
@@ -2008,6 +2008,15 @@
       make: (P, A) => {
         const C = Loom.connectors(P, A);
         return { group: 'Connector', count: C.length + ' connectors', sections: C.map((c) => ({ heading: c.ref, sub: [c.value, c.footprint, 'page ' + c.page].filter(Boolean).join(' · '), cols: ['Pin', 'Name', 'Wire', 'Net', 'Goes to'], rows: c.rows.map((r) => [r.pin, r.name, r.wire, r.net, r.to]) })) };
+      } },
+    { id: 'plcio', title: 'PLC I/O list', desc: 'Every I/O module (Beckhoff terminals from the Loomline library) and each channel: terminal points, signal, wire number and what it connects to, plus spare channels and the E-bus budget.',
+      make: (P, A) => {
+        const io = Loom.plcIO(P, A);
+        const mods = { heading: 'Modules', cols: ['Ref', 'Order code', 'Type', 'Channels', 'Used', 'Spare', 'E-bus mA', 'Page'], rows: io.modules.map((m) => [m.ref, m.code, m.type, m.channels, m.used, m.channels - m.used, m.ebus, m.page]) };
+        const chans = { heading: 'Channels', cols: ['Module', 'Order code', 'Channel', 'Terminal points', 'Signal', 'Wire', 'Net', 'Connects to', 'Status'], rows: io.chans.map((c) => [c.ref, c.code, c.ch, c.points, c.signal, c.wire, c.net, c.to, c.used ? 'used' : 'spare']) };
+        const budget = { heading: 'E-bus budget', cols: ['Supplied (mA)', 'Used by terminals with stated figures (mA)', 'Terminals without a figure'], rows: [[io.supply, io.ebus, io.ebusUnknown]] };
+        const used = io.chans.filter((c) => c.used).length;
+        return { group: 'Section', count: `${io.modules.length} modules · ${used}/${io.chans.length} channels used`, sections: io.modules.length ? [mods, chans, budget] : [{ heading: 'No I/O modules', cols: ['Note'], rows: [['Place Beckhoff terminals from the Beckhoff I/O category of Add a part; their channels are listed here.']] }] };
       } },
     { id: 'bom', title: 'Bill of materials', desc: 'Parts grouped by value and footprint, with manufacturer fields when the schematic has them.',
       make: (P, A) => { const t = Loom.bom(P, A); return { sections: [t], count: t.rows.reduce((n, r) => n + r[0], 0) + ' parts' }; } },
