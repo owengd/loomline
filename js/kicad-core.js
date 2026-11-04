@@ -7,7 +7,10 @@
   // ---------------------------------------------------------------------------
   // S-expression parser. Lists become arrays; atoms and strings become strings.
   // ---------------------------------------------------------------------------
-  function parseSexpr(text) {
+  // Lists also carry their source span (.s, .e) and the spans of their atom/string children
+  // (.t[i] = [start, end]) so the editor can rewrite single tokens and leave the rest of the
+  // file byte-for-byte untouched.
+  function parseSexpr(text, withPos) {
     const n = text.length;
     let i = 0, cur = null, result = null;
     const stack = [];
@@ -15,11 +18,14 @@
       const c = text.charCodeAt(i);
       if (c === 40) { // (
         const l = [];
+        if (withPos) { l.s = i; l.t = []; }
         if (cur) cur.push(l); else if (!result) result = l;
         stack.push(cur); cur = l; i++;
       } else if (c === 41) { // )
+        if (withPos && cur) cur.e = i + 1;
         cur = stack.pop(); i++;
       } else if (c === 34) { // "
+        const st = i;
         i++;
         let s = '', start = i;
         while (i < n) {
@@ -33,7 +39,7 @@
           else i++;
         }
         s += text.slice(start, i); i++;
-        if (cur) cur.push(s);
+        if (cur) { if (withPos) cur.t[cur.length] = [st, i]; cur.push(s); }
       } else if (c <= 32) {
         i++;
       } else {
@@ -43,7 +49,7 @@
           if (d <= 32 || d === 40 || d === 41) break;
           i++;
         }
-        if (cur) cur.push(text.slice(start, i));
+        if (cur) { if (withPos) cur.t[cur.length] = [start, i]; cur.push(text.slice(start, i)); }
       }
     }
     return result;
@@ -308,15 +314,15 @@
   function parseProps(node) {
     return findAll(node, 'property').map((p) => {
       const a = at(p);
-      return { name: p[1], value: p[2] || '', p: [a.x, a.y], a: a.a, fx: effects(p), showName: boolTok(p, 'show_name') };
+      return { name: p[1], value: p[2] || '', p: [a.x, a.y], a: a.a, fx: effects(p), showName: boolTok(p, 'show_name'), src: p };
     });
   }
 
   function parseSchematic(text, path) {
-    const t = parseSexpr(text);
+    const t = parseSexpr(text, true);
     if (!t || t[0] !== 'kicad_sch') throw new Error('Not a KiCad 6+ schematic (.kicad_sch): ' + path);
     const sh = {
-      path, uuid: strVal(t, 'uuid', ''), version: +strVal(t, 'version', 0),
+      path, text, root: t, uuid: strVal(t, 'uuid', ''), version: +strVal(t, 'version', 0),
       paper: [297, 210], titleBlock: { comments: {} }, libSymbols: {},
       wires: [], buses: [], entries: [], junctions: [], noConnects: [], labels: [], symbols: [], sheets: [],
       texts: [], textBoxes: [], graphics: [], images: [], busAliases: {},
@@ -352,20 +358,20 @@
       switch (c[0]) {
         case 'wire': case 'bus': {
           const p = pts(c);
-          for (let q = 0; q + 1 < p.length; q++) (c[0] === 'wire' ? sh.wires : sh.buses).push({ a: p[q], b: p[q + 1], st: stroke(c), uuid: uuidOf(c) });
+          for (let q = 0; q + 1 < p.length; q++) (c[0] === 'wire' ? sh.wires : sh.buses).push({ a: p[q], b: p[q + 1], st: stroke(c), uuid: uuidOf(c), src: c, seg: q });
           break;
         }
         case 'bus_entry': {
           const a = at(c), s = find(c, 'size');
-          sh.entries.push({ a: [a.x, a.y], b: [a.x + num(s && s[1]), a.y + num(s && s[2])], st: stroke(c) });
+          sh.entries.push({ a: [a.x, a.y], b: [a.x + num(s && s[1]), a.y + num(s && s[2])], st: stroke(c), src: c });
           break;
         }
         case 'junction': {
           const a = at(c);
-          sh.junctions.push({ p: [a.x, a.y], d: num(strVal(c, 'diameter', 0)), color: colorOf(c) });
+          sh.junctions.push({ p: [a.x, a.y], d: num(strVal(c, 'diameter', 0)), color: colorOf(c), src: c });
           break;
         }
-        case 'no_connect': { const a = at(c); sh.noConnects.push({ p: [a.x, a.y] }); break; }
+        case 'no_connect': { const a = at(c); sh.noConnects.push({ p: [a.x, a.y], src: c }); break; }
         case 'label': case 'global_label': case 'hierarchical_label': case 'netclass_flag': case 'directive_label': {
           const a = at(c);
           const fx = effects(c);
@@ -380,7 +386,7 @@
             kind, text: c[1] || '', p: [a.x, a.y], spin, fx,
             shape: strVal(c, 'shape', kind === 'hier' ? 'input' : 'passive'),
             length: num(strVal(c, 'length', 2.54)),
-            props: parseProps(c), uuid: uuidOf(c)
+            props: parseProps(c), uuid: uuidOf(c), src: c, angle: ((Math.round(a.a) % 360) + 360) % 360
           });
           break;
         }
@@ -392,7 +398,7 @@
             p: [a.x, a.y], angle: a.a, mirror: mir ? mir[1] : null,
             unit: +strVal(c, 'unit', 1), style: +strVal(c, 'body_style', strVal(c, 'convert', 1)),
             dnp: boolTok(c, 'dnp'), inBom: strVal(c, 'in_bom', 'yes') === 'yes', onBoard: strVal(c, 'on_board', 'yes') === 'yes',
-            uuid: uuidOf(c), props: parseProps(c), instances: [], pinAlts: {}
+            uuid: uuidOf(c), props: parseProps(c), instances: [], pinAlts: {}, src: c
           };
           for (const pn of findAll(c, 'pin')) { const alt = strVal(pn, 'alternate', null); if (alt) sym.pinAlts[pn[1]] = alt; }
           const inst = find(c, 'instances');
@@ -411,13 +417,13 @@
           const sheet = {
             p: [a.x, a.y], size: [num(s && s[1]), num(s && s[2])], uuid: uuidOf(c), props,
             name: prop('Sheetname', 'Sheet name'), file: prop('Sheetfile', 'Sheet file'),
-            st: stroke(c), fl: fill(c), pins: [], instances: [], dnp: boolTok(c, 'dnp')
+            st: stroke(c), fl: fill(c), pins: [], instances: [], dnp: boolTok(c, 'dnp'), src: c
           };
           for (const pn of findAll(c, 'pin')) {
             const pa = at(pn);
             const side = { 0: 'right', 90: 'top', 180: 'left', 270: 'bottom' }[((Math.round(pa.a) % 360) + 360) % 360] || 'left';
             const spin = { right: 'left', left: 'right', top: 'bottom', bottom: 'up' }[side];
-            sheet.pins.push({ name: pn[1], shape: pn[2] || 'input', p: [pa.x, pa.y], side, spin, fx: effects(pn), uuid: uuidOf(pn) });
+            sheet.pins.push({ name: pn[1], shape: pn[2] || 'input', p: [pa.x, pa.y], side, spin, fx: effects(pn), uuid: uuidOf(pn), src: pn });
           }
           const inst = find(c, 'instances');
           if (inst) for (const pr of findAll(inst, 'project')) for (const pa of findAll(pr, 'path')) sheet.instances.push({ project: pr[1], path: pa[1], page: strVal(pa, 'page', '') });
@@ -426,7 +432,7 @@
         }
         case 'text': {
           const a = at(c);
-          sh.texts.push({ s: c[1] || '', p: [a.x, a.y], a: a.a, fx: effects(c) });
+          sh.texts.push({ s: c[1] || '', p: [a.x, a.y], a: a.a, fx: effects(c), src: c });
           break;
         }
         case 'text_box': {
@@ -1042,6 +1048,7 @@
   }
 
   const api = {
+    find, findAll, onSegment, key,
     parseSexpr, parseSchematic, buildProject, symbolPins, libItemsFor, symTransform, tf, tfInv,
     markupRuns, plainText, resolveVars, unescape, unitLetter, expandBusKeyed, expandBus, isBusName, naturalCmp, basename, dirname, joinPath, PAPER
   };

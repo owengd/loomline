@@ -72,18 +72,19 @@
     };
     const flat = (pts) => { const a = new Float64Array(pts.length * 2); pts.forEach((p, i) => { a[2 * i] = p[0]; a[2 * i + 1] = p[1]; }); return a; };
     const colorCss = (c) => c ? `rgba(${c[0]},${c[1]},${c[2]},${c[3] === undefined ? 1 : c[3]})` : null;
+    let curIt = '';
     const stroke = (pts, w, role, o) => {
       if (pts.length < 2) return;
       o = o || {};
-      S.strokes.push({ p: flat(pts), w: w > 0 ? w : (role === 'bus' ? BUS : LINE), role, g: o.g === undefined ? -1 : o.g, sym: o.sym === undefined ? -1 : o.sym, sheet: o.sheet === undefined ? -1 : o.sheet, dash: o.dash || null, color: o.color || null, bb: minmax(pts), closed: !!o.closed, kind: o.kind || '' });
+      S.strokes.push({ p: flat(pts), w: w > 0 ? w : (role === 'bus' ? BUS : LINE), role, g: o.g === undefined ? -1 : o.g, sym: o.sym === undefined ? -1 : o.sym, sheet: o.sheet === undefined ? -1 : o.sheet, dash: o.dash || null, color: o.color || null, bb: minmax(pts), closed: !!o.closed, kind: o.kind || '', it: o.it || curIt });
     };
     const fillPoly = (pts, role, o) => {
       o = o || {};
-      S.fills.push({ p: flat(pts), role, color: o.color || null, sym: o.sym === undefined ? -1 : o.sym, g: o.g === undefined ? -1 : o.g, bb: minmax(pts) });
+      S.fills.push({ p: flat(pts), role, color: o.color || null, sym: o.sym === undefined ? -1 : o.sym, g: o.g === undefined ? -1 : o.g, bb: minmax(pts), it: o.it || curIt });
     };
     const circle = (c, r, w, role, o) => {
       o = o || {};
-      S.circles.push({ c, r, w: w > 0 ? w : LINE, role, fill: o.fill || null, fillColor: o.fillColor || null, g: o.g === undefined ? -1 : o.g, sym: o.sym === undefined ? -1 : o.sym, bb: [c[0] - r, c[1] - r, c[0] + r, c[1] + r], kind: o.kind || '' });
+      S.circles.push({ c, r, w: w > 0 ? w : LINE, role, fill: o.fill || null, fillColor: o.fillColor || null, g: o.g === undefined ? -1 : o.g, sym: o.sym === undefined ? -1 : o.sym, bb: [c[0] - r, c[1] - r, c[0] + r, c[1] + r], kind: o.kind || '', it: o.it || curIt });
     };
     // Adds a (possibly multi-line) text block. Anchor is in world mm.
     const text = (x, y, str, size, vert, ha, va, role, o) => {
@@ -100,7 +101,7 @@
         let x0, x1;
         if (ha === 'left') { x0 = 0; x1 = w; } else if (ha === 'right') { x0 = -w; x1 = 0; } else { x0 = -w / 2; x1 = w / 2; }
         const bb = vert ? [ax - size * 1.1, ay - x1, ax + size * 0.25, ay - x0] : [ax + x0, ay - size * 1.1, ax + x1, ay + size * 0.25];
-        S.texts.push({ x: ax, y: ay, s: line, runs: K.markupRuns(line), size, vert: !!vert, ha, role, color: o.color || null, bold: !!o.bold, italic: !!o.italic, g: o.g === undefined ? -1 : o.g, sym: o.sym === undefined ? -1 : o.sym, sheet: o.sheet === undefined ? -1 : o.sheet, bb, w });
+        S.texts.push({ x: ax, y: ay, s: line, runs: K.markupRuns(line), size, vert: !!vert, ha, role, color: o.color || null, bold: !!o.bold, italic: !!o.italic, g: o.g === undefined ? -1 : o.g, sym: o.sym === undefined ? -1 : o.sym, sheet: o.sheet === undefined ? -1 : o.sheet, bb, w, it: o.it || curIt });
       });
     };
     const ctxVars = { inst, project: project, pageCount: project.pageCount, projectName: project.name };
@@ -181,18 +182,20 @@
     }
 
     // ---- wires, buses, entries, junctions, no-connects
-    for (const w of sh.wires) stroke([w.a, w.b], w.st.w, 'wire', { g: w.group, color: colorCss(w.st.color), dash: w.st.type !== 'default' && w.st.type !== 'solid' ? w.st.type : null, kind: 'wire' });
+    sh.wires.forEach((w, i) => stroke([w.a, w.b], w.st.w, 'wire', { it: 'W' + i, g: w.group, color: colorCss(w.st.color), dash: w.st.type !== 'default' && w.st.type !== 'solid' ? w.st.type : null, kind: 'wire' }));
     for (const b of sh.buses) stroke([b.a, b.b], b.st.w, 'bus', { g: b.group, color: colorCss(b.st.color), kind: 'bus' });
     for (const e of sh.entries) stroke([e.a, e.b], e.st.w, 'wire', { g: e.group, kind: 'wire' });
-    for (const j of sh.junctions) { const r = (j.d > 0 ? j.d : 0.9144) / 2; circle(j.p, r, 0, j.bus ? 'bus' : 'junction', { fill: j.bus ? 'bus' : 'junction', g: j.group, kind: 'junction' }); }
-    for (const nc of sh.noConnects) {
+    sh.junctions.forEach((j, i) => { const r = (j.d > 0 ? j.d : 0.9144) / 2; circle(j.p, r, 0, j.bus ? 'bus' : 'junction', { it: 'J' + i, fill: j.bus ? 'bus' : 'junction', g: j.group, kind: 'junction' }); });
+    sh.noConnects.forEach((nc, ncI) => { curIt = 'N' + ncI;
       const s = 0.6096, [x, y] = nc.p;
       stroke([[x - s, y - s], [x + s, y + s]], LINE, 'nc', { g: nc.group, kind: 'nc' });
       stroke([[x - s, y + s], [x + s, y - s]], LINE, 'nc', { g: nc.group, kind: 'nc' });
-    }
+    });
+    curIt = '';
 
     // ---- symbols
     sh.symbols.forEach((sym, si) => {
+      curIt = 'S' + si;
       const lib = sym.lib;
       const ref = inst.refs[si].ref;
       const unitLabel = lib && lib.unitCount > 1 ? K.unitLetter(inst.refs[si].unit || sym.unit) : '';
@@ -224,13 +227,16 @@
           text(Math.min(a[0], b[0]) + 0.5, Math.min(a[1], b[1]) + 0.5, resolve(it.s, { sym, ref }), it.fx.h, false, 'left', 'top', 'body', { sym: si });
         }
       }
+      const bodyOnly = body.length ? minmax(body) : null;
       // pins
       const pins = K.symbolPins(sym);
-      for (const pin of pins) {
+      pins.forEach((pin, pi) => {
         body.push(pin.pos, pin.root);
-        if (pin.hide) continue;
+        if (pin.hide) return;
+        curIt = 'P' + si + ':' + pi;
         drawPin(pin, sym, si, lib);
-      }
+        curIt = 'S' + si;
+      });
       // fields
       for (const f of sym.props) {
         if (f.fx.hide || !f.value) continue;
@@ -243,7 +249,7 @@
         placeText(rel, f.a, f.fx, val, role, si, false, f.name);
       }
       const bb = body.length ? minmax(body) : [sym.p[0] - 1, sym.p[1] - 1, sym.p[0] + 1, sym.p[1] + 1];
-      S.syms.push({ si, bb, sym, ref, power: !!(lib && lib.power) });
+      S.syms.push({ si, bb, body: bodyOnly, sym, ref, power: !!(lib && lib.power) });
 
       function placeText(localP, angle, fx, str, role, symIdx, isLibText, fieldName) {
         // Mirrors SCH_FIELD::GetBoundingBox: build the text box in symbol space, transform, use its centre.
@@ -320,7 +326,9 @@
 
     // ---- labels
     const intersheet = intersheetRefs(project);
-    for (const l of sh.labels) {
+    curIt = '';
+    sh.labels.forEach((l, li) => {
+      curIt = 'L' + li;
       const size = l.fx.h;
       const [x, y] = l.p;
       const g = l.group;
@@ -333,7 +341,7 @@
         const ha = l.spin === 'right' || l.spin === 'up' ? 'left' : 'right';
         text(ax, ay, name, size, vert, ha, 'bottom', 'llabel', { g, bold: l.fx.bold, italic: l.fx.italic, color: colorCss(l.fx.color) });
         const t = S.texts[S.texts.length - 1];
-        S.hitLabels.push({ bb: t ? t.bb : [x - 1, y - 1, x + 1, y + 1], g, label: l });
+        S.hitLabels.push({ bb: t ? t.bb : [x - 1, y - 1, x + 1, y + 1], g, label: l, it: curIt });
       } else if (l.kind === 'global') {
         const margin = 0.375 * size;
         const half = size / 2 + margin;
@@ -355,7 +363,7 @@
         text(x + off[0], y + off[1], name, size, vert, ha, 'center', 'glabel', { g, bold: l.fx.bold, italic: l.fx.italic, color: colorCss(l.fx.color) });
         const bb = [Infinity, Infinity, -Infinity, -Infinity];
         for (const p of pts) { bb[0] = Math.min(bb[0], p[0]); bb[1] = Math.min(bb[1], p[1]); bb[2] = Math.max(bb[2], p[0]); bb[3] = Math.max(bb[3], p[1]); }
-        S.hitLabels.push({ bb, g, label: l });
+        S.hitLabels.push({ bb, g, label: l, it: curIt });
         const isr = l.props.find((p) => p.name === 'Intersheetrefs' || p.name === 'Intersheet References');
         if (isr && !isr.fx.hide) {
           const pages = intersheet.get(l.netName || name);
@@ -372,7 +380,7 @@
         text(x + off[0], y + off[1], name, size, vert, ha, 'center', 'hlabel', { g, bold: l.fx.bold, italic: l.fx.italic, color: colorCss(l.fx.color) });
         const t = S.texts[S.texts.length - 1];
         const bb = t ? [Math.min(t.bb[0], x - size), Math.min(t.bb[1], y - size), Math.max(t.bb[2], x + size), Math.max(t.bb[3], y + size)] : [x - 1, y - 1, x + 1, y + 1];
-        S.hitLabels.push({ bb, g, label: l });
+        S.hitLabels.push({ bb, g, label: l, it: curIt });
       } else if (l.kind === 'directive') {
         const s = 0.508, L = l.length;
         const R = (p) => { const q = rot(p, spinRot); return [q[0] + x, q[1] + y]; };
@@ -388,9 +396,10 @@
           const a = ((Math.round(f.a) % 180) + 180) % 180;
           text(f.p[0], f.p[1], resolve(f.value), f.fx.h, a === 90, f.fx.ha, f.fx.va, 'directive', { g, italic: f.fx.italic });
         }
-        S.hitLabels.push({ bb: [x - 1.5, y - 1.5 - L, x + 1.5, y + 1.5 + L], g, label: l });
+        S.hitLabels.push({ bb: [x - 1.5, y - 1.5 - L, x + 1.5, y + 1.5 + L], g, label: l, it: curIt });
       }
-    }
+    });
+    curIt = '';
 
     function hierShape(x, y, shape, spin, size, g, role, sheetPin) {
       const T = {
@@ -410,6 +419,7 @@
 
     // ---- sheet symbols
     sh.sheets.forEach((s, idx) => {
+      curIt = 'H' + idx;
       const [x, y] = s.p, [w, h] = s.size;
       const pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]];
       if (s.fl && s.fl.color && s.fl.color[3] > 0) fillPoly(pts, 'custom', { color: colorCss(s.fl.color) });
@@ -435,6 +445,7 @@
       }
       S.sheets.push({ idx, bb: [x, y, x + w, y + h], sheet: s });
     });
+    curIt = '';
 
     // ---- scene bbox
     let bb = [0, 0, PW, PH];
@@ -584,7 +595,7 @@
         c.setPointerCapture(e.pointerId);
         this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now() });
         if (this.pointers.size === 1) { this._moved = false; this._tapStart = performance.now(); }
-        if (this.pointers.size === 2) { this._pinch = this._pinchState(); this._moved = true; this._beginInteraction(); }
+        if (this.pointers.size === 2) { this._pinch = this._pinchState(); this._moved = true; if (this._dragStart && this.dragHandler) { this._dragStart = null; this.dragHandler.move([0, 0]); } this._beginInteraction(); }
       });
       c.addEventListener('pointermove', (e) => {
         if (this.opts.onHover && e.pointerType === 'mouse') { const r = c.getBoundingClientRect(); this.opts.onHover(this.toWorld(e.clientX - r.left, e.clientY - r.top)); }
@@ -594,7 +605,12 @@
         if (this.pointers.size === 1) {
           const dx = e.clientX - p.x, dy = e.clientY - p.y;
           if (!this._moved && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > (e.pointerType === 'mouse' ? 3 : 8)) this._moved = true;
-          if (this._moved) { this._beginInteraction(); this.ox += dx; this.oy += dy; this.redraw(); }
+          if (this._moved && this.dragHandler) {
+            const r = c.getBoundingClientRect();
+            if (!this._dragStart) this._dragStart = this.toWorld(p.x0 - r.left, p.y0 - r.top);
+            const w = this.toWorld(e.clientX - r.left, e.clientY - r.top);
+            this.dragHandler.move([w[0] - this._dragStart[0], w[1] - this._dragStart[1]]);
+          } else if (this._moved) { this._beginInteraction(); this.ox += dx; this.oy += dy; this.redraw(); }
           p.x = e.clientX; p.y = e.clientY;
         } else if (this.pointers.size === 2) {
           p.x = e.clientX; p.y = e.clientY;
@@ -617,6 +633,8 @@
         if (this.pointers.size === 0) {
           this._pinch = null;
           this._endInteraction();
+          if (this._dragStart && this.dragHandler) { const st = this._dragStart; this._dragStart = null; const r = c.getBoundingClientRect(); const w = this.toWorld(e.clientX - r.left, e.clientY - r.top); this.dragHandler.end([w[0] - st[0], w[1] - st[1]]); }
+          this._dragStart = null;
           if (!this._moved && e.type === 'pointerup') {
             const rect = c.getBoundingClientRect();
             const x = e.clientX - rect.left, y = e.clientY - rect.top;
@@ -687,13 +705,20 @@
         if (wp[0] < b[0] - tol || wp[0] > b[2] + tol || wp[1] < b[1] - tol || wp[1] > b[3] + tol) continue;
         let d = Infinity;
         for (let i = 0; i + 3 < s.p.length; i += 2) d = Math.min(d, segDist(wp, s.p[i], s.p[i + 1], s.p[i + 2], s.p[i + 3]));
-        consider(d, { type: 'net', g: s.g, kind: s.kind }, s.kind === 'pin' ? 0.35 : 0);
+        consider(d, { type: 'net', g: s.g, kind: s.kind, it: s.it }, s.kind === 'pin' ? 0.35 : 0);
       }
-      for (const c of S.circles) if (c.g >= 0) consider(Math.max(0, Math.hypot(wp[0] - c.c[0], wp[1] - c.c[1]) - c.r), { type: 'net', g: c.g, kind: c.kind }, 0.2);
+      for (const c of S.circles) if (c.g >= 0) consider(Math.max(0, Math.hypot(wp[0] - c.c[0], wp[1] - c.c[1]) - c.r), { type: 'net', g: c.g, kind: c.kind, it: c.it }, 0.2);
       for (const h of S.hitLabels) {
         const b = h.bb;
         const dx = Math.max(b[0] - wp[0], 0, wp[0] - b[2]), dy = Math.max(b[1] - wp[1], 0, wp[1] - b[3]);
-        consider(Math.hypot(dx, dy), { type: 'net', g: h.g, kind: 'label' }, 0.3);
+        consider(Math.hypot(dx, dy), { type: 'net', g: h.g, kind: h.label ? 'label' : 'sheetpin', it: h.it }, 0.3);
+      }
+      // A tap inside a part's body selects the part, even if one of its pins is close by.
+      if (best && (best.kind === 'pin' || !best.kind)) {
+        for (const sy of S.syms) {
+          const b = sy.body; if (!b || sy.power) continue;
+          if (wp[0] >= b[0] && wp[0] <= b[2] && wp[1] >= b[1] && wp[1] <= b[3] && (b[2] - b[0]) * (b[3] - b[1]) > 0.5) return { type: 'symbol', si: sy.si };
+        }
       }
       if (best) return best;
       // symbols: smallest box containing the point
@@ -767,6 +792,8 @@
       const dim = anyHl && this.dimOthers ? (this.dark ? 0.32 : 0.28) : 1;
       const isHl = (o) => (hl && o.g >= 0 && hl.has(o.g)) || (selSym >= 0 && o.sym === selSym) || (selSheet >= 0 && o.sheet === selSheet);
       const col = (o) => o.color || P[o.role] || P.note;
+      const pv = this.preview;
+      const isPrev = pv ? (o) => (pv.sym >= 0 && o.sym === pv.sym) || (o.it && pv.its && pv.its.has(o.it)) : () => false;
 
       // images
       for (const im of S.images) {
@@ -782,13 +809,14 @@
         if (!vis(f.bb)) continue;
         ctx.globalAlpha = isHl(f) ? 1 : (f.role === 'bodyfill' ? Math.max(dim, 0.55) : dim);
         ctx.fillStyle = f.color || P[f.role] || P.bodyfill;
+        if (isPrev(f)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); this._path(f.p, true); ctx.fill(); ctx.restore(); continue; }
         this._path(f.p, true);
         ctx.fill();
       }
       // selected symbol / sheet backdrop
       if (selSym >= 0) {
         const s = S.syms.find((x) => x.si === selSym);
-        if (s) { ctx.globalAlpha = 1; ctx.fillStyle = P.selFill; const b = s.bb, p = 0.8; ctx.fillRect(b[0] - p, b[1] - p, b[2] - b[0] + 2 * p, b[3] - b[1] + 2 * p); }
+        if (s) { ctx.globalAlpha = 1; ctx.fillStyle = P.selFill; const b = s.bb, p = 0.8, o = pv && pv.sym === selSym ? pv.d : [0, 0]; ctx.fillRect(b[0] - p + o[0], b[1] - p + o[1], b[2] - b[0] + 2 * p, b[3] - b[1] + 2 * p); }
       }
       if (selSheet >= 0) {
         const s = S.sheets.find((x) => x.idx === selSheet);
@@ -803,6 +831,7 @@
         ctx.strokeStyle = col(s);
         ctx.lineWidth = Math.max(s.w, (s.role === 'bus' ? 2 : 1.1) * px);
         this._dash(s.dash, px);
+        if (isPrev(s)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); this._path(s.p, false); ctx.stroke(); ctx.restore(); continue; }
         this._path(s.p, false);
         ctx.stroke();
       }
@@ -811,6 +840,7 @@
         if (!vis(c.bb)) continue;
         if (anyHl && isHl(c)) { later.push(c); continue; }
         ctx.globalAlpha = dim;
+        if (isPrev(c)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); this._circle(c, P, px, false); ctx.restore(); continue; }
         this._circle(c, P, px, false);
       }
       // text
@@ -821,13 +851,14 @@
         texts.push(t);
       }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      for (const t of texts) { ctx.globalAlpha = t.role === 'frameText' ? Math.min(1, dim + 0.3) : dim; this._text(t, col(t)); }
+      for (const t of texts) { ctx.globalAlpha = t.role === 'frameText' ? Math.min(1, dim + 0.3) : dim; this._text(t, col(t), false, isPrev(t) ? pv.d : null); }
 
       // highlighted items on top
       if (later.length) {
         ctx.globalAlpha = 1;
         ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * this.ox, dpr * this.oy);
         for (const o of later) {
+          if (isPrev(o)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); }
           if (o.p) {
             const net = o.g >= 0 && hl && hl.has(o.g);
             ctx.strokeStyle = net ? P.hl : col(o);
@@ -839,10 +870,28 @@
             const net = o.g >= 0 && hl && hl.has(o.g);
             this._circle(o, P, px, net);
           }
+          if (isPrev(o)) ctx.restore();
         }
         ctx.setLineDash([]);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        for (const o of later) if (o.runs) this._text(o, o.g >= 0 && hl && hl.has(o.g) ? P.hl : col(o), true);
+        for (const o of later) if (o.runs) this._text(o, o.g >= 0 && hl && hl.has(o.g) ? P.hl : col(o), true, isPrev(o) ? pv.d : null);
+      }
+      // editing overlay: wire being drawn, snap target
+      const ov = this.overlay;
+      if (ov) {
+        ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * this.ox, dpr * this.oy);
+        ctx.globalAlpha = 1;
+        if (ov.pts && ov.pts.length > 1) {
+          ctx.strokeStyle = P.hl; ctx.lineWidth = Math.max(0.25, 3 * px); ctx.setLineDash([]);
+          ctx.beginPath(); ctx.moveTo(ov.pts[0][0], ov.pts[0][1]); for (const q of ov.pts.slice(1)) ctx.lineTo(q[0], q[1]); ctx.stroke();
+        }
+        if (ov.pending && ov.pending.length > 1) {
+          ctx.strokeStyle = P.hl; ctx.lineWidth = Math.max(0.2, 2 * px); ctx.setLineDash([6 * px, 4 * px]);
+          ctx.beginPath(); ctx.moveTo(ov.pending[0][0], ov.pending[0][1]); for (const q of ov.pending.slice(1)) ctx.lineTo(q[0], q[1]); ctx.stroke(); ctx.setLineDash([]);
+        }
+        for (const q of ov.dots || []) { ctx.fillStyle = P.hl; ctx.beginPath(); ctx.arc(q[0], q[1], Math.max(0.35, 4 * px), 0, Math.PI * 2); ctx.fill(); }
+        if (ov.ring) { ctx.strokeStyle = P.sel; ctx.lineWidth = 2.5 * px; ctx.beginPath(); ctx.arc(ov.ring[0], ov.ring[1], 12 * px, 0, Math.PI * 2); ctx.stroke(); }
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
       }
       // flash ring
       if (this.flash) {
@@ -885,11 +934,11 @@
         ctx.stroke();
       }
     }
-    _text(t, color, bright) {
+    _text(t, color, bright, off) {
       const ctx = this.ctx, sc = this.scale, dpr = this.dpr;
       const fpx = t.size * EM * sc;
       if (fpx < (bright ? 2.5 : 3.2)) return;
-      const sx = t.x * sc + this.ox, sy = t.y * sc + this.oy;
+      const sx = (t.x + (off ? off[0] : 0)) * sc + this.ox, sy = (t.y + (off ? off[1] : 0)) * sc + this.oy;
       ctx.setTransform(dpr, 0, 0, dpr, sx * dpr, sy * dpr);
       if (t.vert) ctx.rotate(-Math.PI / 2);
       const weight = t.bold ? '600 ' : bright ? '500 ' : '400 ';

@@ -18,23 +18,27 @@
     return 'GitHub error ' + status + (msg ? ': ' + msg : '') + '.';
   }
 
-  async function api(token, path, what, accept) {
+  async function api(token, path, what, accept, init) {
     let res;
     try {
-      res = await fetch(API + path, {
-        headers: Object.assign({ Accept: accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, token ? { Authorization: 'Bearer ' + token } : {}),
-        cache: 'no-store'
-      });
+      const headers = Object.assign({ Accept: accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, token ? { Authorization: 'Bearer ' + token } : {});
+      if (init && init.body) headers['Content-Type'] = 'application/json';
+      res = await fetch(API + path, Object.assign({ headers, cache: 'no-store' }, init || {}));
     } catch (e) {
       throw new GitHubError('Could not reach GitHub. Check your connection; cached schematics still open offline.', 0);
     }
     if (!res.ok) {
       let body = null; try { body = await res.json(); } catch (e) { /* ignore */ }
-      throw new GitHubError(explain(res.status, body, what || 'that resource'), res.status);
+      const err = new GitHubError(init && init.method && init.method !== 'GET' && (res.status === 403 || res.status === 404)
+        ? 'GitHub refused to save. The token needs write access to this repository (a classic token with the repo scope, or a fine-grained token with Contents: Read and write and Pull requests: Read and write).'
+        : explain(res.status, body, what || 'that resource'), res.status);
+      err.body = body;
+      throw err;
     }
     return res;
   }
   const json = async (token, path, what) => (await api(token, path, what)).json();
+  const send = async (token, method, path, body, what) => (await api(token, path, what, null, { method, body: JSON.stringify(body) })).json();
   const enc = (s) => s.split('/').map(encodeURIComponent).join('/');
 
   const GitHub = {
@@ -88,6 +92,34 @@
       await Store.set(key, text);
       return text;
     },
+    /**
+     * Commit changed files to a branch (created from parentSha if it doesn't exist yet).
+     * files: [{path, text}]. Returns {sha, tree, created}.
+     */
+    async commitFiles(token, full, opts) {
+      const { branch, parentSha, message, files } = opts;
+      let parent = parentSha, baseTree = opts.baseTree, exists = false;
+      try {
+        const ref = await json(token, `/repos/${enc(full)}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`, 'the branch ' + branch);
+        parent = ref.object.sha; exists = true;
+        const c = await json(token, `/repos/${enc(full)}/git/commits/${parent}`, 'the branch head');
+        baseTree = c.tree.sha;
+      } catch (e) { if (e.status && e.status !== 404) throw e; }
+      if (!baseTree) { const c = await json(token, `/repos/${enc(full)}/git/commits/${parent}`, 'the base commit'); baseTree = c.tree.sha; }
+      const tree = await send(token, 'POST', `/repos/${enc(full)}/git/trees`, { base_tree: baseTree, tree: files.map((f) => ({ path: f.path, mode: '100644', type: 'blob', content: f.text })) }, 'the new file tree');
+      const commit = await send(token, 'POST', `/repos/${enc(full)}/git/commits`, { message, tree: tree.sha, parents: [parent] }, 'the commit');
+      if (exists) await send(token, 'PATCH', `/repos/${enc(full)}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`, { sha: commit.sha, force: false }, 'the branch');
+      else await send(token, 'POST', `/repos/${enc(full)}/git/refs`, { ref: 'refs/heads/' + branch, sha: commit.sha }, 'the branch');
+      return { sha: commit.sha, tree: tree.sha, created: !exists, message, date: new Date().toISOString() };
+    },
+    /** Open a pull request for branch → base, or return the one already open. */
+    async ensurePullRequest(token, full, opts) {
+      const owner = full.split('/')[0];
+      const open = await json(token, `/repos/${enc(full)}/pulls?state=open&head=${encodeURIComponent(owner + ':' + opts.branch)}`, 'pull requests');
+      if (open.length) return { number: open[0].number, url: open[0].html_url, existed: true };
+      const pr = await send(token, 'POST', `/repos/${enc(full)}/pulls`, { title: opts.title, head: opts.branch, base: opts.base, body: opts.body || '' }, 'the pull request');
+      return { number: pr.number, url: pr.html_url, existed: false };
+    },
     async history(token, full, ref, path, n) {
       const q = `/repos/${enc(full)}/commits?sha=${encodeURIComponent(ref)}&per_page=${n || 20}` + (path ? '&path=' + encodeURIComponent(path) : '');
       const list = await json(token, q, 'the commit history');
@@ -124,6 +156,15 @@
     return all;
   }
 
+  /** Git's blob id for a text, so files we just committed can be cached for offline use. */
+  async function gitBlobSha(text) {
+    const bytes = new TextEncoder().encode(text);
+    const head = new TextEncoder().encode('blob ' + bytes.length + '\0');
+    const all = new Uint8Array(head.length + bytes.length); all.set(head); all.set(bytes, head.length);
+    const h = await crypto.subtle.digest('SHA-1', all);
+    return Array.from(new Uint8Array(h), (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  GitHub.gitBlobSha = gitBlobSha;
   root.GitHub = GitHub;
   root.groupProjects = groupProjects;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

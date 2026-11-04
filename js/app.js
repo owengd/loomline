@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -111,15 +111,20 @@
   }
 
   // ------------------------------------------------------------------ loading projects
-  function openProject(files, source) {
+  function openProject(files, source, opts) {
     const t0 = performance.now();
     const project = K.buildProject(files);
     state.project = project;
     state.source = source;
+    state.files = files.map((f) => ({ path: f.path, text: f.text }));
+    state.base = new Map(files.map((f) => [f.path, f.text]));
+    state.undo = []; state.redo = [];
+    setMode('select');
     state.scenes.clear(); state.views.clear();
     state.sel = null;
     state.index = buildIndex(project);
     $('welcome').hidden = true;
+    closeDrawers();
     updateHeader();
     const hash = readHash();
     let inst = project.root;
@@ -131,6 +136,8 @@
       else if (hash.r) { const hit = findRef(hash.r); if (hit) selectSymbol(hit.inst, hit.si, true); }
     }
     if (project.errors.length) banner('err', `${project.errors.length} file(s) could not be read: ${project.errors.map((e) => K.basename(e.path)).join(', ')}`);
+    renderEditUI();
+    if (!(opts && opts.noRestore)) offerRestore();
     console.info('Opened', project.name, Math.round(performance.now() - t0) + ' ms', project.nets.length + ' nets');
   }
 
@@ -364,11 +371,14 @@
   // ------------------------------------------------------------------ selection
   function onCanvasTap(wp, type) {
     if (!state.project) return;
+    if (state.mode === 'wire') { wireTap(wp, type); return; }
+    if (state.mode === 'label') { labelTap(wp, type); return; }
+    if (state.mode === 'move') return;
     const hit = view.hitTest(wp, type === 'mouse' ? 8 : 16);
     if (!hit) { clearSelection(); return; }
     if (hit.type === 'net') {
       const net = state.project.nets[state.inst.netOf[hit.g]];
-      if (net) selectNet(net);
+      if (net) selectNet(net, itemFromTag(hit.it));
     } else if (hit.type === 'symbol') selectSymbol(state.inst, hit.si);
     else if (hit.type === 'sheet') selectSheet(state.inst, hit.idx);
   }
@@ -379,8 +389,8 @@
     else if (s.type === 'symbol') view.setHighlight(null, s.inst === inst ? s.si : -1, -1);
     else if (s.type === 'sheet') view.setHighlight(null, -1, s.inst === inst ? s.idx : -1);
   }
-  function selectNet(net) {
-    state.sel = { type: 'net', net };
+  function selectNet(net, item) {
+    state.sel = { type: 'net', net, item: item || null };
     applyHighlight();
     if (state.panelOpen && (state.tab === 'info' || state.tab === 'parts')) showTab('nets');
     renderSelectionUI();
@@ -437,7 +447,7 @@
   function setPanel(open) {
     state.panelOpen = open;
     $('panel').hidden = !open;
-    for (const b of document.querySelectorAll('.rail-btn')) b.setAttribute('aria-pressed', String(open && b.dataset.tab === state.tab));
+    for (const b of document.querySelectorAll('.rail-btn[data-tab]')) b.setAttribute('aria-pressed', String(open && b.dataset.tab === state.tab));
     if (open) renderPanel();
     requestAnimationFrame(() => view.resize());
   }
@@ -445,11 +455,11 @@
     state.tab = tab;
     $('panelTitle').textContent = TAB_TITLES[tab] || '';
     if (open && !state.panelOpen) setPanel(true);
-    else { for (const b of document.querySelectorAll('.rail-btn')) b.setAttribute('aria-pressed', String(state.panelOpen && b.dataset.tab === tab)); renderPanel(); }
+    else { for (const b of document.querySelectorAll('.rail-btn[data-tab]')) b.setAttribute('aria-pressed', String(state.panelOpen && b.dataset.tab === tab)); renderPanel(); }
   }
   // On a phone the panel covers the drawing, so close it after a pick.
   function afterPick() { if (!wideLayout() && state.panelOpen) setPanel(false); }
-  for (const b of document.querySelectorAll('.rail-btn')) b.addEventListener('click', () => {
+  for (const b of document.querySelectorAll('.rail-btn[data-tab]')) b.addEventListener('click', () => {
     const tab = b.dataset.tab;
     if (tab === 'more') { openDrawer('drawerProjects'); return; }
     if (state.panelOpen && state.tab === tab) setPanel(false); else showTab(tab, true);
@@ -669,9 +679,540 @@
     }
   }
 
+  // ------------------------------------------------------------------ editing
+  // Every edit rewrites only the affected lines of the .kicad_sch text (see edit.js), then the
+  // project is rebuilt from the edited text. Undo/redo swap whole file texts.
+  const E = window.KiEdit;
+  state.mode = 'select';
+  state.wire = { anchors: [], flips: [] };
+  const fileText = (path) => { const f = state.files.find((x) => x.path === path); return f ? f.text : null; };
+  const setFileText = (path, text) => { const f = state.files.find((x) => x.path === path); if (f) f.text = text; };
+  function pendingFiles() { return state.files ? state.files.filter((f) => state.base.get(f.path) !== f.text) : []; }
+  function itemFromTag(it) {
+    if (!it) return null;
+    const c = it[0], rest = it.slice(1);
+    if (c === 'W') return { type: 'wire', idx: +rest };
+    if (c === 'L') return { type: 'label', idx: +rest };
+    if (c === 'J') return { type: 'junction', idx: +rest };
+    if (c === 'N') return { type: 'nc', idx: +rest };
+    if (c === 'P') { const [si, pi] = rest.split(':').map(Number); return { type: 'pin', si, pi }; }
+    return null;
+  }
+  const uuidOf = (o) => (o && (o.uuid || (o.src && (K.find(o.src, 'uuid') || [])[1]))) || null;
+  function itemObj(item, sheet) {
+    sheet = sheet || state.inst.sheet;
+    if (!item) return null;
+    if (item.type === 'wire') return sheet.wires[item.idx];
+    if (item.type === 'label') return sheet.labels[item.idx];
+    if (item.type === 'junction') return sheet.junctions[item.idx];
+    if (item.type === 'nc') return sheet.noConnects[item.idx];
+    if (item.type === 'pin') { const s = sheet.symbols[item.si]; return s ? K.symbolPins(s)[item.pi] : null; }
+    return null;
+  }
+  // Remember what is selected by UUID so it survives the rebuild after an edit.
+  function selectionAnchor() {
+    const s = state.sel; if (!s || !state.inst) return null;
+    const sh = state.inst.sheet;
+    if (s.type === 'symbol') return { type: 'symbol', uuid: sh.symbols[s.si] && sh.symbols[s.si].uuid };
+    if (s.type === 'sheet') return { type: 'sheet', uuid: sh.sheets[s.idx] && sh.sheets[s.idx].uuid };
+    if (s.type === 'net' && s.item) { const o = itemObj(s.item); return { type: 'net', item: s.item.type, uuid: uuidOf(o), p: o && (o.p || o.pos || o.a), pin: s.item.type === 'pin' ? { sym: sh.symbols[s.item.si].uuid, pi: s.item.pi } : null }; }
+    if (s.type === 'net') return { type: 'netname', name: s.net.name };
+    return null;
+  }
+  function restoreSelection(a) {
+    state.sel = null;
+    if (!a) return;
+    const sh = state.inst.sheet, P = state.project;
+    if (a.type === 'symbol') { const si = sh.symbols.findIndex((x) => x.uuid === a.uuid); if (si >= 0) state.sel = { type: 'symbol', inst: state.inst, si }; }
+    else if (a.type === 'sheet') { const idx = sh.sheets.findIndex((x) => x.uuid === a.uuid); if (idx >= 0) state.sel = { type: 'sheet', inst: state.inst, idx }; }
+    else if (a.type === 'netname') { const n = P.nets.find((x) => x.name === a.name); if (n) state.sel = { type: 'net', net: n, item: null }; }
+    else if (a.type === 'net') {
+      let item = null, g = -1;
+      if (a.pin) { const si = sh.symbols.findIndex((x) => x.uuid === a.pin.sym); if (si >= 0) { item = { type: 'pin', si, pi: a.pin.pi }; const p = K.symbolPins(sh.symbols[si])[a.pin.pi]; g = p ? p.group : -1; } }
+      else {
+        const list = a.item === 'wire' ? sh.wires : a.item === 'label' ? sh.labels : a.item === 'junction' ? sh.junctions : sh.noConnects;
+        const idx = list.findIndex((o) => uuidOf(o) && uuidOf(o) === a.uuid);
+        if (idx >= 0) { item = { type: a.item, idx }; g = list[idx].group; }
+      }
+      if (g >= 0) state.sel = { type: 'net', net: P.nets[state.inst.netOf[g]], item };
+    }
+  }
+  function rebuild(anchor) {
+    const instPath = state.inst ? state.inst.path : null;
+    const view0 = { scale: view.scale, ox: view.ox, oy: view.oy };
+    const project = K.buildProject(state.files);
+    state.project = project;
+    state.index = buildIndex(project);
+    state.scenes.clear();
+    const inst = project.instances.find((i) => i.path === instPath) || project.root;
+    state.inst = null;
+    showInstance(inst, true);
+    view.scale = view0.scale; view.ox = view0.ox; view.oy = view0.oy;
+    restoreSelection(anchor);
+    applyHighlight();
+    updateHeader();
+    renderSelectionUI();
+    renderEditUI();
+    if (state.mode === 'wire') updateWireOverlay();
+  }
+  function commitEdit(results, label, opts) {
+    results = [].concat(results).filter(Boolean);
+    const changes = results.map((r) => ({ path: r.path, before: fileText(r.path), after: r.text })).filter((c) => c.before !== c.after);
+    if (!changes.length) return false;
+    const anchor = opts && opts.anchor !== undefined ? opts.anchor : selectionAnchor();
+    const before = state.project;
+    for (const c of changes) setFileText(c.path, c.after);
+    state.undo.push({ label, changes, anchor });
+    state.redo = [];
+    rebuild(anchor);
+    persistEdits();
+    if (opts && opts.checkMerges) warnMerges(before, state.project, label);
+    return true;
+  }
+  function run(label, fn, opts) {
+    try { const r = fn(); if (r) commitEdit(r, label, opts); return r; }
+    catch (e) { banner('err', e.message || String(e)); console.error(e); return null; }
+  }
+  function undo() {
+    const h = state.undo.pop(); if (!h) return;
+    for (const c of h.changes) setFileText(c.path, c.before);
+    state.redo.push(h);
+    rebuild(h.anchor);
+    persistEdits();
+    toast('Undid: ' + h.label);
+  }
+  function redo() {
+    const h = state.redo.pop(); if (!h) return;
+    for (const c of h.changes) setFileText(c.path, c.after);
+    state.undo.push(h);
+    rebuild(h.anchor);
+    persistEdits();
+    toast('Redid: ' + h.label);
+  }
+  $('btnUndo').addEventListener('click', undo);
+  $('btnRedo').addEventListener('click', redo);
+  // Warn when a move or rotate makes pins touch something they didn't before.
+  function warnMerges(P0, P1, label) {
+    const before = new Map();
+    P0.nets.forEach((n) => n.pins.forEach((p) => before.set(p.ref + '#' + p.number, n)));
+    for (const n of P1.nets) {
+      const olds = new Set();
+      for (const p of n.pins) { const o = before.get(p.ref + '#' + p.number); if (o) olds.add(o); }
+      if (olds.size > 1) {
+        const names = Array.from(olds).slice(0, 3).map((o) => plain(o.name));
+        banner('err', `${label} also connected ${names.join(' and ')}.`, [{ label: 'UNDO', primary: true, run: () => { undo(); banner(null); } }]);
+        return;
+      }
+    }
+  }
+  function renderEditUI() {
+    const n = pendingFiles().length;
+    const count = state.undo ? state.undo.length : 0;
+    $('chipEdits').hidden = !n;
+    $('editCount').textContent = String(count || n);
+    $('btnUndo').disabled = !(state.undo && state.undo.length);
+    $('btnRedo').disabled = !(state.redo && state.redo.length);
+  }
+  async function persistEdits() {
+    if (!state.source) return;
+    const key = 'edits:' + state.source.key;
+    const files = pendingFiles();
+    if (!files.length) { await Store.del(key); return; }
+    await Store.set(key, { base: state.source.head ? state.source.head.sha : '', at: Date.now(), count: state.undo.length, files: files.map((f) => ({ path: f.path, text: f.text })) });
+  }
+  async function offerRestore() {
+    if (!state.source) return;
+    const saved = await Store.get('edits:' + state.source.key);
+    if (!saved || !saved.files || !saved.files.length) return;
+    const sameBase = !state.source.head || saved.base === state.source.head.sha;
+    const files = saved.files.filter((f) => state.base.has(f.path));
+    if (!files.length) return;
+    banner('old', `You have unsaved edits to ${files.length} sheet file${files.length === 1 ? '' : 's'} from ${new Date(saved.at).toLocaleString()}${sameBase ? '' : ' (made on an older revision)'}.`, [
+      { label: 'RESTORE', primary: true, run: () => { banner(null); commitEdit(files.map((f) => ({ path: f.path, text: f.text })), 'Restore unsaved edits', { anchor: null }); } },
+      { label: 'DISCARD', run: async () => { banner(null); await Store.del('edits:' + state.source.key); } }
+    ]);
+  }
+
+  // ---- modes
+  function setMode(mode) {
+    if (state.mode === 'move' && mode !== 'move') { view.dragHandler = null; view.preview = null; }
+    state.mode = mode;
+    for (const b of document.querySelectorAll('.rail-btn.mode')) b.setAttribute('aria-pressed', String(b.dataset.mode === mode || (mode === 'move' && b.dataset.mode === 'select')));
+    if (mode !== 'wire') { state.wire = { anchors: [], flips: [] }; view.overlay = null; }
+    if (mode === 'wire' || mode === 'label') { view.overlay = { pts: [], dots: [] }; }
+    view.redraw();
+    renderStatus();
+  }
+  for (const b of document.querySelectorAll('.rail-btn.mode')) b.addEventListener('click', () => {
+    if (!state.project) return;
+    if (b.dataset.mode !== 'select' && state.sel && state.mode === 'select') { state.sel = null; applyHighlight(); renderSelectionUI(); }
+    setMode(b.dataset.mode);
+  });
+
+  // ---- snapping (pins, wire ends, along wires, then the 1.27 mm grid)
+  function snapPoint(wp, type) {
+    const sh = state.inst.sheet;
+    const tol = (type === 'mouse' ? 10 : 22) / view.scale;
+    let best = null, bd = tol;
+    for (const c of E.connectionPoints(sh)) { const d = Math.hypot(c.p[0] - wp[0], c.p[1] - wp[1]); if (d < bd) { bd = d; best = { p: c.p.slice(), on: c.kind }; } }
+    if (best) return best;
+    for (const w of sh.wires) {
+      const dx = w.b[0] - w.a[0], dy = w.b[1] - w.a[1], l2 = dx * dx + dy * dy; if (!l2) continue;
+      let t = ((wp[0] - w.a[0]) * dx + (wp[1] - w.a[1]) * dy) / l2; t = Math.max(0, Math.min(1, t));
+      const q = [w.a[0] + t * dx, w.a[1] + t * dy];
+      const d = Math.hypot(q[0] - wp[0], q[1] - wp[1]);
+      if (d < bd) {
+        bd = d;
+        // snap along the wire to the grid, staying on the wire
+        const g = Math.abs(dy) < 1e-6 ? [E.snap(q[0]), w.a[1]] : Math.abs(dx) < 1e-6 ? [w.a[0], E.snap(q[1])] : q;
+        best = { p: g, on: 'wiremid' };
+      }
+    }
+    if (best) return best;
+    return { p: [E.snap(wp[0]), E.snap(wp[1])], on: null };
+  }
+
+  // ---- wire tool
+  function wirePolyline(anchors, flips) {
+    const pts = anchors.length ? [anchors[0]] : [];
+    for (let i = 1; i < anchors.length; i++) {
+      const a = anchors[i - 1], b = anchors[i];
+      if (Math.abs(a[0] - b[0]) > 1e-6 && Math.abs(a[1] - b[1]) > 1e-6) pts.push(flips[i] ? [a[0], b[1]] : [b[0], a[1]]);
+      pts.push(b);
+    }
+    return pts;
+  }
+  function updateWireOverlay(ring) {
+    const w = state.wire;
+    view.overlay = { pts: wirePolyline(w.anchors, w.flips), dots: w.anchors.slice(), ring: ring || null };
+    view.redraw();
+    renderStatus();
+  }
+  function wireTap(wp, type) {
+    const s = snapPoint(wp, type);
+    const w = state.wire;
+    if (w.anchors.length && E.same(w.anchors[w.anchors.length - 1], s.p)) { finishWire(); return; }
+    w.anchors.push(s.p); w.flips.push(false);
+    updateWireOverlay(s.on ? s.p : null);
+    // Landing on something that conducts ends the wire, like KiCad.
+    if (w.anchors.length > 1 && s.on && s.on !== 'label') finishWire();
+  }
+  function finishWire() {
+    const w = state.wire;
+    const pts = wirePolyline(w.anchors, w.flips);
+    if (pts.length < 2) { toast('Tap at least two points to draw a wire.'); return; }
+    const sh = state.inst.sheet;
+    state.wire = { anchors: [], flips: [] };
+    run('Draw wire', () => E.addWires(sh, pts), { anchor: null });
+    updateWireOverlay();
+  }
+  function wireBack() { const w = state.wire; w.anchors.pop(); w.flips.pop(); updateWireOverlay(); }
+  function wireFlip() { const w = state.wire; if (w.anchors.length > 1) { w.flips[w.flips.length - 1] = !w.flips[w.flips.length - 1]; updateWireOverlay(); } }
+
+  // ---- label tool
+  function labelTap(wp, type) {
+    const s = snapPoint(wp, type);
+    if (!s.on || s.on === 'label') { toast('Tap a wire, wire end or pin to place a label.'); return; }
+    view.overlay = { pts: [], dots: [s.p], ring: s.p };
+    view.redraw();
+    // Point the label away from a wire that ends here
+    const sh = state.inst.sheet;
+    let spin = 'right';
+    const w = sh.wires.find((x) => E.same(x.a, s.p) || E.same(x.b, s.p));
+    if (w) { const o = E.same(w.a, s.p) ? w.b : w.a; if (Math.abs(o[1] - s.p[1]) < 1e-6) spin = o[0] > s.p[0] ? 'left' : 'right'; else spin = o[1] > s.p[1] ? 'up' : 'bottom'; }
+    labelDialog({ p: s.p, spin });
+  }
+  function seg(name, options, value, onChange) {
+    const box = h('div', { class: 'seg', role: 'group', 'aria-label': name });
+    const set = (v) => { value = v; for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.v === v)); onChange && onChange(v); };
+    for (const [v, l] of options) box.append(h('button', { 'data-v': v, type: 'button', onclick: () => set(v), text: l }));
+    set(value);
+    return { el: box, get: () => value };
+  }
+  function labelDialog(o) {
+    const last = Store.pref('labelKind') || 'local';
+    const name = h('input', { class: 'input', id: 'lblName', placeholder: 'e.g. CAN_H', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', value: o.rename ? o.rename.text : '' });
+    const body = [h('div', { class: 'field' }, h('label', { for: 'lblName', text: 'Net name' }), name)];
+    let kind, shape, dir;
+    if (!o.rename) {
+      const shapeSel = h('select', { class: 'input', id: 'lblShape' }, ...[['bidirectional', 'Bidirectional'], ['input', 'Input'], ['output', 'Output'], ['tri_state', 'Tri-state'], ['passive', 'Passive']].map(([v, l]) => h('option', { value: v, text: l })));
+      shapeSel.value = Store.pref('labelShape') || 'bidirectional';
+      const shapeField = h('div', { class: 'field' }, h('label', { for: 'lblShape', text: 'Shape' }), shapeSel);
+      kind = seg('Label type', [['local', 'LOCAL'], ['global', 'GLOBAL'], ['hier', 'HIER.']], last, (v) => { shapeField.hidden = v === 'local'; });
+      shape = shapeSel;
+      dir = seg('Direction', [['right', '→'], ['up', '↑'], ['left', '←'], ['bottom', '↓']], o.spin || 'right');
+      body.push(h('div', { class: 'field' }, h('label', { text: 'Type' }), kind.el), shapeField, h('div', { class: 'field' }, h('label', { text: 'Text direction' }), dir.el),
+        h('p', { class: 'hint', text: 'Local labels join wires with the same name on this sheet. Global labels join across every sheet. Hierarchical labels connect to a sheet pin on the parent sheet.' }));
+    }
+    const go = () => {
+      const v = name.value.trim();
+      if (!v) { name.focus(); return; }
+      closeDialog();
+      const sh = state.inst.sheet;
+      if (o.rename) run('Rename label', () => E.renameLabel(sh, o.rename, v));
+      else {
+        Store.pref('labelKind', kind.get()); Store.pref('labelShape', shape.value);
+        run('Add label ' + v, () => E.addLabel(sh, kind.get(), v, o.p, dir.get(), shape.value), { anchor: null });
+      }
+      if (state.mode === 'label') { view.overlay = { pts: [], dots: [] }; view.redraw(); }
+    };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    openDialog(o.rename ? 'RENAME LABEL' : 'ADD LABEL', body, [{ label: 'CANCEL', run: () => { closeDialog(); if (state.mode === 'label') { view.overlay = { pts: [], dots: [] }; view.redraw(); } } }, { label: o.rename ? 'RENAME' : 'ADD', primary: true, run: go }]);
+    setTimeout(() => name.focus(), 50);
+  }
+
+  // ---- dialogs and menus
+  function openDialog(title, body, actions) {
+    closeDialog();
+    const wrap = h('div', { class: 'dialog-wrap', id: 'dialogWrap', onclick: (e) => { if (e.target === wrap) closeDialog(); } },
+      h('div', { class: 'dialog', role: 'dialog', 'aria-label': title },
+        h('div', { class: 'dialog-head' }, h('h2', { text: title }), h('button', { class: 'ib', 'aria-label': 'Close', onclick: closeDialog }, icon('i-close'))),
+        h('div', { class: 'dialog-body' }, ...body),
+        h('div', { class: 'dialog-foot' }, ...actions.map((a) => h('button', { class: 'btn' + (a.primary ? ' primary' : ''), onclick: a.run, disabled: a.disabled }, a.label)))));
+    document.body.append(wrap);
+    return wrap;
+  }
+  function closeDialog() { const d = $('dialogWrap'); if (d) d.remove(); }
+  function openMenu(anchorEl, items) {
+    closeMenu();
+    const r = anchorEl.getBoundingClientRect();
+    const m = h('div', { class: 'menu', id: 'menu' }, ...items.map((it) => h('button', { class: it.danger ? 'danger' : '', onclick: () => { closeMenu(); it.run(); } }, icon(it.icon), it.label)));
+    document.body.append(m);
+    const mh = m.offsetHeight, mw = m.offsetWidth;
+    m.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.right - mw)) + 'px';
+    m.style.top = Math.max(8, r.top - mh - 6) + 'px';
+    setTimeout(() => document.addEventListener('pointerdown', menuAway, { once: true }), 0);
+  }
+  function menuAway(e) { const m = $('menu'); if (m && !m.contains(e.target)) closeMenu(); else if (m) document.addEventListener('pointerdown', menuAway, { once: true }); }
+  function closeMenu() { const m = $('menu'); if (m) m.remove(); }
+
+  // ---- symbol fields
+  function fieldsDialog(inst, si) {
+    const sh = inst.sheet, sym = sh.symbols[si];
+    const ref = inst.refs[si].ref;
+    const inputs = [];
+    const refIn = h('input', { class: 'input', value: ref, autocapitalize: 'characters', spellcheck: 'false' });
+    const rows = [h('div', { class: 'fieldrow' }, h('label', { text: 'Reference' }), refIn)];
+    for (const p of sym.props) {
+      if (p.name === 'Reference' || p.name.startsWith('ki_')) continue;
+      const inp = h('input', { class: 'input', value: p.value, spellcheck: 'false' });
+      inputs.push([p.name, inp, p.value]);
+      rows.push(h('div', { class: 'fieldrow' }, h('label', { text: p.name }), inp));
+    }
+    const dnp = h('input', { type: 'checkbox', checked: sym.dnp });
+    const newRows = h('div', { class: 'fieldlist' });
+    const added = [];
+    const addRow = () => {
+      const n = h('input', { class: 'input', placeholder: 'Field name, e.g. MPN', spellcheck: 'false' });
+      const v = h('input', { class: 'input', placeholder: 'Value', spellcheck: 'false' });
+      added.push([n, v]);
+      newRows.append(h('div', { class: 'fieldrow new' }, n, v));
+      n.focus();
+    };
+    const save = () => {
+      const fields = {};
+      for (const [name, inp, old] of inputs) if (inp.value !== old) fields[name] = inp.value;
+      const add = added.map(([n, v]) => ({ name: n.value.trim(), value: v.value })).filter((f) => f.name && !sym.props.some((p) => p.name === f.name));
+      const newRef = refIn.value.trim();
+      const changes = { fields, add, dnp: dnp.checked !== sym.dnp ? dnp.checked : undefined, ref: newRef && newRef !== ref ? newRef : undefined };
+      if (changes.ref && state.index.parts.some((p) => p.ref === changes.ref)) { banner('err', `${changes.ref} is already used in this project.`); return; }
+      closeDialog();
+      run('Edit ' + ref, () => E.setSymbolFields(sh, sym, inst, changes));
+    };
+    openDialog('EDIT ' + ref, [...rows, h('label', { class: 'check' }, dnp, 'Do not populate (DNP)'), newRows,
+      h('button', { class: 'btn small', type: 'button', onclick: addRow }, icon('i-plus'), 'ADD FIELD')],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: save }]);
+  }
+
+  // ---- move tool (drag anywhere; snaps to the grid)
+  function startMove(target) {
+    state.moveTarget = target;
+    setMode('move');
+    const snapD = (d) => [E.snap(d[0]), E.snap(d[1])];
+    const tagFor = () => {
+      const t = state.moveTarget, sh = state.inst.sheet;
+      if (t.type === 'symbol') return { sym: sh.symbols.findIndex((x) => x.uuid === t.uuid), its: null };
+      const list = t.type === 'label' ? sh.labels : sh.wires;
+      const idx = list.findIndex((o) => uuidOf(o) === t.uuid);
+      return { sym: -1, its: new Set([(t.type === 'label' ? 'L' : 'W') + idx]) };
+    };
+    view.dragHandler = {
+      move: (d) => { const tg = tagFor(); view.preview = { sym: tg.sym, its: tg.its, d: snapD(d) }; view.redraw(); },
+      end: (d) => {
+        view.preview = null;
+        const sd = snapD(d);
+        if (!sd[0] && !sd[1]) { view.redraw(); return; }
+        const t = state.moveTarget, sh = state.inst.sheet;
+        let item;
+        if (t.type === 'symbol') item = { type: 'symbol', sym: sh.symbols.find((x) => x.uuid === t.uuid) };
+        else if (t.type === 'label') item = { type: 'label', label: sh.labels.find((x) => uuidOf(x) === t.uuid) };
+        else item = { type: 'wire', wire: sh.wires.find((x) => uuidOf(x) === t.uuid) };
+        if (!item.sym && !item.label && !item.wire) { setMode('select'); return; }
+        run('Move ' + t.name, () => E.moveItems(sh, [item], sd), { checkMerges: true });
+      }
+    };
+    renderStatus();
+  }
+
+  // ---- actions on the selection
+  function selectionActions() {
+    const s = state.sel, sh = state.inst && state.inst.sheet;
+    if (!s || !sh) return [];
+    const A = [];
+    if (s.type === 'symbol') {
+      const sym = sh.symbols[s.si], ref = s.inst.refs[s.si].ref;
+      A.push({ label: 'EDIT', icon: 'i-edit', run: () => fieldsDialog(s.inst, s.si) });
+      A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'symbol', uuid: sym.uuid, name: ref }) });
+      A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate ' + ref, () => E.transformSymbol(sh, sym, 'rotate'), { checkMerges: true }) });
+      A.push({ label: 'COPY', icon: 'i-copy2', run: () => copyPart(s.inst, s.si) });
+      A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + ref, () => E.deleteItems(sh, [{ type: 'symbol', sym }]), { anchor: null }) });
+      A.push({ label: 'MIRROR ↔', icon: 'i-mirror', run: () => run('Mirror ' + ref, () => E.transformSymbol(sh, sym, 'mirrorY'), { checkMerges: true }) });
+      A.push({ label: 'MIRROR ↕', icon: 'i-mirror', run: () => run('Mirror ' + ref, () => E.transformSymbol(sh, sym, 'mirrorX'), { checkMerges: true }) });
+      A.push({ label: 'ZOOM', icon: 'i-target', run: zoomToSelection });
+    } else if (s.type === 'net') {
+      const it = s.item, o = itemObj(it);
+      if (it && it.type === 'label' && o) {
+        A.push({ label: 'RENAME', icon: 'i-edit', run: () => labelDialog({ rename: o }) });
+        A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'label ' + o.text }) });
+        A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate label', () => E.rotateLabel(sh, o)) });
+        A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete label ' + o.text, () => E.deleteItems(sh, [{ type: 'label', label: o }]), { anchor: null }) });
+      } else if (it && it.type === 'wire' && o) {
+        A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'wire', uuid: uuidOf(o), name: 'wire' }) });
+        A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete wire', () => E.deleteItems(sh, [{ type: 'wire', wire: o }]), { anchor: null }) });
+      } else if (it && (it.type === 'junction' || it.type === 'nc') && o) {
+        A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + (it.type === 'nc' ? 'no-connect flag' : 'junction'), () => E.deleteItems(sh, [{ type: it.type, item: o }]), { anchor: null }) });
+      } else if (it && it.type === 'pin' && o) {
+        const lonely = !sh.wires.some((w) => E.same(w.a, o.pos) || E.same(w.b, o.pos)) && !sh.noConnects.some((n) => E.same(n.p, o.pos));
+        if (lonely) A.push({ label: 'NO-CONN', icon: 'i-nc', run: () => run('No-connect flag', () => E.addNoConnect(sh, o.pos)) });
+        A.push({ label: 'WIRE', icon: 'i-wire', run: () => { setMode('wire'); state.wire = { anchors: [o.pos.slice()], flips: [false] }; updateWireOverlay(o.pos); } });
+      }
+      A.push({ label: 'ZOOM', icon: 'i-target', run: zoomToSelection });
+      if (s.net.inst.size > 1) A.push({ label: 'NEXT', icon: 'i-next', run: () => nextSheetForNet(s.net) });
+    } else if (s.type === 'sheet') {
+      const sheet = sh.sheets[s.idx];
+      const child = s.inst.children.find((c) => c.sheetSym === sheet);
+      A.push({ label: 'ENTER', icon: 'i-open', run: () => child && showInstance(child) });
+    }
+    return A;
+  }
+  function copyPart(inst, si) {
+    const sh = inst.sheet, sym = sh.symbols[si];
+    const r = run('Copy ' + inst.refs[si].ref, () => E.copySymbol(state.project, sh, inst, sym, [5.08, 5.08]), { anchor: null });
+    if (!r) return;
+    // Select the copy and go straight into move mode so it can be placed.
+    const sh2 = state.inst.sheet;
+    const ni = state.inst.refs.findIndex((x) => x.ref === r.ref);
+    if (ni >= 0) { state.sel = { type: 'symbol', inst: state.inst, si: ni }; applyHighlight(); renderSelectionUI(); startMove({ type: 'symbol', uuid: sh2.symbols[ni].uuid, name: r.ref }); toast(`${r.ref} added. Drag to place it, then DONE.`); }
+  }
+
+  // ---- saving
+  $('chipEdits').addEventListener('click', () => saveDialog());
+  function slug(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'schematic'; }
+  // Lines added/removed, counted as a multiset (close to what GitHub's diff shows)
+  function lineDiff(a, b) {
+    const count = new Map();
+    for (const l of a.split('\n')) count.set(l, (count.get(l) || 0) + 1);
+    let add = 0;
+    for (const l of b.split('\n')) { const c = count.get(l) || 0; if (c > 0) count.set(l, c - 1); else add++; }
+    let del = 0;
+    for (const c of count.values()) del += c;
+    return { del, add };
+  }
+  function saveDialog() {
+    const files = pendingFiles();
+    if (!files.length) { toast('No unsaved edits.'); return; }
+    const list = h('div', { class: 'difflist' });
+    for (const f of files) { const d = lineDiff(state.base.get(f.path), f.text); list.append(h('div', null, f.path + '  ', h('span', { class: 'add', text: '+' + d.add }), ' ', h('span', { class: 'del', text: '−' + d.del }))); }
+    const labels = (state.undo || []).map((u) => u.label);
+    const summary = labels.length ? Array.from(new Set(labels)).slice(0, 6).join('; ') : 'Schematic edits';
+    const discard = { label: 'DISCARD EDITS', run: () => {
+      if (!discard.armed) { discard.armed = true; toast('Tap DISCARD EDITS again to throw away all unsaved edits.'); return; }
+      closeDialog();
+      for (const f of state.files) f.text = state.base.get(f.path);
+      state.undo = []; state.redo = [];
+      rebuild(null); persistEdits(); toast('Edits discarded');
+    } };
+    const s = state.source;
+    if (s && s.kind === 'github') {
+      const now = new Date();
+      const stamp = now.toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
+      const onWork = /^tracer\//.test(s.ref);
+      const branch = h('input', { class: 'input', id: 'svBranch', value: onWork ? s.ref : `tracer/${slug(state.project.name)}-${stamp}`, spellcheck: 'false', autocapitalize: 'off' });
+      const msg = h('textarea', { class: 'input', id: 'svMsg', spellcheck: 'true' });
+      msg.value = `${state.project.name}: ${summary}\n\nEdited on a tablet with Schematic Tracer.`;
+      const prBox = h('input', { type: 'checkbox', checked: true });
+      const base = onWork ? (state.prBase || 'main') : s.ref;
+      openDialog('SAVE TO GITHUB', [
+        h('p', { class: 'hint', text: `Commits your edits to a branch of ${s.repo}. Open a pull request so they can be reviewed in GitHub and merged into ${base}. Open the files in KiCad before merging to check them.` }),
+        section('Changed files', String(files.length), list),
+        h('div', { class: 'field' }, h('label', { for: 'svBranch', text: 'Branch' }), branch),
+        h('div', { class: 'field' }, h('label', { for: 'svMsg', text: 'Commit message' }), msg),
+        h('label', { class: 'check' }, prBox, `Open a pull request into ${base}`)
+      ], [discard, { label: 'CANCEL', run: closeDialog }, { label: 'COMMIT', primary: true, run: () => saveToGitHub(branch.value.trim(), msg.value.trim(), prBox.checked, base) }]);
+    } else {
+      openDialog('SAVE EDITS', [
+        h('p', { class: 'hint', text: 'This project was opened from files, so the edited .kicad_sch files are downloaded as a ZIP. Copy them over the originals and open them in KiCad.' }),
+        section('Changed files', String(files.length), list)
+      ], [discard, { label: 'CANCEL', run: closeDialog }, { label: 'DOWNLOAD ZIP', primary: true, run: () => { downloadZip(files); closeDialog(); } }]);
+    }
+  }
+  function downloadZip(files) {
+    const blob = Zip.writeZip(files.map((f) => ({ path: f.path, text: f.text })));
+    const a = h('a', { href: URL.createObjectURL(blob), download: slug(state.project.name) + '-edited.zip' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    for (const f of files) state.base.set(f.path, f.text);
+    persistEdits(); renderEditUI();
+    toast('Downloaded ' + files.length + ' file' + (files.length === 1 ? '' : 's'));
+  }
+  async function saveToGitHub(branch, message, openPR, base) {
+    if (!/^[\w.\/-]+$/.test(branch) || branch.endsWith('/') || branch.includes('..')) { banner('err', 'Use letters, numbers, dashes and slashes for the branch name.'); return; }
+    if (!message) { banner('err', 'Write a short commit message.'); return; }
+    const s = state.source, files = pendingFiles();
+    closeDialog();
+    loading('Saving to GitHub…');
+    try {
+      const res = await GitHub.commitFiles(state.token, s.repo, { branch, parentSha: s.head.sha, baseTree: s.head.tree, message, files: files.map((f) => ({ path: f.path, text: f.text })) });
+      let pr = null;
+      if (openPR) pr = await GitHub.ensurePullRequest(state.token, s.repo, { branch, base, title: message.split('\n')[0], body: message.split('\n').slice(2).join('\n') + '\n\nFiles: ' + files.map((f) => '`' + f.path + '`').join(', ') });
+      // The committed text is now the baseline; cache it for offline use.
+      const shas = {};
+      for (const f of files) { const sha = await GitHub.gitBlobSha(f.text); shas[f.path] = sha; await Store.set('blob:' + sha, f.text); state.base.set(f.path, f.text); }
+      const head = { sha: res.sha, tree: res.tree, message, date: res.date, author: 'you' };
+      if (!/^tracer\//.test(s.ref)) state.prBase = s.ref;
+      Store.pref('prBase', state.prBase || base);
+      s.ref = branch; s.head = head; s.projCommit = head; s.pinned = false;
+      state.gh.ref = branch; Store.pref('gh', state.gh);
+      state.ghHead = head;
+      const proj = state.ghProjects && state.ghProjects.find((p) => p.key === s.projKey);
+      if (proj) {
+        for (const f of proj.files) if (shas[f.path]) f.sha = shas[f.path];
+        await Store.set('manifest:' + s.repo + ':' + s.projKey, { head, ref: branch, files: proj.files, projCommit: head, at: Date.now() });
+      }
+      state.undo = []; state.redo = [];
+      await persistEdits();
+      updateHeader(); renderEditUI();
+      loading(null);
+      banner('info', `Saved to ${branch}` + (pr ? ` · pull request #${pr.number}${pr.existed ? ' updated' : ' opened'}` : '') + '.', pr ? [{ label: 'OPEN PR', primary: true, run: () => window.open(pr.url, '_blank', 'noopener') }] : []);
+    } catch (e) {
+      loading(null);
+      banner('err', e.message || String(e));
+    }
+  }
+
   // ---- Status bar (bottom), like the KiCad Editor app
-  function statusAction(label, ico, fn, disabled) {
-    return h('button', { class: 'sa', onclick: fn, disabled: !!disabled }, icon(ico), label);
+  function statusAction(label, ico, fn, disabled, cls) {
+    return h('button', { class: 'sa' + (cls ? ' ' + cls : ''), onclick: fn, disabled: !!disabled }, icon(ico), label);
+  }
+  function putActions(acts, list) {
+    const max = window.matchMedia('(max-width: 760px)').matches ? 3 : 6;
+    const shown = list.length > max ? list.slice(0, max - 1) : list;
+    for (const a of shown) acts.append(statusAction(a.label, a.icon, a.run, a.disabled, a.danger ? 'danger' : a.primary ? 'primary' : ''));
+    if (list.length > max) {
+      const rest = list.slice(max - 1);
+      const more = statusAction('MORE', 'i-more', () => openMenu(more, rest));
+      acts.append(more);
+    }
   }
   function renderStatus() {
     const s = state.sel, P = state.project;
@@ -679,8 +1220,40 @@
     acts.replaceChildren();
     ico.classList.remove('trace', 'part');
     t1.classList.remove('trace');
+    $('status').classList.toggle('editing', state.mode !== 'select');
     const setIco = (id) => { ico.firstElementChild.setAttribute('href', '#' + id); };
     if (!P) { setIco('i-hand'); t1.textContent = 'No project open'; t2.textContent = 'Connect GitHub or open files'; return; }
+    if (state.mode === 'wire') {
+      const n = state.wire.anchors.length;
+      setIco('i-wire');
+      t1.textContent = n ? 'Drawing wire' : 'Wire';
+      t2.textContent = n ? 'Tap corners · tap a pin or wire to finish' : 'Tap a pin, wire end or empty grid to start';
+      const L = [];
+      if (n > 1) L.push({ label: 'FINISH', icon: 'i-check', primary: true, run: finishWire });
+      if (n > 1) L.push({ label: 'FLIP', icon: 'i-flip', run: wireFlip });
+      if (n) L.push({ label: 'BACK', icon: 'i-undo', run: wireBack });
+      L.push({ label: 'DONE', icon: 'i-close', run: () => setMode('select') });
+      putActions(acts, L);
+      return;
+    }
+    if (state.mode === 'label') {
+      setIco('i-tag');
+      t1.textContent = 'Label';
+      t2.textContent = 'Tap a wire or pin end to name that net';
+      putActions(acts, [{ label: 'DONE', icon: 'i-close', run: () => setMode('select') }]);
+      return;
+    }
+    if (state.mode === 'move') {
+      setIco('i-move');
+      t1.textContent = 'Moving ' + (state.moveTarget ? state.moveTarget.name : '');
+      t2.textContent = 'Drag anywhere to move it · snaps to 1.27 mm';
+      const L = [];
+      const t = state.moveTarget;
+      if (t && t.type === 'symbol') L.push({ label: 'ROTATE', icon: 'i-rotate', run: () => { const sh = state.inst.sheet, sym = sh.symbols.find((x) => x.uuid === t.uuid); if (sym) run('Rotate ' + t.name, () => E.transformSymbol(sh, sym, 'rotate'), { checkMerges: true }); } });
+      L.push({ label: 'DONE', icon: 'i-check', primary: true, run: () => setMode('select') });
+      putActions(acts, L);
+      return;
+    }
     if (!s) {
       setIco('i-hand');
       t1.textContent = 'Nothing selected';
@@ -693,10 +1266,9 @@
       setIco('i-net'); ico.classList.add('trace'); t1.classList.add('trace');
       t1.replaceChildren(markup(net.shortName));
       const sheets = net.inst.size;
-      t2.textContent = (net.bus ? `Bus · ${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`) + ` · ${sheets} sheet${sheets === 1 ? '' : 's'}` + (net.name !== net.shortName ? ' · ' + plain(net.name) : '');
-      acts.append(statusAction('ZOOM', 'i-target', () => zoomToSelection()));
-      if (sheets > 1) acts.append(statusAction('NEXT', 'i-next', () => nextSheetForNet(net)));
-      acts.append(statusAction('CLEAR', 'i-close', clearSelection));
+      const it = s.item, o = itemObj(it);
+      const what = it && o ? (it.type === 'label' ? 'Label · ' : it.type === 'wire' ? 'Wire · ' : it.type === 'pin' ? `Pin ${o.number} · ` : it.type === 'nc' ? 'No-connect · ' : it.type === 'junction' ? 'Junction · ' : '') : '';
+      t2.textContent = what + (net.bus ? `Bus · ${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`) + ` · ${sheets} sheet${sheets === 1 ? '' : 's'}`;
     } else if (s.type === 'symbol') {
       const inst = s.inst, sym = inst.sheet.symbols[s.si], ref = inst.refs[s.si].ref;
       const unit = sym.lib && sym.lib.unitCount > 1 ? K.unitLetter(inst.refs[s.si].unit || sym.unit) : '';
@@ -704,16 +1276,16 @@
       const fp = ((sym.props.find((p) => p.name === 'Footprint') || {}).value || '').split(':').pop();
       setIco('i-chip'); ico.classList.add('part');
       t1.textContent = ref + unit + (val ? '  ' + val : '');
-      t2.textContent = fp || sym.libId;
-      acts.append(statusAction('ZOOM', 'i-target', () => zoomToSelection()), statusAction('CLEAR', 'i-close', clearSelection));
+      t2.textContent = (sym.dnp ? 'DNP · ' : '') + (fp || sym.libId);
     } else if (s.type === 'sheet') {
       const sheet = s.inst.sheet.sheets[s.idx];
-      const child = s.inst.children.find((c) => c.sheetSym === sheet);
       setIco('i-hier'); ico.classList.add('part');
       t1.textContent = sheet.name;
       t2.textContent = sheet.file + ' · ' + sheet.pins.length + ' pins';
-      acts.append(statusAction('ENTER', 'i-open', () => child && showInstance(child), !child), statusAction('CLEAR', 'i-close', clearSelection));
     }
+    const L = selectionActions();
+    L.push({ label: 'CLEAR', icon: 'i-close', run: clearSelection });
+    putActions(acts, L);
   }
   $('statusMain').addEventListener('click', () => {
     if (!state.project) { openDrawer('drawerProjects'); return; }
@@ -975,6 +1547,10 @@
   $('wSample').addEventListener('click', loadSample);
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    if (e.key === 'Escape' && state.mode !== 'select') { setMode('select'); return; }
+    if (e.key === 'Escape' && $('dialogWrap')) { closeDialog(); return; }
     if (e.key === '/' || (e.key === 'f' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); openSearch(); }
     else if (e.key === 'Escape') { if (!$('search').hidden) closeSearch(); else if (!$('scrim').hidden) closeDrawers(); else clearSelection(); }
     else if (e.key === 'Backspace' && state.inst && state.inst.parent) showInstance(state.inst.parent);
@@ -985,6 +1561,7 @@
   // ------------------------------------------------------------------ boot
   renderStatus();
   renderScale();
+  state.prBase = Store.pref('prBase') || null;
   async function boot() {
     const last = Store.pref('last');
     if (last && last.kind === 'github' && state.gh.repo && state.token) { await connectAndOpen(last.key); if (state.project) return; }
@@ -1001,5 +1578,5 @@
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__tracer = { state, view, selectNet, selectSymbol, showInstance, openProject };
+  window.__tracer = { state, view, selectNet, selectSymbol, showInstance, openProject, snapPoint: (w) => snapPoint(w, 'touch') };
 })();
