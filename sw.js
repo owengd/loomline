@@ -1,9 +1,9 @@
 /* Offline app shell. Schematic data is cached separately in IndexedDB by the app. */
-const CACHE = 'tracer-v1.3.0';
+const CACHE = 'loomline-v1.4.0';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
-  'js/kicad-core.js', 'js/render.js', 'js/storage.js', 'js/zip.js', 'js/edit.js', 'js/github.js', 'js/app.js',
-  'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
+  'js/kicad-core.js', 'js/render.js', 'js/storage.js', 'js/zip.js', 'js/edit.js', 'js/loom.js', 'js/github.js', 'js/app.js',
+  'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
   'fonts/ibm-plex-sans-latin-400-normal.woff2', 'fonts/ibm-plex-sans-latin-500-normal.woff2', 'fonts/ibm-plex-sans-latin-600-normal.woff2',
   'fonts/ibm-plex-sans-condensed-latin-400-normal.woff2', 'fonts/ibm-plex-sans-condensed-latin-500-normal.woff2', 'fonts/ibm-plex-sans-condensed-latin-600-normal.woff2',
   'fonts/ibm-plex-mono-latin-400-normal.woff2', 'fonts/ibm-plex-mono-latin-500-normal.woff2', 'fonts/ibm-plex-mono-latin-600-normal.woff2'

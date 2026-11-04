@@ -1,19 +1,23 @@
-# Schematic Tracer
+# Loomline
 
-A touch-first viewer for KiCad schematics that opens them straight from a GitHub repository.
-Tap any wire, pin or label and the whole net lights up on every sheet it reaches. The
-inspector lists every pin on the net, the sheets it crosses and the other names it goes by.
+Design, trace and install electrical systems from KiCad schematics, on a tablet. Loomline opens
+schematics straight from a GitHub repository. Tap any wire, pin or label and the whole net lights
+up on every sheet it reaches; every wire gets a number; the design is checked as you edit; and the
+install crew can tick off each wire as it's fitted and tested, shared with the whole team.
 
 Built for a Galaxy Tab Active5 Pro and an S26 Ultra in Chrome, so the targets are large
 enough to use with gloves on. It also works in any desktop browser.
 
 - Reads KiCad 6, 7, 8 and 9 schematics (`.kicad_sch`), including hierarchical sheets, reused
   sheets, buses, bus aliases, global labels and power symbols.
-- Opens the latest commit on a branch, or any older commit that touched the project.
+- Wire numbers, a from/to wire list, loom list, connector pin-outs and a BOM, as CSV or PDF.
+- Cross-references between the units of multi-unit parts (relay coil and contacts, and so on).
+- A live design check, revision compare, and editing that saves to a branch and pull request.
+- An install log (fitted / tested per wire and part) shared through the repository.
 - Keeps the last downloaded revision on the device, so it works offline in the container or
   on the boat.
 - Also opens `.kicad_sch` files or a project ZIP from the device, with no GitHub needed.
-- Nothing is uploaded anywhere. The browser talks only to `api.github.com`.
+- Nothing is uploaded anywhere else. The browser talks only to `api.github.com`.
 
 Connectivity follows eeschema's rules and has been checked against the pad nets in the PCB
 files of all of KiCad's demo projects, including bus-heavy and 74-sheet designs, with no
@@ -24,11 +28,11 @@ several labels sometimes differ from KiCad's choice, but the connections are the
 
 ## 1. Put it on GitHub Pages
 
-1. In your organisation, create a new repository, for example `schematic-tracer`.
+1. In your organisation, create a new repository, for example `loomline`.
 2. Upload everything in this folder to the root of the repository's `main` branch.
 3. Go to **Settings → Pages**. Under *Build and deployment*, choose **Deploy from a branch**,
    then **main** and **/ (root)**, and save.
-4. After a minute the app is live at `https://<your-org>.github.io/schematic-tracer/`.
+4. After a minute the app is live at `https://<your-org>.github.io/loomline/`.
 5. On the tablet, open that address in Chrome. Tap **⋮ → Add to home screen** to install it as
    an app, which also lets it open offline.
 
@@ -129,7 +133,7 @@ tab doesn't lose them; next time you open the project it offers to restore them.
 ### Saving
 
 Tap the red edits chip. **SAVE TO GITHUB** commits the changed files to a new branch
-(`tracer/<project>-<date>` by default) and opens a pull request into the branch you were
+(`loomline/<project>-<date>` by default) and opens a pull request into the branch you were
 viewing. Saving again from that branch adds another commit to the same pull request. Nothing
 is ever written to `main` directly.
 
@@ -140,6 +144,67 @@ Without one, **DOWNLOAD ZIP** gives you the edited files to commit yourself.
 Open the branch in KiCad and run ERC before merging the pull request. The editor covers
 common changes but isn't a replacement for eeschema: it doesn't add new parts from the
 library, edit buses or sheets, or update the PCB.
+
+## 5. Wire numbers, cross-references and reports
+
+**Wire numbers.** Every net that joins two or more pins gets a wire number. A net with a label
+uses the label's name (`CAN_H`, `+12V`); if a reused sheet makes the same local name appear more
+than once, the sheet number is added (`PIEZO_IN.3`). Other nets are numbered by sheet and
+position: sheet 2's wires are `201`, `202`… from the top of the sheet down. Auto numbers move
+when the drawing changes, so before you print heat-shrink labels select the wire and tap
+**FIX NO.**: that adds a local label with the number, so it never changes again. The layers
+button (top bar) turns numbers, cross-references, check markers and install colours on and off.
+
+**Cross-references.** Parts with several units (a relay's coil and contacts, a dual op-amp) show
+where their other units are, as `K1B p4 C3` (unit, page, drawing zone) under each unit. The
+Properties panel lists them; tap one to jump to it.
+
+**Reports** (REPORTS in the rail, or Settings → Tools on a phone). Each can be viewed, exported as
+CSV, or printed / saved as a PDF:
+
+| Report | Contents |
+| --- | --- |
+| Wire list | Every wire: number, from part and pin, to part and pin, net, pages |
+| Loom list | The same wires grouped by the two parts they join, connectors first |
+| Connector pin-outs | For each connector or terminal strip: pin, name, wire, net and where it goes |
+| Bill of materials | Parts grouped by value and footprint, plus MPN / manufacturer fields if present |
+| Design check | Every problem the check found, with page and zone |
+| Install record | Fitted and tested status for every wire and part, with who and when |
+
+The wire list turns each net into individual wires by joining its pins in the shortest way the
+drawing allows (pins on the same sheet first). That matches how a loom is usually made up, but
+check it against the drawing for nets where the order of terminations matters.
+
+## 6. Design check
+
+CHECK in the rail runs after every edit and marks problems on the drawing (a red circle is an
+error, an amber triangle a warning). It looks for: unconnected pins, wire ends that touch
+nothing, labels that reach no pins, global labels used only once, sheet pins without a matching
+hierarchical label (and the reverse), duplicate or unannotated references, missing values, and
+outputs driving each other. It covers the common mistakes; run ERC in KiCad before release.
+
+## 7. Compare revisions
+
+From **Recent changes** in the Projects panel, tap **COMPARE** on any commit (or use the layers
+button → Compare revisions). Loomline loads that revision and lists what's electrically
+different: parts added, removed or changed (with the old and new field values) and connections
+that changed, were cut or renamed. On the drawing, changed connections turn purple and changed
+parts are outlined. **REVIEW CHANGES** in the save dialog does the same for your unsaved edits.
+
+## 8. Install log
+
+INSTALL in the rail lists every wire (grouped by the parts it joins) and every part, each with
+**FIT** and **TEST** buttons. With a wire or part selected on the drawing, **FITTED** and
+**TESTED** are in the bottom bar too. The drawing colours wires blue when fitted, green when
+tested, and amber when only some of a net's wires are done.
+
+Ticks are saved on the device straight away, so it works with no signal. When GitHub can be
+reached they're shared through a branch called `loomline-install` in the schematics repository.
+That branch holds only the install log (`install/<project>.json`) and has no history in common
+with `main`, so it never mixes with the design or its pull requests. Each sync is a commit, so the
+branch history shows who fitted and tested what, and when. Two tablets ticking at the same time
+are merged item by item (the later tick wins). Sharing needs a token with write access; with a
+read-only token the log stays on the device.
 
 ## Limits
 
@@ -152,7 +217,7 @@ library, edit buses or sheets, or update the PCB.
 ## Updating the app
 
 After changing any file, bump `CACHE` in `sw.js` and the `?v=` numbers on the CSS and script
-links in `index.html` (for example `1.3.1`), so installed copies pick up the new version straight away.
+links in `index.html` (for example `1.4.1`), so installed copies pick up the new version straight away.
 
 ## Files
 
@@ -164,12 +229,14 @@ js/render.js          canvas renderer, gestures, hit-testing
 js/github.js          GitHub REST access and project discovery
 js/storage.js         IndexedDB cache for downloaded files
 js/zip.js             ZIP reader for "Download ZIP" archives, and writer for edited files
+js/loom.js            wire numbers, wire list, cross-references, design check, reports, revision compare
 js/edit.js            schematic edits as text splices: fields, move, rotate, wires, labels, copy
 js/app.js             UI: projects, sheets, inspector, search, deep links, editing, saving
 sw.js                 offline app shell
 samples/              KiCad's complex_hierarchy demo (GPL-3.0, see NOTICE.md); safe to delete
 test/compare-pcb.js   node test: compares schematic nets with the pad nets in .kicad_pcb files
 test/edit-test.js     node test: applies edits, re-parses and checks connectivity
+test/loom-test.js     node test: wire numbers, wire list, checks and self-compare on every demo project
 fonts/                IBM Plex (SIL Open Font License, see OFL-LICENSE.txt)
 ```
 

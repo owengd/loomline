@@ -3,15 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<title>Schematic Tracer</title>
-<meta name="description" content="Open KiCad schematics from your GitHub repo and tap any wire to trace its net across every sheet.">
+<title>Loomline</title>
+<meta name="description" content="Loomline: design, trace and install electrical systems from KiCad schematics on GitHub.">
+<meta name="application-name" content="Loomline">
+<meta name="apple-mobile-web-app-title" content="Loomline">
 <meta name="theme-color" content="#f7f5f0">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="fonts/ibm-plex-sans-condensed-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/ibm-plex-mono-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=1.3.0">
+<link rel="stylesheet" href="css/app.css?v=1.4.0">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -38,6 +40,15 @@
     <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 7V4h4v3M6 7l1 14h10l1-14M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-copy2" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 16V4h12" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5 2.8 19.5h18.4L12 3.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.3" fill="currentColor"/></symbol>
+    <symbol id="i-install" viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="m7.5 8.5 1.6 1.6 2.9-3.2M7.5 15l1.6 1.6 2.9-3.2M14 9h3M14 15.5h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-report" viewBox="0 0 24 24"><path d="M6 3h8.5L19 7.5V21H6Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 3v5h5M9 12h7M9 15.5h7M9 19h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m3 12.5 9 5 9-5M3 16.5l9 5 9-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-compare" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 8.5V14a4 4 0 0 0 4 4h5.5M18 15.5V10a4 4 0 0 0-4-4H8.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="m13 15.5 2.5 2.5L13 20.5M11 3.5 8.5 6 11 8.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-print" viewBox="0 0 24 24"><path d="M7 8V3.5h10V8M7 17H4.5V9.5a1.5 1.5 0 0 1 1.5-1.5h12a1.5 1.5 0 0 1 1.5 1.5V17H17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M7 13.5h10v7H7Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-number" viewBox="0 0 24 24"><path d="M9.5 3.5 7.5 20.5M16.5 3.5l-2 17M4 8.5h16M3.5 15.5h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><path d="M19.5 9A8 8 0 0 0 5 7.5M4.5 15A8 8 0 0 0 19 16.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M5 3.5v4h4M19 20.5v-4h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-flip" viewBox="0 0 24 24"><path d="M5 19V5h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M5 19h14V5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
     <symbol id="i-nc" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
@@ -65,7 +76,7 @@
   <header class="topbar">
     <button class="ib" id="btnProjects" aria-label="Projects" title="Projects"><svg><use href="#i-back"/></svg></button>
     <button class="title-btn" id="btnTitle" aria-label="Project and revision">
-      <span class="ptitle" id="projName">SCHEMATIC TRACER</span>
+      <span class="ptitle" id="projName">LOOMLINE</span>
       <span class="prev" id="projRev">No project open</span>
     </button>
     <div class="chips-bar">
@@ -79,6 +90,7 @@
       <button class="ib wide-only" id="btnRedo" aria-label="Redo" title="Redo" disabled><svg><use href="#i-redo"/></svg></button>
       <button class="ib" id="btnUp" aria-label="Leave sheet" title="Leave sheet (go to parent)" disabled><svg><use href="#i-up"/></svg></button>
       <button class="ib" id="btnFit" aria-label="Zoom to fit" title="Zoom to fit"><svg><use href="#i-fit"/></svg></button>
+      <button class="ib" id="btnLayers" aria-label="Show on drawing" title="Show on drawing: wire numbers, cross-references, checks, install status"><svg><use href="#i-layers"/></svg></button>
       <button class="ib" id="btnSearch" aria-label="Find" title="Find"><svg><use href="#i-search"/></svg></button>
       <button class="ib" id="btnSettings" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button>
     </div>
@@ -91,9 +103,9 @@
 
     <section class="welcome" id="welcome" hidden>
       <div class="inner">
-        <div class="eyebrow">Schematic Tracer</div>
-        <h1>Tap a wire. See the whole net.</h1>
-        <p class="lede">Open your team's KiCad schematics straight from GitHub. The traced net is drawn bold on every sheet it reaches.</p>
+        <div class="brand"><img src="icons/icon.svg" alt="" width="56" height="56"><div class="eyebrow">Loomline</div></div>
+        <h1>Schematics to install, wire by wire.</h1>
+        <p class="lede">Open your team's KiCad schematics straight from GitHub. Trace nets, number wires, check the design, compare revisions and log the install as it goes in.</p>
         <div class="cards">
           <button class="card" id="wConnect"><svg><use href="#i-git"/></svg><span class="ct">Connect GitHub</span><span class="cs">Latest commit loads automatically</span></button>
           <button class="card" id="wOpen"><svg><use href="#i-file"/></svg><span class="ct">Open from device</span><span class="cs">.kicad_sch files or a project ZIP</span></button>
@@ -119,6 +131,9 @@
     <button class="rail-btn" data-tab="nets"><svg><use href="#i-net"/></svg><span>NETS</span></button>
     <button class="rail-btn" data-tab="parts"><svg><use href="#i-chip"/></svg><span>PARTS</span></button>
     <button class="rail-btn wide-only" data-tab="info"><svg><use href="#i-info"/></svg><span>INFO</span></button>
+    <button class="rail-btn" data-tab="check"><svg><use href="#i-alert"/></svg><span>CHECK</span><b class="badge" id="checkBadge" hidden>0</b></button>
+    <button class="rail-btn" data-tab="install"><svg><use href="#i-install"/></svg><span>INSTALL</span></button>
+    <button class="rail-btn wide-only" data-tab="reports"><svg><use href="#i-report"/></svg><span>REPORTS</span></button>
     <button class="rail-btn" data-tab="more"><svg><use href="#i-more"/></svg><span>MORE</span></button>
   </nav>
 
@@ -150,12 +165,13 @@
 
 <input type="file" id="fileInput" multiple hidden>
 
-<script src="js/kicad-core.js?v=1.3.0"></script>
-<script src="js/render.js?v=1.3.0"></script>
-<script src="js/storage.js?v=1.3.0"></script>
-<script src="js/zip.js?v=1.3.0"></script>
-<script src="js/edit.js?v=1.3.0"></script>
-<script src="js/github.js?v=1.3.0"></script>
-<script src="js/app.js?v=1.3.0"></script>
+<script src="js/kicad-core.js?v=1.4.0"></script>
+<script src="js/render.js?v=1.4.0"></script>
+<script src="js/storage.js?v=1.4.0"></script>
+<script src="js/zip.js?v=1.4.0"></script>
+<script src="js/edit.js?v=1.4.0"></script>
+<script src="js/loom.js?v=1.4.0"></script>
+<script src="js/github.js?v=1.4.0"></script>
+<script src="js/app.js?v=1.4.0"></script>
 </body>
 </html>
