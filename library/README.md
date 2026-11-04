@@ -22,5 +22,12 @@ CC-BY-SA 4.0 with the KiCad libraries exception (see `kicad/LICENSE.md`). In sho
 that use these symbols don't have to be shared under the same licence, but this collection
 does, with its attribution kept.
 
-Later Loomline libraries (Beckhoff I/O, marine switching, industrial controls and harness
-connectors) will be drawn from scratch to IEC 60617 and will live in their own folders here.
+## Loomline libraries
+
+`loomline/` holds libraries drawn for Loomline. `Loomline_Beckhoff.kicad_sym` (KiCad 8
+format, opens in KiCad 8 and 9) has 53 Beckhoff EtherCAT couplers and terminals, built by
+`tools/build-loomline-library.js` from the table in `tools/beckhoff-data.js`. Terminal point
+assignments come from Beckhoff's documentation (infosys.beckhoff.com and the terminal
+manuals), checked November 2026. `beckhoff.json` is the same symbols for the app.
+
+Marine switching, industrial controls and harness connectors will follow, drawn to IEC 60617.
