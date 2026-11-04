@@ -15,7 +15,8 @@ const entry = (lib, name) => {
   if (!libs[lib]) {
     const idx = JSON.parse(fs.readFileSync(path.join(libDir, 'index.json'), 'utf8'));
     const file = idx.libs.find((l) => l.name === lib).file;
-    libs[lib] = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(libDir, 'kicad', file + '.json.gz'))).toString('utf8')).libs[lib].symbols;
+    const raw = fs.readFileSync(path.join(libDir, 'kicad', file));
+    libs[lib] = JSON.parse((raw[0] === 0x1f ? zlib.gunzipSync(raw) : raw).toString('utf8')).libs[lib].symbols;
   }
   const text = libs[lib][name];
   const ext = /\(extends "([^"]+)"\)/.exec(text);
