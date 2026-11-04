@@ -319,6 +319,10 @@
     if ((m = /^REL(\d+)\s*(NO|NC|C)?$/.exec(name))) return { id: 'REL' + m[1], kind: 'RELAY', main: m[2] === 'NO' };
     if ((m = /^R(L?)(\d+)([+-])$/.exec(name))) return { id: 'RTD' + m[2], kind: 'RTD', main: !m[1] && m[3] === '+' };
     if ((m = /^(UD|UREF|UV)([+-])$/.exec(name))) return { id: 'BR1', kind: 'BRIDGE', main: m[1] === 'UD' && m[2] === '+' };
+    if ((m = /^AI(\d+) ([UI])$/.exec(name))) return { id: 'AI' + m[1], kind: 'AI', main: m[2] === 'U' };
+    if ((m = /^([AB])([12])$/.exec(name))) return { id: 'PWM' + m[1], kind: 'PWM', main: m[2] === '1' };
+    if ((m = /^(TxD|RxD)([+-])$/.exec(name))) return { id: 'COM1', kind: 'SERIAL', main: m[1] === 'TxD' && m[2] === '+' };
+    if ((m = /^CAN_(H|L)$/.exec(name))) return { id: 'CAN1', kind: 'CAN', main: m[1] === 'H' };
     return null;
   }
   function plcIO(P, A) {
