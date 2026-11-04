@@ -504,9 +504,236 @@
     return { path: sheet.path, text: sp.apply() };
   }
 
+
+  // ------------------------------------------------------------------ library parts
+  // Pretty-print an S-expression the way KiCad writes files: one list per line, tab indented;
+  // lists of atoms stay on one line, and pts keeps its xy points together.
+  function pretty(text, depth) {
+    const lines = [];
+    const emit = (s, d) => lines.push('\t'.repeat(d) + s);
+    function walk(src, d) {
+      const items = splitTop(src);
+      if (!items.some((x) => x[0] === '(')) { emit('(' + items.join(' ') + ')', d); return; }
+      if (items[0] === 'pts') {
+        emit('(pts', d);
+        const xs = items.slice(1);
+        for (let i = 0; i < xs.length; i += 6) emit(xs.slice(i, i + 6).join(' '), d + 1);
+        emit(')', d);
+        return;
+      }
+      const atoms = [];
+      let i = 0;
+      while (i < items.length && items[i][0] !== '(') atoms.push(items[i++]);
+      emit('(' + atoms.join(' '), d);
+      for (; i < items.length; i++) { if (items[i][0] === '(') walk(items[i], d + 1); else emit(items[i], d + 1); }
+      emit(')', d);
+    }
+    walk(text.trim(), depth || 0);
+    return lines.join('\n');
+  }
+  // Top-level items of one list's text: atoms (strings kept quoted) and sub-lists as raw text.
+  function splitTop(src) {
+    const out = [];
+    let i = 1, n = src.length - 1;
+    while (i < n) {
+      const c = src[i];
+      if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
+      const s = i;
+      if (c === '(') {
+        let depth = 0, inS = false;
+        for (; i < n + 1; i++) {
+          const ch = src[i];
+          if (inS) { if (ch === '\\') i++; else if (ch === '"') inS = false; continue; }
+          if (ch === '"') inS = true; else if (ch === '(') depth++; else if (ch === ')') { depth--; if (!depth) { i++; break; } }
+        }
+      } else if (c === '"') {
+        i++;
+        for (; i < n; i++) { if (src[i] === '\\') { i++; continue; } if (src[i] === '"') { i++; break; } }
+      } else {
+        while (i < n && !/[\s()]/.test(src[i])) i++;
+      }
+      out.push(src.slice(s, i));
+    }
+    return out;
+  }
+  // Make a library symbol self-contained under its schematic name ("Lib:Name"): resolve
+  // "extends" from the parent, rename units, and drop syntax older KiCad versions don't know.
+  function flattenLibSymbol(lib, name, text, parentText, version) {
+    let items = splitTop(text);
+    let body = items.slice(2);
+    const ext = body.find((x) => /^\(extends\s/.test(x));
+    if (ext) {
+      if (!parentText) throw new Error(`${name} is based on another symbol that wasn't found.`);
+      const pItems = splitTop(parentText);
+      const pName = JSON.parse(pItems[1]);
+      const own = body.filter((x) => !/^\(extends\s/.test(x));
+      const ownHead = new Set(own.map((x) => (/^\((\w+)/.exec(x) || [])[1]));
+      const fromParent = pItems.slice(2).filter((x) => { const h = (/^\((\w+)/.exec(x) || [])[1]; return h === 'symbol' ? true : h === 'property' ? false : !ownHead.has(h); })
+        .map((x) => (/^\(symbol\s/.test(x) ? x.replace(/^\(symbol\s+"([^"]*)"/, (m, n) => '(symbol ' + qstr(n.startsWith(pName + '_') ? name + n.slice(pName.length) : n)) : x));
+      const order = ['power', 'pin_numbers', 'pin_names', 'exclude_from_sim', 'in_bom', 'on_board', 'property', 'symbol', 'embedded_fonts'];
+      const rank = (x) => { const h = (/^\((\w+)/.exec(x) || [])[1]; const r = order.indexOf(h); return r < 0 ? 5.5 : r; };
+      body = own.concat(fromParent).map((x, i) => [x, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((x) => x[0]);
+    }
+    if (version && version < 20241004) body = body.filter((x) => !/^\(embedded_fonts\s/.test(x));
+    let out = '(symbol ' + qstr(lib + ':' + name) + ' ' + body.join(' ') + ')';
+    if (version && version < 20231120) {
+      // KiCad 7: bare "hide" flags, no exclude_from_sim
+      out = out.replace(/\(exclude_from_sim (yes|no)\)\s*/g, '').replace(/\(hide yes\)/g, 'hide').replace(/\(hide no\)/g, '');
+    }
+    return out;
+  }
+  /** Units a library symbol defines (unit 0 holds pins shared by all units). */
+  function libUnits(flatText) {
+    const units = new Set();
+    for (const x of splitTop(flatText)) { const m = /^\(symbol\s+"[^"]*?_(\d+)_(\d+)"/.exec(x); if (m && m[1] !== '0') units.add(+m[1]); }
+    return units.size ? Array.from(units).sort((a, b) => a - b) : [1];
+  }
+  function pinNumbersFor(flatText, unit) {
+    const nums = [];
+    for (const x of splitTop(flatText)) {
+      const m = /^\(symbol\s+"[^"]*?_(\d+)_(\d+)"/.exec(x);
+      if (!m || (m[1] !== '0' && +m[1] !== unit)) continue;
+      const re = /\(number\s+"((?:[^"\\]|\\.)*)"/g; let r;
+      while ((r = re.exec(x))) if (!nums.includes(r[1])) nums.push(r[1]);
+    }
+    return nums;
+  }
+  function projectNameFor(project, sheet) {
+    for (const s of sheet.symbols) { const n = s.src && K.find(s.src, 'instances'); const pr = n && K.find(n, 'project'); if (pr) return pr[1]; }
+    return project.name;
+  }
+  /**
+   * Place a part from a library: embeds the symbol in lib_symbols (once per sheet file) and adds
+   * an instance at p with the next free reference. entry: {lib, name, text, parentText}.
+   */
+  function addLibSymbol(project, sheet, inst, entry, p, opts) {
+    opts = opts || {};
+    const libId = entry.lib + ':' + entry.name;
+    const flat = flattenLibSymbol(entry.lib, entry.name, entry.text, entry.parentText, sheet.version);
+    const sp = new Splicer(sheet.text);
+    const ls = K.find(sheet.root, 'lib_symbols');
+    if (!sheet.libSymbols[libId]) {
+      const block = pretty(flat, 2) + '\n';
+      if (ls && ls.length > 1) sp.insert(lineStart(sheet.text, ls.e - 1), block);
+      else if (ls) sp.replace(ls.s, ls.e, '(lib_symbols\n' + block + '\t)');
+      else sp.insert(insertPoint(sheet), '\t(lib_symbols\n' + block + '\t)\n');
+    }
+    const items = splitTop(flat).slice(2);
+    const units = libUnits(flat);
+    const unit = opts.unit || units[0];
+    const refProp = items.find((x) => /^\(property\s+"Reference"/.test(x));
+    const refDefault = refProp ? JSON.parse(splitTop(refProp)[2]) : 'U';
+    const power = items.some((x) => /^\(power\b/.test(x));
+    let myRef, refs = new Map();
+    const placements = project.instances.filter((i) => i.sheet === sheet);
+    if (opts.ref) { myRef = opts.ref; for (const pl of placements) refs.set(pl.path, opts.ref); }
+    else {
+      const base = power ? '#PWR' : refDefault.replace(/\?$/, '');
+      const { prefix, next } = nextReference(project, base + '0');
+      let n = next;
+      for (const pl of placements) refs.set(pl.path, prefix + (power ? String(n++).padStart(2, '0') : n++));
+      myRef = refs.get(inst.path) || prefix + next;
+    }
+    const v8 = !sheet.version || sheet.version >= 20231120;
+    const L = ['(symbol', `\t(lib_id ${qstr(libId)})`, `\t(at ${fnum(p[0])} ${fnum(p[1])} 0)`, `\t(unit ${unit})`];
+    if (v8) L.push('\t(exclude_from_sim no)');
+    const flag = (k, d) => { const x = items.find((y) => new RegExp('^\\(' + k + '\\s').test(y)); return x ? splitTop(x)[1] : d; };
+    L.push(`\t(in_bom ${flag('in_bom', 'yes')})`, `\t(on_board ${flag('on_board', 'yes')})`, `\t(dnp no)`, `\t(uuid ${qstr(uuid())})`);
+    for (const pr of items.filter((x) => /^\(property\s/.test(x))) {
+      const parts = splitTop(pr);
+      const pname = JSON.parse(parts[1]);
+      if (pname.startsWith('ki_')) continue;
+      let val = JSON.parse(parts[2]);
+      if (pname === 'Reference') val = myRef;
+      const rest = parts.slice(3).map((x) => {
+        if (/^\(at\s/.test(x)) { const a = splitTop(x); return `(at ${fnum(p[0] + parseFloat(a[1]))} ${fnum(p[1] - parseFloat(a[2]))} ${a[3] || 0})`; }
+        return x;
+      });
+      if (!rest.some((x) => /^\(at\s/.test(x))) rest.unshift(`(at ${fnum(p[0])} ${fnum(p[1])} 0)`);
+      L.push(pretty(`(property ${qstr(pname)} ${qstr(val)} ${rest.join(' ')})`, 1));
+    }
+    for (const num of pinNumbersFor(flat, unit)) L.push(`\t(pin ${qstr(num)}`, `\t\t(uuid ${qstr(uuid())})`, '\t)');
+    L.push('\t(instances', `\t\t(project ${qstr(projectNameFor(project, sheet))}`);
+    for (const pl of placements) L.push(`\t\t\t(path ${qstr(pl.path)}`, `\t\t\t\t(reference ${qstr(refs.get(pl.path))})`, `\t\t\t\t(unit ${unit})`, '\t\t\t)');
+    L.push('\t\t)', '\t)', ')');
+    sp.insert(insertPoint(sheet), L.map((l) => '\t' + l.replace(/\n/g, '\n\t')).join('\n') + '\n');
+    return { path: sheet.path, text: sp.apply(), ref: myRef, unit, units, at: p.slice() };
+  }
+  /** Place another unit of a multi-unit part already in the design (e.g. a relay's contacts). */
+  function addUnit(project, sheet, inst, sym, unit, p) {
+    const lib = sym.libName || sym.libId;
+    const lsNode = K.find(sheet.root, 'lib_symbols');
+    const node = lsNode && K.findAll(lsNode, 'symbol').find((s) => s[1] === lib);
+    if (!node) throw new Error('The part definition is missing from this sheet.');
+    const text = sheet.text.slice(node.s, node.e);
+    const i = lib.indexOf(':');
+    const entry = { lib: i < 0 ? '' : lib.slice(0, i), name: i < 0 ? lib : lib.slice(i + 1), text: text.replace(/^\(symbol\s+"[^"]*"/, '(symbol ' + qstr(i < 0 ? lib : lib.slice(i + 1))) };
+    const ref = inst.refs[sheet.symbols.indexOf(sym)].ref;
+    const r = addLibSymbol(project, sheet, inst, entry, p, { unit, ref });
+    return r;
+  }
+
+  // ------------------------------------------------------------------ drawing (graphics and text)
+  const strokeLines = (st) => ['\t(stroke', `\t\t(width ${fnum(st && st.width || 0)})`, `\t\t(type ${st && st.type || 'default'})`].concat(st && st.color ? [`\t\t(color ${st.color.join(' ')})`] : []).concat(['\t)']);
+  const fillLines = (st) => ['\t(fill', `\t\t(type ${st && st.fill || 'none'})`, '\t)'];
+  /** kind: line (pts), rect (a, b), circle (c, r), arc (a, m, b), text (p, text, size, angle, bold, italic) */
+  function addGraphic(sheet, kind, g, style) {
+    let L;
+    const xy = (q) => `(xy ${fnum(q[0])} ${fnum(q[1])})`;
+    if (kind === 'line') {
+      if (g.pts.length < 2) throw new Error('Tap at least two points.');
+      L = ['(polyline', '\t(pts', '\t\t' + g.pts.map(xy).join(' '), '\t)', ...strokeLines(style), `\t(uuid ${qstr(uuid())})`, ')'];
+    } else if (kind === 'rect') {
+      L = ['(rectangle', `\t(start ${fnum(Math.min(g.a[0], g.b[0]))} ${fnum(Math.min(g.a[1], g.b[1]))})`, `\t(end ${fnum(Math.max(g.a[0], g.b[0]))} ${fnum(Math.max(g.a[1], g.b[1]))})`, ...strokeLines(style), ...fillLines(style), `\t(uuid ${qstr(uuid())})`, ')'];
+    } else if (kind === 'circle') {
+      if (!(g.r > 0)) throw new Error('Make the circle bigger.');
+      L = ['(circle', `\t(center ${fnum(g.c[0])} ${fnum(g.c[1])})`, `\t(radius ${fnum(g.r)})`, ...strokeLines(style), ...fillLines(style), `\t(uuid ${qstr(uuid())})`, ')'];
+    } else if (kind === 'arc') {
+      L = ['(arc', `\t(start ${fnum(g.a[0])} ${fnum(g.a[1])})`, `\t(mid ${fnum(g.m[0])} ${fnum(g.m[1])})`, `\t(end ${fnum(g.b[0])} ${fnum(g.b[1])})`, ...strokeLines(style), ...fillLines({ fill: 'none' }), `\t(uuid ${qstr(uuid())})`, ')'];
+    } else if (kind === 'text') {
+      if (!g.text) throw new Error('Type some text.');
+      const sz = fnum(g.size || 1.27);
+      const font = ['\t\t(font', `\t\t\t(size ${sz} ${sz})`].concat(g.bold ? ['\t\t\t(bold yes)'] : []).concat(g.italic ? ['\t\t\t(italic yes)'] : []).concat(style && style.color ? [`\t\t\t(color ${style.color.join(' ')})`] : []).concat(['\t\t)']);
+      L = [`(text ${qstr(g.text)}`].concat(!sheet.version || sheet.version >= 20231120 ? ['\t(exclude_from_sim no)'] : [])
+        .concat([`\t(at ${fnum(g.p[0])} ${fnum(g.p[1])} ${g.angle || 0})`, '\t(effects', ...font, '\t\t(justify left bottom)', '\t)', `\t(uuid ${qstr(uuid())})`, ')']);
+    } else throw new Error('Unknown shape ' + kind);
+    if (sheet.version && sheet.version < 20231120) L = L.map((l) => l.replace(/\(bold yes\)/, 'bold').replace(/\(italic yes\)/, 'italic'));
+    const sp = new Splicer(sheet.text);
+    sp.insert(insertPoint(sheet), block(L, '\t'));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Move any graphic or text node by d (every coordinate list inside it shifts). */
+  function moveNode(sheet, node, d) {
+    const sp = new Splicer(sheet.text);
+    const walk = (n) => {
+      if (!Array.isArray(n)) return;
+      if (['at', 'xy', 'start', 'mid', 'end', 'center'].includes(n[0]) && n.t && n.length >= 3) { setXY(sp, n, parseFloat(n[1]) + d[0], parseFloat(n[2]) + d[1]); return; }
+      for (const c of n) walk(c);
+    };
+    walk(node);
+    return { path: sheet.path, text: sp.apply() };
+  }
+  function deleteNode(sheet, node) {
+    const sp = new Splicer(sheet.text);
+    const r = nodeRange(sheet.text, node);
+    sp.replace(r[0], r[1], '');
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Replace a graphic's stroke (and fill) with a new style. */
+  function styleNode(sheet, node, style) {
+    const sp = new Splicer(sheet.text);
+    const ind = indentAt(sheet.text, node.s) + '\t';
+    const st = K.find(node, 'stroke');
+    if (st) sp.replace(st.s, st.e, strokeLines(style).map((l, i) => (i ? ind : '') + l.slice(1)).join('\n'));
+    const fl = K.find(node, 'fill');
+    if (fl && node[0] !== 'arc' && node[0] !== 'polyline') sp.replace(fl.s, fl.e, fillLines(style).map((l, i) => (i ? ind : '') + l.slice(1)).join('\n'));
+    return { path: sheet.path, text: sp.apply() };
+  }
+
   root.KiEdit = {
     GRID, snap, same, fnum, qstr, uuid, connectionPoints,
-    setSymbolFields, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addLabel, addNoConnect, nextReference
+    setSymbolFields, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addLabel, addNoConnect, nextReference,
+    flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KiEdit;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

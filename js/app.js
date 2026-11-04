@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.4.0';
+  const VERSION = '1.5.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -60,6 +60,8 @@
     // Deferred so the click that follows a touch can't land on a button this tap reveals.
     onTap: (wp, type) => setTimeout(() => onCanvasTap(wp, type), 30),
     onDoubleTap: (wp, x, y) => {
+      // While drawing, a quick second tap is another point, not a zoom.
+      if (state.mode === 'wire' || state.mode === 'label' || state.mode === 'draw') { setTimeout(() => onCanvasTap(wp, 'touch'), 30); return; }
       const hit = view.hitTest(wp, 10);
       if (hit && hit.type === 'sheet') openChildSheet(hit.idx);
       else view.zoomBy(2, x, y);
@@ -376,6 +378,7 @@
     if (!state.project) return;
     if (state.mode === 'wire') { wireTap(wp, type); return; }
     if (state.mode === 'label') { labelTap(wp, type); return; }
+    if (state.mode === 'draw') { drawTap(wp, type); return; }
     if (state.mode === 'move') return;
     const mk = view.markerAt(wp[0] * view.scale + view.ox, wp[1] * view.scale + view.oy, type === 'mouse' ? 12 : 20);
     if (mk && mk.issue) { pickIssue(mk.issue, false); return; }
@@ -386,6 +389,7 @@
       if (net) selectNet(net, itemFromTag(hit.it));
     } else if (hit.type === 'symbol') selectSymbol(state.inst, hit.si);
     else if (hit.type === 'sheet') selectSheet(state.inst, hit.idx);
+    else if (hit.type === 'graphic') selectGraphic(state.inst, hit.it);
   }
   function applyHighlight() {
     const s = state.sel, inst = state.inst;
@@ -394,6 +398,7 @@
     if (s.type === 'net') view.setHighlight(groupsFor(s.net, inst), -1, -1);
     else if (s.type === 'symbol') view.setHighlight(null, s.inst === inst ? s.si : -1, -1);
     else if (s.type === 'sheet') view.setHighlight(null, -1, s.inst === inst ? s.idx : -1);
+    else if (s.type === 'graphic') view.setHighlight(null, -1, -1, s.inst === inst ? s.it : null);
   }
   function selectNet(net, item) {
     state.sel = { type: 'net', net, item: item || null };
@@ -747,6 +752,7 @@
     const sh = state.inst.sheet;
     if (s.type === 'symbol') return { type: 'symbol', uuid: sh.symbols[s.si] && sh.symbols[s.si].uuid };
     if (s.type === 'sheet') return { type: 'sheet', uuid: sh.sheets[s.idx] && sh.sheets[s.idx].uuid };
+    if (s.type === 'graphic') { const o = graphicObj(s.it, sh); return { type: 'graphic', kind: s.it[0], uuid: o && uuidOf(o) }; }
     if (s.type === 'net' && s.item) { const o = itemObj(s.item); return { type: 'net', item: s.item.type, uuid: uuidOf(o), p: o && (o.p || o.pos || o.a), pin: s.item.type === 'pin' ? { sym: sh.symbols[s.item.si].uuid, pi: s.item.pi } : null }; }
     if (s.type === 'net') return { type: 'netname', name: s.net.name };
     return null;
@@ -757,6 +763,7 @@
     const sh = state.inst.sheet, P = state.project;
     if (a.type === 'symbol') { const si = sh.symbols.findIndex((x) => x.uuid === a.uuid); if (si >= 0) state.sel = { type: 'symbol', inst: state.inst, si }; }
     else if (a.type === 'sheet') { const idx = sh.sheets.findIndex((x) => x.uuid === a.uuid); if (idx >= 0) state.sel = { type: 'sheet', inst: state.inst, idx }; }
+    else if (a.type === 'graphic' && a.uuid) { const list = a.kind === 'T' ? sh.texts : a.kind === 'B' ? sh.textBoxes : sh.graphics; const idx = list.findIndex((o) => uuidOf(o) === a.uuid); if (idx >= 0) state.sel = { type: 'graphic', inst: state.inst, it: a.kind + idx }; }
     else if (a.type === 'netname') { const n = P.nets.find((x) => x.name === a.name); if (n) state.sel = { type: 'net', net: n, item: null }; }
     else if (a.type === 'net') {
       let item = null, g = -1;
@@ -873,9 +880,12 @@
     state.mode = mode;
     for (const b of document.querySelectorAll('.rail-btn.mode')) b.setAttribute('aria-pressed', String(b.dataset.mode === mode || (mode === 'move' && b.dataset.mode === 'select')));
     if (mode !== 'wire') { state.wire = { anchors: [], flips: [] }; view.overlay = null; }
-    if (mode === 'wire' || mode === 'label') { view.overlay = { pts: [], dots: [] }; }
+    if (mode === 'wire' || mode === 'label' || mode === 'draw') { view.overlay = { pts: [], dots: [] }; }
+    if (mode === 'draw') state.draw = { tool: (state.draw && state.draw.tool) || 'part', pts: [], part: state.draw && state.draw.part };
+    if (mode === 'draw' && state.draw.tool === 'part' && !state.draw.part) setTimeout(openPartPicker, 0);
     view.redraw();
     renderStatus();
+    renderDrawBar();
   }
   for (const b of document.querySelectorAll('.rail-btn.mode')) b.addEventListener('click', () => {
     if (!state.project) return;
@@ -1066,6 +1076,7 @@
     const tagFor = () => {
       const t = state.moveTarget, sh = state.inst.sheet;
       if (t.type === 'symbol') return { sym: sh.symbols.findIndex((x) => x.uuid === t.uuid), its: null };
+      if (t.type === 'graphic') { const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : sh.graphics; return { sym: -1, its: new Set([t.kind + list.findIndex((o) => uuidOf(o) === t.uuid)]) }; }
       const list = t.type === 'label' ? sh.labels : sh.wires;
       const idx = list.findIndex((o) => uuidOf(o) === t.uuid);
       return { sym: -1, its: new Set([(t.type === 'label' ? 'L' : 'W') + idx]) };
@@ -1077,6 +1088,13 @@
         const sd = snapD(d);
         if (!sd[0] && !sd[1]) { view.redraw(); return; }
         const t = state.moveTarget, sh = state.inst.sheet;
+        if (t.type === 'graphic') {
+          const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : sh.graphics;
+          const o = list.find((x) => uuidOf(x) === t.uuid);
+          if (!o) { setMode('select'); return; }
+          run('Move ' + t.name, () => E.moveNode(sh, o.src, sd));
+          return;
+        }
         let item;
         if (t.type === 'symbol') item = { type: 'symbol', sym: sh.symbols.find((x) => x.uuid === t.uuid) };
         else if (t.type === 'label') item = { type: 'label', label: sh.labels.find((x) => uuidOf(x) === t.uuid) };
@@ -1099,6 +1117,8 @@
       A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'symbol', uuid: sym.uuid, name: ref }) });
       A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate ' + ref, () => E.transformSymbol(sh, sym, 'rotate'), { checkMerges: true }) });
       A.push({ label: 'COPY', icon: 'i-copy2', run: () => copyPart(s.inst, s.si) });
+      const missing = missingUnits(s.inst, s.si);
+      if (missing.length) A.push({ label: 'ADD UNIT', icon: 'i-plus', run: () => addMissingUnit(s.inst, s.si, missing[0]) });
       A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + ref, () => E.deleteItems(sh, [{ type: 'symbol', sym }]), { anchor: null }) });
       A.push({ label: 'MIRROR ↔', icon: 'i-mirror', run: () => run('Mirror ' + ref, () => E.transformSymbol(sh, sym, 'mirrorY'), { checkMerges: true }) });
       A.push({ label: 'MIRROR ↕', icon: 'i-mirror', run: () => run('Mirror ' + ref, () => E.transformSymbol(sh, sym, 'mirrorX'), { checkMerges: true }) });
@@ -1128,6 +1148,16 @@
       const sheet = sh.sheets[s.idx];
       const child = s.inst.children.find((c) => c.sheetSym === sheet);
       A.push({ label: 'ENTER', icon: 'i-open', run: () => child && showInstance(child) });
+    } else if (s.type === 'graphic') {
+      const o = graphicObj(s.it, sh);
+      if (o) {
+        const name = graphicName(s.it, o);
+        if (s.it[0] === 'T') A.push({ label: 'EDIT', icon: 'i-edit', run: () => textDialog({ edit: o }) });
+        else if (s.it[0] === 'G') A.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(o) });
+        A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'graphic', kind: s.it[0], uuid: uuidOf(o), name: name.toLowerCase() }) });
+        A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + name.toLowerCase(), () => E.deleteNode(sh, o.src), { anchor: null }) });
+        if (!uuidOf(o)) A.splice(A.findIndex((x) => x.label === 'MOVE'), 1);
+      }
     }
     return A;
   }
@@ -1274,6 +1304,7 @@
       putActions(acts, L);
       return;
     }
+    if (state.mode === 'draw') { renderDrawStatus(setIco, t1, t2, acts); return; }
     if (state.mode === 'label') {
       setIco('i-tag');
       t1.textContent = 'Label';
@@ -1321,6 +1352,11 @@
       setIco('i-hier'); ico.classList.add('part');
       t1.textContent = sheet.name;
       t2.textContent = sheet.file + ' · ' + sheet.pins.length + ' pins';
+    } else if (s.type === 'graphic') {
+      const o = graphicObj(s.it, s.inst.sheet);
+      setIco(s.it[0] === 'G' ? 'i-draw' : 'i-text'); ico.classList.add('part');
+      t1.textContent = graphicName(s.it, o);
+      t2.textContent = s.it[0] === 'G' && o ? `Drawing · line ${o.st && o.st.w ? o.st.w + ' mm' : 'default'}${o.st && o.st.type && o.st.type !== 'default' && o.st.type !== 'solid' ? ' · ' + o.st.type.replace('_', '-') : ''}` : 'Text on the drawing';
     }
     const L = selectionActions();
     L.push({ label: 'CLEAR', icon: 'i-close', run: clearSelection });
@@ -1485,6 +1521,329 @@
       h('p', { class: 'hint', text: 'Downloaded schematics are kept on this device so the last revision opens offline.' }),
       h('button', { class: 'btn small', onclick: async () => { await Store.clearPrefix('blob:'); await Store.clearPrefix('tree:'); await Store.clearPrefix('manifest:'); toast('Downloaded schematics cleared'); } }, 'Clear downloaded schematics')));
     body.append(h('p', { class: 'hint', text: `Loomline ${VERSION}. Reads KiCad 6–9 schematics; nothing is uploaded anywhere except requests to GitHub.` }));
+  }
+
+  // ================================================================== DRAW mode: parts and shapes
+  // PART places a symbol from the library; LINE, RECT, CIRCLE, ARC and TEXT add KiCad graphics.
+  const DRAW_TOOLS = [['part', 'PART', 'i-part'], ['line', 'LINE', 'i-line'], ['rect', 'RECT', 'i-rect'], ['circle', 'CIRCLE', 'i-circle'], ['arc', 'ARC', 'i-arc'], ['text', 'TEXT', 'i-text']];
+  const COLOURS = { default: null, red: [200, 0, 0, 1], blue: [0, 0, 194, 1], green: [0, 132, 0, 1], black: [0, 0, 0, 1] };
+  function drawStyle() { return Object.assign({ width: 0, type: 'default', fill: 'none', colour: 'default' }, Store.pref('drawStyle') || {}); }
+  const styleFor = (st) => ({ width: st.width, type: st.type, fill: st.fill, color: COLOURS[st.colour] || null });
+  function graphicObj(it, sh) {
+    sh = sh || state.inst.sheet;
+    const i = +it.slice(1);
+    return it[0] === 'G' ? sh.graphics[i] : it[0] === 'T' ? sh.texts[i] : it[0] === 'B' ? sh.textBoxes[i] : null;
+  }
+  function graphicName(it, o) {
+    if (!o) return 'Drawing';
+    if (it[0] === 'T') return 'Text “' + plain(o.s).slice(0, 40) + '”';
+    if (it[0] === 'B') return 'Text box';
+    return { polyline: 'Line', rectangle: 'Rectangle', circle: 'Circle', arc: 'Arc', bezier: 'Curve' }[o.kind] || 'Drawing';
+  }
+  function selectGraphic(inst, it) {
+    state.sel = { type: 'graphic', inst, it };
+    applyHighlight();
+    renderSelectionUI();
+  }
+  const gridSnap = (wp) => [E.snap(wp[0]), E.snap(wp[1])];
+  function setDrawTool(tool) {
+    state.draw = { tool, pts: [], part: state.draw && state.draw.part };
+    view.overlay = { pts: [], dots: [] };
+    view.redraw();
+    if (tool === 'part' && !state.draw.part) openPartPicker();
+    renderStatus();
+  }
+  function drawOverlay(extra) {
+    const d = state.draw, pts = d.pts.slice();
+    const ov = { pts: [], dots: pts.slice(), shapes: [] };
+    if (d.tool === 'line') ov.pts = pts.concat(extra ? [extra] : []);
+    else if (d.tool === 'rect' && pts.length) { const a = pts[0], b = extra || a; ov.pts = [a, [b[0], a[1]], b, [a[0], b[1]], a]; }
+    else if (d.tool === 'circle' && pts.length) { const c = pts[0], q = extra || c, r = Math.hypot(q[0] - c[0], q[1] - c[1]); ov.pts = Array.from({ length: 49 }, (_, i) => [c[0] + r * Math.cos(i * Math.PI / 24), c[1] + r * Math.sin(i * Math.PI / 24)]); }
+    else if (d.tool === 'arc') ov.pts = pts.concat(extra ? [extra] : []);
+    if (extra) ov.ring = extra;
+    view.overlay = ov;
+    view.redraw();
+  }
+  function drawTap(wp, type) {
+    const d = state.draw, sh = state.inst.sheet;
+    const p = gridSnap(wp);
+    const st = styleFor(drawStyle());
+    if (d.tool === 'part') {
+      if (!d.part) { openPartPicker(); return; }
+      placePart(d.part, p);
+      return;
+    }
+    if (d.tool === 'text') { textDialog({ p }); return; }
+    d.pts.push(p);
+    if (d.tool === 'rect' && d.pts.length === 2) { const [a, b] = d.pts; d.pts = []; if (a[0] === b[0] || a[1] === b[1]) { toast('Tap two opposite corners.'); drawOverlay(); return; } run('Add rectangle', () => E.addGraphic(sh, 'rect', { a, b }, st), { anchor: null }); }
+    else if (d.tool === 'circle' && d.pts.length === 2) { const [c, q] = d.pts; d.pts = []; run('Add circle', () => E.addGraphic(sh, 'circle', { c, r: Math.hypot(q[0] - c[0], q[1] - c[1]) }, st), { anchor: null }); }
+    else if (d.tool === 'arc' && d.pts.length === 3) { const [a, m, b] = d.pts; d.pts = []; const cross = (m[0] - a[0]) * (b[1] - a[1]) - (m[1] - a[1]) * (b[0] - a[0]); if (Math.abs(cross) < 1e-6) { toast('The three points are in a line; tap a middle point off the line.'); drawOverlay(); return; } run('Add arc', () => E.addGraphic(sh, 'arc', { a, m, b }, st), { anchor: null }); }
+    drawOverlay();
+    renderStatus();
+  }
+  function finishLine() {
+    const d = state.draw;
+    if (d.pts.length < 2) { toast('Tap at least two points.'); return; }
+    const pts = d.pts; d.pts = [];
+    run('Add line', () => E.addGraphic(state.inst.sheet, 'line', { pts }, styleFor(drawStyle())), { anchor: null });
+    drawOverlay(); renderStatus();
+  }
+  function renderDrawStatus(setIco, t1, t2, acts) {
+    const d = state.draw, tool = DRAW_TOOLS.find((x) => x[0] === d.tool) || DRAW_TOOLS[0];
+    setIco(tool[2]);
+    const n = d.pts.length;
+    const hints = {
+      part: d.part ? `Tap where ${d.part.name} goes` : 'Choose a part to place',
+      line: n ? 'Tap the next point · FINISH when done' : 'Tap the first point',
+      rect: n ? 'Tap the opposite corner' : 'Tap one corner',
+      circle: n ? 'Tap a point on the edge' : 'Tap the centre',
+      arc: ['Tap where the arc starts', 'Tap a point the arc passes through', 'Tap where the arc ends'][n] || '',
+      text: 'Tap where the text goes'
+    };
+    t1.textContent = 'Draw · ' + tool[1].toLowerCase();
+    t2.textContent = hints[d.tool];
+    const L = [];
+    if (d.tool === 'line' && n > 1) L.push({ label: 'FINISH', icon: 'i-check', primary: true, run: finishLine });
+    if (n) L.push({ label: 'BACK', icon: 'i-undo', run: () => { d.pts.pop(); drawOverlay(); renderStatus(); } });
+    if (d.tool === 'part') L.push({ label: d.part ? 'CHANGE' : 'CHOOSE', icon: 'i-part', primary: !d.part, run: openPartPicker });
+    const last = d.tool === 'part' && d.last && state.inst.sheet.symbols.find((x) => x.uuid === d.last.uuid);
+    if (last) L.push({ label: 'ROTATE', icon: 'i-rotate', run: () => { run('Rotate ' + d.last.ref, () => E.transformSymbol(state.inst.sheet, last, 'rotate'), { anchor: null }); const i = state.inst.sheet.symbols.findIndex((x) => x.uuid === d.last.uuid); view.setHighlight(null, i, -1); } });
+    if (d.tool !== 'part') L.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(null) });
+    L.push({ label: 'DONE', icon: 'i-close', run: () => setMode('select') });
+    putActions(acts, L);
+    renderDrawBar();
+  }
+  function renderDrawBar() {
+    const bar = $('drawBar');
+    bar.hidden = state.mode !== 'draw';
+    if (bar.hidden) return;
+    bar.replaceChildren(...DRAW_TOOLS.map(([k, l, ic]) => h('button', { class: 'dt', 'aria-pressed': String(state.draw.tool === k), title: l, onclick: () => setDrawTool(k) }, icon(ic), h('span', { text: l }))));
+  }
+  // ---- line style (new shapes, or the selected one)
+  function styleDialog(target) {
+    const cur = target ? { width: target.st ? target.st.w || 0 : 0, type: target.st && target.st.type || 'default', fill: target.fl && target.fl.type || 'none', colour: 'default' } : drawStyle();
+    const w = seg('Line width', [['0', 'DEFAULT'], ['0.25', '0.25'], ['0.5', '0.5'], ['1', '1 MM']], String(cur.width || 0));
+    const t = seg('Line type', [['default', 'SOLID'], ['dash', 'DASH'], ['dot', 'DOT'], ['dash_dot', 'DASH-DOT']], cur.type === 'solid' ? 'default' : cur.type);
+    const f = seg('Fill', [['none', 'NONE'], ['background', 'FILLED']], cur.fill === 'background' ? 'background' : 'none');
+    const c = seg('Colour', [['default', 'DEFAULT'], ['red', 'RED'], ['blue', 'BLUE'], ['green', 'GREEN'], ['black', 'BLACK']], cur.colour || 'default');
+    openDialog(target ? 'LINE STYLE' : 'STYLE FOR NEW SHAPES', [
+      h('div', { class: 'field' }, h('label', { text: 'Line width' }), w.el),
+      h('div', { class: 'field' }, h('label', { text: 'Line type' }), t.el),
+      h('div', { class: 'field' }, h('label', { text: 'Fill (rectangles and circles)' }), f.el),
+      h('div', { class: 'field' }, h('label', { text: 'Colour' }), c.el)
+    ], [{ label: 'CANCEL', run: closeDialog }, { label: 'APPLY', primary: true, run: () => {
+      const st = { width: +w.get(), type: t.get(), fill: f.get(), colour: c.get() };
+      closeDialog();
+      if (target) run('Restyle ' + graphicName('G', target).toLowerCase(), () => E.styleNode(state.inst.sheet, target.src, styleFor(st)));
+      else { Store.pref('drawStyle', st); toast('New shapes use this style.'); }
+    } }]);
+  }
+  // ---- text
+  function textDialog(o) {
+    const ed = o.edit;
+    const txt = h('textarea', { class: 'input', id: 'txtValue', rows: 3, spellcheck: 'true' });
+    txt.value = ed ? K.unescape(ed.s) : '';
+    const body = [h('div', { class: 'field' }, h('label', { for: 'txtValue', text: 'Text' }), txt)];
+    let size, bold, italic, ang;
+    if (!ed) {
+      const last = Store.pref('textStyle') || {};
+      size = seg('Size', [['1.27', 'SMALL'], ['2', 'MEDIUM'], ['2.54', 'LARGE'], ['3.81', 'TITLE']], last.size || '1.27');
+      ang = seg('Direction', [['0', 'ACROSS'], ['90', 'UP']], last.angle || '0');
+      bold = h('input', { type: 'checkbox', checked: !!last.bold });
+      italic = h('input', { type: 'checkbox', checked: !!last.italic });
+      body.push(h('div', { class: 'field' }, h('label', { text: 'Size' }), size.el), h('div', { class: 'field' }, h('label', { text: 'Direction' }), ang.el),
+        h('label', { class: 'check' }, bold, 'Bold'), h('label', { class: 'check' }, italic, 'Italic'));
+    }
+    const go = () => {
+      const v = txt.value.trim();
+      if (!v) { txt.focus(); return; }
+      closeDialog();
+      const sh = state.inst.sheet;
+      if (ed) run('Edit text', () => E.editText(sh, ed, v));
+      else {
+        const ts = { size: size.get(), angle: ang.get(), bold: bold.checked, italic: italic.checked };
+        Store.pref('textStyle', ts);
+        run('Add text', () => E.addGraphic(sh, 'text', { p: o.p, text: v, size: +ts.size, angle: +ts.angle, bold: ts.bold, italic: ts.italic }, styleFor(drawStyle())), { anchor: null });
+      }
+    };
+    openDialog(ed ? 'EDIT TEXT' : 'ADD TEXT', body, [{ label: 'CANCEL', run: closeDialog }, { label: ed ? 'SAVE' : 'ADD', primary: true, run: go }]);
+    setTimeout(() => txt.focus(), 50);
+  }
+
+  // ---- part library: index, per-library files (cached on the device), picker with preview
+  const LIB_BASE = 'library/';
+  const libState = { index: null, loading: null, files: new Map() };
+  async function loadLibIndex() {
+    if (libState.index) return libState.index;
+    if (libState.loading) return libState.loading;
+    libState.loading = (async () => {
+      let idx = null;
+      try { const r = await fetch(LIB_BASE + 'index.json', { cache: 'no-cache' }); if (r.ok) { idx = await r.json(); Store.set('lib:index', idx); } } catch (e) { /* offline */ }
+      if (!idx) idx = await Store.get('lib:index');
+      if (!idx) throw new Error('The part library could not be loaded. Connect to the internet once to download it.');
+      idx.hay = idx.rows.map((r) => (r[1] + ' ' + r[2] + ' ' + r[3] + ' ' + idx.libs[r[0]].name).toLowerCase());
+      libState.index = idx;
+      return idx;
+    })();
+    try { return await libState.loading; } finally { libState.loading = null; }
+  }
+  async function loadLibFile(lib) {
+    if (libState.files.has(lib)) return libState.files.get(lib);
+    const idx = await loadLibIndex();
+    const meta = idx.libs.find((l) => l.name === lib);
+    if (!meta) throw new Error(`${lib} isn't in the part library.`);
+    let bundle = null;
+    try {
+      const r = await fetch(LIB_BASE + 'kicad/' + meta.file);
+      if (r.ok) {
+        const raw = new Uint8Array(await r.arrayBuffer());
+        // Some servers decompress .gz on the way; only inflate when the gzip magic bytes are there.
+        const txt = raw[0] === 0x1f && raw[1] === 0x8b ? await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'))).text() : new TextDecoder().decode(raw);
+        bundle = JSON.parse(txt);
+        Store.set('libbundle:' + meta.file, bundle);
+      }
+    } catch (e) { /* offline */ }
+    if (!bundle) bundle = await Store.get('libbundle:' + meta.file);
+    if (!bundle) throw new Error(`The ${meta.cat} parts aren't on this device yet. Connect to the internet once to download them.`);
+    for (const [name, data] of Object.entries(bundle.libs)) libState.files.set(name, data);
+    return libState.files.get(lib);
+  }
+  async function libEntry(lib, name) {
+    const f = await loadLibFile(lib);
+    const text = f.symbols[name];
+    if (!text) throw new Error(`${lib}:${name} isn't in the library.`);
+    const ext = /\(extends "((?:[^"\\]|\\.)*)"\)/.exec(text);
+    return { lib, name, text, parentText: ext ? f.symbols[ext[1]] : null };
+  }
+  const BLANK_SHEET = '(kicad_sch\n\t(version 20250114)\n\t(generator "loomline")\n\t(generator_version "1")\n\t(uuid "00000000-0000-4000-8000-000000000001")\n\t(paper "A4")\n\t(lib_symbols)\n\t(sheet_instances\n\t\t(path "/"\n\t\t\t(page "1")\n\t\t)\n\t)\n)\n';
+  function previewScene(entry) {
+    const P0 = K.buildProject([{ path: 'preview.kicad_sch', text: BLANK_SHEET }]);
+    const r = E.addLibSymbol(P0, P0.root.sheet, P0.root, entry, [100, 100]);
+    const P1 = K.buildProject([{ path: 'preview.kicad_sch', text: r.text }]);
+    return { scene: R.buildScene(P1, P1.root), units: r.units };
+  }
+  function openPartPicker() {
+    closePicker();
+    const recent = Store.pref('recentParts') || [];
+    const q = h('input', { class: 'input', type: 'search', placeholder: 'Search 10,000 parts: relay, pushbutton, fuse, Conn_01x04…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+    const cats = h('div', { class: 'chips catbar' });
+    const list = h('div', { class: 'rows plist' });
+    const canvas = h('canvas', { class: 'pcanvas' });
+    const info = h('div', { class: 'pinfo' }, h('p', { class: 'hint', text: 'Pick a part to see it here.' }));
+    const place = h('button', { class: 'btn primary', disabled: true }, icon('i-part'), 'PLACE');
+    const wrap = h('div', { class: 'picker-wrap', id: 'pickerWrap', role: 'dialog', 'aria-label': 'Add a part' },
+      h('div', { class: 'report-head' }, h('div', { class: 'titles' }, h('b', { text: 'ADD A PART' }), h('small', { id: 'pickCount', text: 'Loading the library…' })),
+        h('button', { class: 'ib', 'aria-label': 'Close', onclick: closePicker }, icon('i-close'))),
+      h('div', { class: 'picker-body' },
+        h('div', { class: 'pick-left' }, q, cats, list),
+        h('div', { class: 'pick-right' }, h('div', { class: 'pprev' }, canvas), info, h('div', { class: 'actions' }, place))));
+    document.body.append(wrap);
+    let pv = null, chosen = null, cat = state.pickCat || 'All';
+    const show = async (row) => {
+      const idx = libState.index, lib = idx.libs[row[0]].name, name = row[1];
+      for (const b of list.querySelectorAll('.row.current')) b.classList.remove('current');
+      const el = list.querySelector(`[data-k="${CSS.escape(lib + ':' + name)}"]`); if (el) el.classList.add('current');
+      info.replaceChildren(h('p', { class: 'hint', text: 'Loading ' + lib + '…' }));
+      try {
+        const entry = await libEntry(lib, name);
+        const { scene, units } = previewScene(entry);
+        if (!pv) pv = new R.SchematicView(canvas, {});
+        pv.setTheme(view.dark); pv.showGrid = false;
+        pv.setScene(scene, true);
+        const sy = scene.syms[0];
+        requestAnimationFrame(() => { pv.resize(); pv.fit(sy ? sy.bb : scene.page, 16); });
+        chosen = entry;
+        place.disabled = false;
+        info.replaceChildren(
+          h('div', { class: 'title small', text: name }),
+          h('div', { class: 'sub mono', text: lib + ' · ref ' + (row[4] || '?') + ' · ' + row[6] + ' pin' + (row[6] === 1 ? '' : 's') + (units.length > 1 ? ' · ' + units.length + ' units' : '') }),
+          row[2] ? h('p', { class: 'pdesc', text: row[2] }) : null,
+          row[3] ? h('p', { class: 'hint', text: 'Keywords: ' + row[3] }) : null);
+      } catch (e) { info.replaceChildren(h('p', { class: 'err-text', text: e.message })); }
+    };
+    place.addEventListener('click', () => {
+      if (!chosen) return;
+      const rec = [chosen.lib + ':' + chosen.name].concat(recent.filter((x) => x !== chosen.lib + ':' + chosen.name)).slice(0, 20);
+      Store.pref('recentParts', rec);
+      state.draw = { tool: 'part', pts: [], part: chosen };
+      closePicker();
+      if (state.mode !== 'draw') setMode('draw');
+      renderStatus();
+      toast(`Tap the drawing where ${chosen.name} goes.`);
+    });
+    const fill = () => {
+      const idx = libState.index; if (!idx) return;
+      const terms = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      list.replaceChildren();
+      let rows = [];
+      if (!terms.length && cat === 'All' && recent.length) {
+        const byKey = new Map(idx.rows.map((r) => [idx.libs[r[0]].name + ':' + r[1], r]));
+        rows = recent.map((k) => byKey.get(k)).filter(Boolean);
+        if (rows.length) list.append(h('div', { class: 'row group' }, h('span', { class: 'main' }, h('span', { class: 'nm', text: 'Recently used' }))));
+      }
+      if (!rows.length || terms.length || cat !== 'All') {
+        const scored = [];
+        const q0 = terms.join(' ');
+        idx.rows.forEach((r, i) => {
+          if (cat !== 'All' && idx.libs[r[0]].cat !== cat) return;
+          const hay = idx.hay[i];
+          if (!terms.every((t) => hay.includes(t))) return;
+          const nm = r[1].toLowerCase();
+          const sc = !terms.length ? 3 : nm === q0 ? 0 : nm.startsWith(terms[0]) ? 1 : nm.includes(terms[0]) ? 2 : 3;
+          scored.push([sc, r]);
+        });
+        scored.sort((a, b) => a[0] - b[0] || K.naturalCmp(a[1][1], b[1][1]));
+        $('pickCount').textContent = `${scored.length.toLocaleString()} match${scored.length === 1 ? '' : 'es'} in ${idx.rows.length.toLocaleString()} parts`;
+        rows = scored.slice(0, 150).map((x) => x[1]);
+        if (scored.length > 150) setTimeout(() => list.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: `${scored.length - 150} more; type more to narrow the list` }))), 0);
+      } else $('pickCount').textContent = `${idx.rows.length.toLocaleString()} parts in ${idx.libs.length} libraries`;
+      for (const r of rows) {
+        const lib = idx.libs[r[0]].name;
+        list.append(h('button', { class: 'row', 'data-k': lib + ':' + r[1], onclick: () => show(r) },
+          h('span', { class: 'main' }, h('span', { class: 'nm2' }, h('b', { text: r[1] }), h('small', { text: (r[2] || '').slice(0, 90) }))),
+          h('span', { class: 'meta', text: lib })));
+      }
+      if (!rows.length) list.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: 'No parts match. Try a shorter word, or another category.' })));
+    };
+    q.addEventListener('input', fill);
+    loadLibIndex().then((idx) => {
+      const names = ['All'].concat(Array.from(new Set(idx.libs.map((l) => l.cat))));
+      for (const c of names) cats.append(h('button', { class: 'chip' + (c === cat ? ' on' : ''), onclick: (e) => { cat = c; state.pickCat = c; for (const b of cats.children) b.classList.toggle('on', b === e.currentTarget); fill(); } }, c));
+      fill();
+      setTimeout(() => q.focus(), 50);
+    }).catch((e) => { $('pickCount').textContent = e.message; });
+  }
+  function closePicker() { const w = $('pickerWrap'); if (w) w.remove(); }
+  function placePart(entry, p) {
+    const sh = state.inst.sheet;
+    const r = run('Add ' + entry.name, () => E.addLibSymbol(state.project, sh, state.inst, entry, p), { anchor: null });
+    if (!r) return;
+    const ni = state.inst.refs.findIndex((x, i) => x.ref === r.ref && state.inst.sheet.symbols[i].unit === r.unit && E.same(state.inst.sheet.symbols[i].p, r.at));
+    if (ni >= 0) {
+      state.draw.last = { uuid: state.inst.sheet.symbols[ni].uuid, ref: r.ref };
+      view.setHighlight(null, ni, -1);
+      renderStatus();
+      toast(`${r.ref} placed${r.units.length > 1 ? ` (unit A of ${r.units.length}; select it and tap ADD UNIT for the others)` : ''}. Tap again for another.`);
+    }
+  }
+  function missingUnits(inst, si) {
+    const sym = inst.sheet.symbols[si];
+    if (!sym.lib || sym.lib.unitCount < 2) return [];
+    const ref = inst.refs[si].ref;
+    const have = new Set();
+    for (const i of state.project.instances) i.sheet.symbols.forEach((s, k) => { if (i.refs[k].ref === ref) have.add(i.refs[k].unit || s.unit); });
+    const out = [];
+    for (let u = 1; u <= sym.lib.unitCount; u++) if (!have.has(u)) out.push(u);
+    return out;
+  }
+  function addMissingUnit(inst, si, unit) {
+    const sh = inst.sheet, sym = sh.symbols[si];
+    const b = symBox(inst, si) || [sym.p[0], sym.p[1], sym.p[0], sym.p[1]];
+    const p = [E.snap(b[2] + 10), E.snap(sym.p[1])];
+    const r = run('Add unit ' + K.unitLetter(unit), () => E.addUnit(state.project, sh, inst, sym, unit, p), { anchor: null });
+    if (!r) return;
+    const ni = state.inst.refs.findIndex((x, i) => x.ref === r.ref && (x.unit || state.inst.sheet.symbols[i].unit) === unit);
+    if (ni >= 0) { state.sel = { type: 'symbol', inst: state.inst, si: ni }; applyHighlight(); startMove({ type: 'symbol', uuid: state.inst.sheet.symbols[ni].uuid, name: r.ref + K.unitLetter(unit) }); toast(`${r.ref}${K.unitLetter(unit)} added. Drag it into place, then DONE.`); }
   }
 
   // ================================================================== Loomline: analysis features

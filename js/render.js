@@ -162,14 +162,14 @@
         circle(it.c, it.r, it.st.w, 'note', Object.assign({ fillColor: it.fl && it.fl.type === 'color' ? colorCss(it.fl.color) : null }, o));
       }
     };
-    for (const g of sh.graphics) graphicStroke(g);
+    sh.graphics.forEach((g, gi) => graphicStroke(g, { it: 'G' + gi }));
 
     // ---- text and text boxes
-    for (const t of sh.texts) {
+    sh.texts.forEach((t, ti) => {
       const a = ((Math.round(t.a) % 180) + 180) % 180;
-      text(t.p[0], t.p[1], resolve(t.s), t.fx.h, a === 90, t.fx.ha, t.fx.va === 'center' ? 'center' : t.fx.va, 'note', { color: colorCss(t.fx.color), bold: t.fx.bold, italic: t.fx.italic });
-    }
-    for (const tb of sh.textBoxes) {
+      text(t.p[0], t.p[1], resolve(t.s), t.fx.h, a === 90, t.fx.ha, t.fx.va === 'center' ? 'center' : t.fx.va, 'note', { color: colorCss(t.fx.color), bold: t.fx.bold, italic: t.fx.italic, it: 'T' + ti });
+    });
+    sh.textBoxes.forEach((tb, bi) => { curIt = 'B' + bi;
       const [x, y] = tb.p, [w, h] = tb.size;
       const pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]];
       if (tb.fl && tb.fl.type === 'color' && tb.fl.color) fillPoly(pts, 'custom', { color: colorCss(tb.fl.color) });
@@ -179,7 +179,8 @@
       const tx = ha === 'left' ? x + mg[0] : ha === 'right' ? x + w - mg[2] : x + w / 2;
       const ty = va === 'top' ? y + mg[1] : va === 'bottom' ? y + h - mg[3] : y + h / 2;
       text(tx, ty, resolve(tb.s), tb.fx.h, false, ha, va, 'note', { color: colorCss(tb.fx.color), bold: tb.fx.bold });
-    }
+    });
+    curIt = '';
 
     // ---- wires, buses, entries, junctions, no-connects
     sh.wires.forEach((w, i) => stroke([w.a, w.b], w.st.w, 'wire', { it: 'W' + i, g: w.group, color: colorCss(w.st.color), dash: w.st.type !== 'default' && w.st.type !== 'solid' ? w.st.type : null, kind: 'wire' }));
@@ -524,10 +525,11 @@
       for (const m of a.markers) { const d = Math.hypot(m.x * this.scale + this.ox - x, m.y * this.scale + this.oy - y); if (d < bd) { bd = d; best = m; } }
       return best;
     }
-    setHighlight(groups, symIdx, sheetIdx) {
+    setHighlight(groups, symIdx, sheetIdx, selIt) {
       this.hlGroups = groups && groups.size ? groups : null;
       this.selSym = symIdx === undefined ? -1 : symIdx;
       this.selSheet = sheetIdx === undefined ? -1 : sheetIdx;
+      this.selIt = selIt || null;
       this.redraw();
     }
     flashBox(bb) {
@@ -748,6 +750,18 @@
         if (wp[0] >= b[0] && wp[0] <= b[2] && wp[1] >= b[1] && wp[1] <= b[3]) { sym = S.syms.find((s) => s.si === t.sym); break; }
       }
       if (sym) return { type: 'symbol', si: sym.si };
+      // Free drawing: near a line or outline, or on a text
+      let gr = null, gd = tol;
+      const isG = (it) => it && (it[0] === 'G' || it[0] === 'T' || it[0] === 'B');
+      for (const s of S.strokes) {
+        if (!isG(s.it)) continue;
+        const b = s.bb;
+        if (wp[0] < b[0] - tol || wp[0] > b[2] + tol || wp[1] < b[1] - tol || wp[1] > b[3] + tol) continue;
+        for (let i = 0; i + 3 < s.p.length; i += 2) { const d = segDist(wp, s.p[i], s.p[i + 1], s.p[i + 2], s.p[i + 3]); if (d < gd) { gd = d; gr = s.it; } }
+      }
+      for (const c of S.circles) if (isG(c.it)) { const d = Math.abs(Math.hypot(wp[0] - c.c[0], wp[1] - c.c[1]) - c.r); if (d < gd) { gd = d; gr = c.it; } }
+      for (const t of S.texts) if (isG(t.it)) { const b = t.bb; if (wp[0] >= b[0] && wp[0] <= b[2] && wp[1] >= b[1] && wp[1] <= b[3]) { gr = t.it; break; } }
+      if (gr) return { type: 'graphic', it: gr };
       for (const s of S.sheets) {
         const b = s.bb;
         if (wp[0] >= b[0] && wp[0] <= b[2] && wp[1] >= b[1] && wp[1] <= b[3]) return { type: 'sheet', idx: s.idx };
@@ -798,10 +812,10 @@
         }
       }
 
-      const hl = this.hlGroups, selSym = this.selSym, selSheet = this.selSheet;
-      const anyHl = !!hl || selSym >= 0 || selSheet >= 0;
+      const hl = this.hlGroups, selSym = this.selSym, selSheet = this.selSheet, selIt = this.selIt;
+      const anyHl = !!hl || selSym >= 0 || selSheet >= 0 || !!selIt;
       const dim = anyHl && this.dimOthers ? (this.dark ? 0.32 : 0.28) : 1;
-      const isHl = (o) => (hl && o.g >= 0 && hl.has(o.g)) || (selSym >= 0 && o.sym === selSym) || (selSheet >= 0 && o.sheet === selSheet);
+      const isHl = (o) => (hl && o.g >= 0 && hl.has(o.g)) || (selSym >= 0 && o.sym === selSym) || (selSheet >= 0 && o.sheet === selSheet) || (selIt && o.it === selIt);
       const col = (o) => o.color || P[o.role] || P.note;
       const pv = this.preview;
       const isPrev = pv ? (o) => (pv.sym >= 0 && o.sym === pv.sym) || (o.it && pv.its && pv.its.has(o.it)) : () => false;
@@ -890,20 +904,21 @@
           if (isPrev(o)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); }
           if (o.p) {
             const net = o.g >= 0 && hl && hl.has(o.g);
-            ctx.strokeStyle = net ? P.hl : col(o);
+            ctx.strokeStyle = net ? P.hl : selIt && o.it === selIt ? P.sel : col(o);
             ctx.lineWidth = Math.max(o.w * (net ? 1.5 : 1.2), (net ? 2.2 : 1.4) * px);
             this._dash(o.dash, px);
             this._path(o.p, false);
             ctx.stroke();
           } else if (o.c) {
             const net = o.g >= 0 && hl && hl.has(o.g);
-            this._circle(o, P, px, net);
+            if (selIt && o.it === selIt) this._circle(o, Object.assign({}, P, { hl: P.sel }), px, true);
+            else this._circle(o, P, px, net);
           }
           if (isPrev(o)) ctx.restore();
         }
         ctx.setLineDash([]);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        for (const o of later) if (o.runs) this._text(o, o.g >= 0 && hl && hl.has(o.g) ? P.hl : col(o), true, isPrev(o) ? pv.d : null);
+        for (const o of later) if (o.runs) this._text(o, o.g >= 0 && hl && hl.has(o.g) ? P.hl : selIt && o.it === selIt ? P.sel : col(o), true, isPrev(o) ? pv.d : null);
       }
       // annotation tags (wire numbers, cross-references) and check markers, in screen space
       if (an && an.tags && an.tags.length) {

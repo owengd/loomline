@@ -437,7 +437,7 @@
         }
         case 'text_box': {
           const a = at(c), s = find(c, 'size'), m = find(c, 'margins');
-          sh.textBoxes.push({ s: c[1] || '', p: [a.x, a.y], size: [num(s && s[1]), num(s && s[2])], a: a.a, st: stroke(c), fl: fill(c), fx: effects(c), margins: m ? [num(m[1]), num(m[2]), num(m[3]), num(m[4])] : null });
+          sh.textBoxes.push({ s: c[1] || '', p: [a.x, a.y], size: [num(s && s[1]), num(s && s[2])], a: a.a, st: stroke(c), fl: fill(c), fx: effects(c), margins: m ? [num(m[1]), num(m[2]), num(m[3]), num(m[4])] : null, src: c });
           break;
         }
         case 'table': {
@@ -447,19 +447,19 @@
           }
           break;
         }
-        case 'polyline': sh.graphics.push({ t: 'poly', pts: pts(c), st: stroke(c), fl: fill(c) }); break;
+        case 'polyline': sh.graphics.push({ t: 'poly', pts: pts(c), st: stroke(c), fl: fill(c), src: c, kind: 'polyline' }); break;
         case 'rectangle': {
           const a = xy(find(c, 'start')), b = xy(find(c, 'end'));
-          sh.graphics.push({ t: 'poly', pts: [a, [b[0], a[1]], b, [a[0], b[1]], a], st: stroke(c), fl: fill(c), closed: true });
+          sh.graphics.push({ t: 'poly', pts: [a, [b[0], a[1]], b, [a[0], b[1]], a], st: stroke(c), fl: fill(c), closed: true, src: c, kind: 'rectangle' });
           break;
         }
-        case 'circle': sh.graphics.push({ t: 'circle', c: xy(find(c, 'center')), r: num(strVal(c, 'radius', 0)), st: stroke(c), fl: fill(c) }); break;
+        case 'circle': sh.graphics.push({ t: 'circle', c: xy(find(c, 'center')), r: num(strVal(c, 'radius', 0)), st: stroke(c), fl: fill(c), src: c, kind: 'circle' }); break;
         case 'arc': {
           const s = find(c, 'start'), m = find(c, 'mid'), e = find(c, 'end');
-          if (s && m && e) sh.graphics.push({ t: 'poly', pts: arcPoints(xy(s), xy(m), xy(e)), st: stroke(c), fl: fill(c) });
+          if (s && m && e) sh.graphics.push({ t: 'poly', pts: arcPoints(xy(s), xy(m), xy(e)), st: stroke(c), fl: fill(c), src: c, kind: 'arc' });
           break;
         }
-        case 'bezier': sh.graphics.push({ t: 'poly', pts: bezierPoints(pts(c)), st: stroke(c), fl: fill(c) }); break;
+        case 'bezier': sh.graphics.push({ t: 'poly', pts: bezierPoints(pts(c)), st: stroke(c), fl: fill(c), src: c, kind: 'bezier' }); break;
         case 'rule_area': {
           const pl = find(c, 'polyline');
           if (pl) sh.graphics.push({ t: 'poly', pts: pts(pl), st: Object.assign(stroke(pl), { type: 'dash' }), fl: { type: 'none' }, role: 'rule' });
