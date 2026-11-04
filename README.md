@@ -89,7 +89,8 @@ showing what's selected.
 | To | Do this |
 | --- | --- |
 | Trace a net | Tap a wire, pin end, label or junction. It's drawn bold orange on every sheet; nothing else fades |
-| Follow it to another sheet | **NEXT** in the status bar steps through each sheet the net reaches |
+| Follow it a connector at a time | **STEP** in the status bar (or Layers → *Trace in steps*) lights the net only from the wire you tapped to the first connector or terminal pins, with the rest of the net in pale orange and the connectors it stops at boxed. **CONTINUE** carries on through them to the next connectors, **BACK** goes back a step, **ALL** shows the whole net again. Off-page jumps (power symbols, global labels) are a step too. Step mode stays on for later taps until you press **ALL** |
+| Follow it to another sheet | **NEXT SHEET** in the status bar steps through each sheet the net reaches |
 | See every pin on the net | **NETS** in the rail (or tap the status bar) opens the Net Navigator |
 | Inspect a part | Tap the part body or its reference, then **INFO** for fields and pins |
 | Find a part | **PARTS** lists every part with a filter box; the search icon covers parts, nets and sheets |
@@ -178,13 +179,20 @@ check it against the drawing for nets where the order of terminations matters.
 
 ### Beckhoff I/O
 
-**Add a part → Beckhoff I/O** has 53 Beckhoff EtherCAT parts: the EK1100 coupler, power and
+**Add a part → Beckhoff I/O** has 54 Beckhoff parts: the C6017-0030 Industrial PC, the EK1100 coupler, power and
 E-bus supply terminals (EL9100, EL9110, EL9400, EL9410), and digital in and out, relay, analog
 in and out, RTD and load-cell terminals (EL1002…EL1889, EL2002…EL2809, EL2622, EL3001…EL3124,
 EL3202, EL3356, EL4002…EL4038). Each is a box with one pin per terminal point, numbered as on
 the terminal itself and named by channel (DI3, AO1, AI2+, R1+, UD+…), with order code,
 signal type and channel count in its fields. Terminal point assignments were taken from
 Beckhoff's own documentation; if you use a variant (-0010 and so on), check its datasheet.
+
+The **C6017-0030** Industrial PC has its X101 power plug on the left (1 PC-ON, 2 P-S,
+3 0 V, 4 +24 V; at least 22 V at the plug) and PE, and its ports on the right: X102/X103
+LAN 2.5G, X104 DisplayPort, X105/X106 USB 3.1, plus X201/X202 LAN and X203/X204 USB marked
+(opt), which are fitted with the C9900-E320 interface option. Run EtherCAT from a LAN port
+to the EK1100 with a wire or label. The PC isn't on the E-bus, so it doesn't count towards
+the E-bus budget.
 
 The **PLC I/O list** report lists every module and channel, marks channels as used or spare,
 and adds up the E-bus load against what the couplers and EL9410s supply. So far only some
