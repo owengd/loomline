@@ -646,7 +646,9 @@
   }
   // Legacy (KiCad 6) instance paths omit the root sheet uuid.
   function legacyPath(p) { const i = p.indexOf('/', 1); return i < 0 ? '/' : p.slice(i); }
-  function naturalCmp(a, b) { return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }); }
+  // One shared collator: localeCompare with options builds a new one on every call.
+  const collator = typeof Intl !== 'undefined' ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }) : null;
+  function naturalCmp(a, b) { return collator ? collator.compare(String(a), String(b)) : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }); }
 
   /**
    * files: [{path, text}] — .kicad_sch files, plus an optional .kicad_pro (JSON) for text variables / root detection.

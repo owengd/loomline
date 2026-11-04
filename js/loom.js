@@ -1,0 +1,371 @@
+/* Loomline analysis: wire numbers, from/to wire list, unit cross-references, design checks,
+ * reports (BOM, connector pin-outs, loom list) and revision comparison. Pure functions of a
+ * project built by kicad-core, so they run the same in the browser and in node tests. */
+(function (root) {
+  'use strict';
+  const K = root.KiCore;
+  const plain = (s) => K.plainText(K.unescape(String(s || '')));
+  const ncmp = (a, b) => K.naturalCmp(String(a), String(b));
+
+  // Drawing-frame zone (KiCad's border: 50 mm zones, rows A.. top to bottom, columns 1.. left to right)
+  function zoneOf(inst, p) {
+    const [PW, PH] = inst.sheet.paper, m = 10;
+    const nx = Math.max(1, Math.round((PW - 2 * m) / 50)), ny = Math.max(1, Math.round((PH - 2 * m) / 50));
+    const c = Math.min(nx, Math.max(1, Math.floor((p[0] - m) / ((PW - 2 * m) / nx)) + 1));
+    const r = Math.min(ny - 1, Math.max(0, Math.floor((p[1] - m) / ((PH - 2 * m) / ny))));
+    return String.fromCharCode(65 + (r % 26)) + c;
+  }
+  const isConnector = (sym, ref) => /^(J|P|X|XS|XP|XJ|XT|CN|CON|TB|TS|SK|PL)\d/i.test(ref) || /connector|terminal/i.test(sym.libId || '');
+  const prop = (sym, name) => { const f = sym.props.find((p) => p.name === name); return f ? K.unescape(f.value || '') : ''; };
+
+  function analyze(P) {
+    const pinCache = new Map();   // symbol -> Map(pin number -> position)
+    const pinOf = (p) => {
+      const sym = P.instances[p.inst].sheet.symbols[p.sym];
+      let m = pinCache.get(sym);
+      if (!m) { m = new Map(); for (const pin of K.symbolPins(sym)) if (!m.has(pin.number)) m.set(pin.number, pin.pos); pinCache.set(sym, m); }
+      return m.get(p.number) || [0, 0];
+    };
+    const A = { wireNo: new Array(P.nets.length).fill(null), wires: [], wiresByNet: new Map(), xref: new Map(), parts: new Map(), issues: [], pinPos: pinOf };
+
+    // ---- parts (one entry per reference, units merged). Sheet files outside the hierarchy are ignored, like KiCad.
+    for (const inst of P.instances) {
+      if (inst.orphan) continue;
+      inst.sheet.symbols.forEach((sym, si) => {
+        const ref = inst.refs[si].ref;
+        if (!sym.lib || sym.lib.power || ref.startsWith('#')) return;
+        let e = A.parts.get(ref);
+        if (!e) A.parts.set(ref, e = { ref, units: [], sym, inst, si, connector: isConnector(sym, ref) });
+        e.units.push({ inst, si, sym, unit: sym.lib.unitCount > 1 ? K.unitLetter(inst.refs[si].unit || sym.unit) : '', page: inst.page, zone: zoneOf(inst, sym.p) });
+      });
+    }
+    for (const e of A.parts.values()) if (e.units.length > 1 || (e.sym.lib && e.sym.lib.unitCount > 1)) {
+      e.units.sort((a, b) => ncmp(a.unit, b.unit));
+      for (const u of e.units) A.xref.set(u.inst.idx + ':' + u.si, e.units.filter((x) => x !== u));
+    }
+
+    // ---- wire numbers: a label's name when the net has one, otherwise <page><nn> by position
+    const shortCount = new Map();
+    for (const n of P.nets) if (n.named && !n.bus) shortCount.set(plain(n.shortName), (shortCount.get(plain(n.shortName)) || 0) + 1);
+    const used = new Set(shortCount.keys()), taken = new Set();
+    const byPage = new Map();
+    for (const n of P.nets) {
+      if (n.bus) continue;
+      if (n.named) {
+        let s = plain(n.shortName);
+        // The same local name on several sheets (a reused sheet): add the sheet number.
+        if (shortCount.get(s) > 1) {
+          const first = Array.from(n.inst.keys()).map((i) => P.instances[i]).sort((x, y) => x.order - y.order)[0];
+          s = first ? s + '.' + (first.order + 1) : plain(n.name);
+        }
+        let no = s, k = 2;
+        while (taken.has(no)) no = s + '·' + k++;
+        taken.add(no);
+        A.wireNo[n.id] = no;
+        continue;
+      }
+      if (n.pins.length < 2) continue;
+      let first = null;
+      for (const p of n.pins) {
+        const inst = P.instances[p.inst], pos = pinOf(p);
+        const k = [inst.order, Math.round(pos[1] / 2.54), pos[0]];
+        if (!first || k[0] < first.k[0] || (k[0] === first.k[0] && (k[1] < first.k[1] || (k[1] === first.k[1] && k[2] < first.k[2])))) first = { k, inst };
+      }
+      if (!byPage.has(first.inst)) byPage.set(first.inst, []);
+      byPage.get(first.inst).push({ n, k: first.k });
+    }
+    let widest = 0;
+    for (const list of byPage.values()) widest = Math.max(widest, list.length);
+    const mult = widest > 99 ? 1000 : 100;
+    for (const [inst, list] of byPage) {
+      list.sort((a, b) => a.k[1] - b.k[1] || a.k[2] - b.k[2]);
+      // Sheet number in page order (page labels can repeat or be text).
+      const page = inst.order + 1;
+      let seq = 1;
+      for (const it of list) {
+        let no;
+        do { no = String(page * mult + seq++); } while (used.has(no) || taken.has(no));
+        taken.add(no);
+        A.wireNo[it.n.id] = no;
+      }
+    }
+
+    // ---- from/to wire list: each net's pins joined by the shortest drawing distance
+    for (const n of P.nets) {
+      if (n.bus || n.pins.length < 2) continue;
+      const pins = n.pins.filter((p) => !P.instances[p.inst].orphan);
+      if (pins.length < 2) continue;
+      const inTree = new Uint8Array(pins.length), best = new Float64Array(pins.length).fill(Infinity), from = new Int32Array(pins.length).fill(-1);
+      const cost = (i, j) => {
+        const a = pins[i], b = pins[j];
+        if (a.ref === b.ref) return a.inst === b.inst ? 0.5 : 1;    // pins of one part (stacked pins, units)
+        const pa = pinOf(a), pb = pinOf(b);
+        const d = Math.abs(pa[0] - pb[0]) + Math.abs(pa[1] - pb[1]);
+        return a.inst === b.inst ? d : 1e6 + Math.abs(P.instances[a.inst].order - P.instances[b.inst].order) * 1e4 + d;
+      };
+      best[0] = 0;
+      const rows = [];
+      for (let it = 0; it < pins.length; it++) {
+        let u = -1;
+        for (let i = 0; i < pins.length; i++) if (!inTree[i] && (u < 0 || best[i] < best[u])) u = i;
+        inTree[u] = 1;
+        if (from[u] >= 0) {
+          let a = pins[from[u]], b = pins[u];
+          if (a.ref === b.ref && a.number === b.number) continue;
+          if (ncmp(a.ref, b.ref) > 0 || (a.ref === b.ref && ncmp(a.number, b.number) > 0)) [a, b] = [b, a];
+          rows.push({ net: n, no: A.wireNo[n.id], a, b, key: `W:${a.ref}.${a.number}~${b.ref}.${b.number}`, sameSheet: a.inst === b.inst });
+        }
+        for (let i = 0; i < pins.length; i++) if (!inTree[i]) { const c = cost(u, i); if (c < best[i]) { best[i] = c; from[i] = u; } }
+      }
+      A.wiresByNet.set(n.id, rows);
+      A.wires.push(...rows);
+    }
+    // Numbered wires first, in number order, then named ones alphabetically.
+    const numeric = (s) => /^\d+$/.test(s || '');
+    A.wires.sort((x, y) => (numeric(y.no) - numeric(x.no)) || ncmp(x.no || '', y.no || '') || ncmp(x.a.ref, y.a.ref) || ncmp(x.a.number, y.a.number));
+
+    A.issues = check(P, A);
+    return A;
+  }
+
+  // ---------------------------------------------------------------- design checks
+  function check(P, A) {
+    const out = [];
+    const add = (sev, code, msg, inst, p, extra) => out.push(Object.assign({ sev, code, msg, inst: inst.idx, page: inst.page, zone: zoneOf(inst, p), p }, extra || {}));
+    // References: unannotated, duplicated, missing value
+    const seen = new Map();
+    for (const inst of P.instances) {
+      if (inst.orphan) continue;
+      inst.sheet.symbols.forEach((sym, si) => {
+        const ref = inst.refs[si].ref;
+        if (!sym.lib || sym.lib.power || ref.startsWith('#')) return;
+        if (/\?$/.test(ref)) { add('warn', 'annotate', `${ref} is not annotated`, inst, sym.p, { ref, si }); return; }
+        const unit = inst.refs[si].unit || sym.unit || 1;
+        const k = ref + '#' + unit;
+        if (seen.has(k)) {
+          const o = seen.get(k);
+          add('error', 'dupref', `Duplicate reference ${ref}${sym.lib.unitCount > 1 ? K.unitLetter(unit) : ''} (also on page ${o.inst.page})`, inst, sym.p, { ref, si });
+        } else seen.set(k, { inst, si });
+        const v = prop(sym, 'Value');
+        if (!v || v === '~') add('warn', 'value', `${ref} has no value`, inst, sym.p, { ref, si });
+      });
+    }
+    // Pins: unconnected, and driver conflicts
+    const outTypes = new Set(['output', 'power_out']);
+    for (const inst of P.instances) {
+      if (inst.orphan) continue;
+      inst.sheet.symbols.forEach((sym, si) => {
+        const ref = inst.refs[si].ref;
+        if (!sym.lib || sym.lib.power || ref.startsWith('#')) return;
+        for (const pin of K.symbolPins(sym)) {
+          if (pin.type === 'no_connect') continue;
+          const net = P.nets[inst.netOf[pin.group]];
+          if (!net || net.noConnect || net.named || net.hasPower || net.pins.length > 1) continue;
+          const sev = pin.type === 'input' || pin.type === 'power_in' ? 'error' : 'warn';
+          add(sev, 'pin', `${ref} pin ${pin.number}${pin.name && pin.name !== '~' && pin.name !== pin.number ? ' (' + plain(pin.name) + ')' : ''} is not connected`, inst, pin.pos, { ref, si, pin: pin.number });
+        }
+      });
+    }
+    for (const net of P.nets) {
+      if (net.bus) continue;
+      const drivers = net.pins.filter((p) => outTypes.has(p.type));
+      const outs = drivers.filter((p) => p.type === 'output');
+      if (drivers.length > 1 && (outs.length > 1 || drivers.length > outs.length && outs.length)) {
+        const p = drivers[1], inst = P.instances[p.inst];
+        add('error', 'drive', `${drivers.slice(0, 3).map((d) => d.ref + '.' + d.number).join(', ')} all drive ${plain(net.name)}`, inst, A.pinPos(p), { net: net.id });
+      }
+      if (net.noConnect && net.pins.length > 1) {
+        const inst = P.instances[net.inst.keys().next().value];
+        const nc = inst.sheet.noConnects.find((x) => inst.netOf[x.group] === net.id);
+        add('warn', 'nc', `No-connect flag on ${plain(net.name)}, which is connected`, inst, nc ? nc.p : [0, 0], { net: net.id });
+      }
+    }
+    // Labels: nets that reach no pins, global labels used once
+    const globals = new Map();
+    for (const inst of P.instances) for (const l of inst.sheet.labels) {
+      if (l.kind === 'global' && l.netName) { if (!globals.has(l.netName)) globals.set(l.netName, []); globals.get(l.netName).push({ inst, l }); }
+    }
+    const reported = new Set();
+    for (const inst of P.instances) for (const l of inst.sheet.labels) {
+      if (l.kind === 'directive' || !l.text) continue;
+      const net = P.nets[inst.netOf[l.group]];
+      if (!net || net.bus || net.pins.length || net.hasPower || reported.has(net.id)) continue;
+      reported.add(net.id);
+      add('warn', 'label', `Label ${plain(l.netName || l.text)} connects to no pins`, inst, l.p, { net: net.id });
+    }
+    for (const [name, list] of globals) if (list.length === 1 && !reported.has(list[0].inst.netOf[list[0].l.group])) {
+      add('warn', 'global1', `Global label ${plain(name)} appears only once`, list[0].inst, list[0].l.p);
+    }
+    // Hierarchy: sheet pins and hierarchical labels must pair up
+    for (const C of P.instances) {
+      if (!C.parent) continue;
+      const hier = new Set(C.sheet.labels.filter((l) => l.kind === 'hier').map((l) => l.netName));
+      const pins = new Set(C.sheetSym.pins.map((p) => p.netName || plain(p.name)));
+      for (const sp of C.sheetSym.pins) if (!hier.has(sp.netName || plain(sp.name))) add('error', 'sheetpin', `Sheet pin ${plain(sp.name)} has no hierarchical label in ${C.name}`, C.parent, sp.p);
+      for (const l of C.sheet.labels) if (l.kind === 'hier' && !pins.has(l.netName)) add('error', 'hier', `Hierarchical label ${plain(l.netName)} has no sheet pin on ${C.name}`, C, l.p);
+    }
+    // Wires: ends that touch nothing
+    const doneSheets = new Set();
+    for (const inst of P.instances) {
+      const sh = inst.sheet;
+      if (doneSheets.has(sh)) continue;
+      doneSheets.add(sh);
+      const pts = new Map();
+      const put = (p) => { const k = K.key(p); pts.set(k, (pts.get(k) || 0) + 1); };
+      sh.symbols.forEach((s) => K.symbolPins(s).forEach((p) => put(p.pos)));
+      sh.wires.forEach((w) => { put(w.a); put(w.b); });
+      sh.labels.forEach((l) => put(l.p));
+      sh.sheets.forEach((s) => s.pins.forEach((p) => put(p.p)));
+      sh.junctions.forEach((j) => put(j.p));
+      sh.noConnects.forEach((n) => put(n.p));
+      sh.entries.forEach((e) => { put(e.a); put(e.b); });
+      for (const w of sh.wires) {
+        if (w.bus) continue;
+        for (const end of [w.a, w.b]) {
+          if ((pts.get(K.key(end)) || 0) > 1) continue;
+          if (sh.wires.some((o) => o !== w && K.onSegment(end, o.a, o.b))) continue;
+          // A labelled stub (label part-way along, free end beyond it) is a common drawing style.
+          if (sh.labels.some((l) => K.onSegment(l.p, w.a, w.b))) continue;
+          add('warn', 'dangling', 'Wire end is not connected', inst, end);
+        }
+      }
+    }
+    const rank = { error: 0, warn: 1 };
+    out.sort((a, b) => rank[a.sev] - rank[b.sev] || P.instances[a.inst].order - P.instances[b.inst].order || a.p[1] - b.p[1] || a.p[0] - b.p[0]);
+    return out;
+  }
+
+  // ---------------------------------------------------------------- reports
+  const pinLabel = (p) => p.name && p.name !== '~' && p.name !== p.number ? plain(p.name) : '';
+  const extraFields = /^(mpn|manufacturer|mfr|mfr\.? ?part|manufacturer[ _]part[ _]number|part ?number|supplier|supplier ?ref|stock ?code|description)$/i;
+  function bom(P, A) {
+    const groups = new Map();
+    const extras = new Set();
+    for (const e of A.parts.values()) {
+      const s = e.sym;
+      if (!s.inBom) continue;
+      const fields = {};
+      for (const f of s.props) if (extraFields.test(f.name) && f.value && f.value !== '~') { fields[f.name] = K.unescape(f.value); extras.add(f.name); }
+      const v = prop(s, 'Value'), fp = prop(s, 'Footprint');
+      const k = [v, fp, s.libId, s.dnp ? 'dnp' : '', JSON.stringify(fields)].join('|');
+      let g = groups.get(k);
+      if (!g) groups.set(k, g = { refs: [], value: v, footprint: fp, lib: s.libId, dnp: !!s.dnp, fields, description: prop(s, 'Description') || (s.lib && s.lib.props && s.lib.props.ki_description) || '' });
+      g.refs.push(e.ref);
+    }
+    const rows = Array.from(groups.values());
+    for (const g of rows) g.refs.sort(ncmp);
+    rows.sort((a, b) => ncmp(a.refs[0], b.refs[0]));
+    const cols = ['Qty', 'References', 'Value', 'Footprint', 'Description', ...Array.from(extras).filter((x) => !/^description$/i.test(x)), 'DNP'];
+    return { cols, rows: rows.map((g) => [g.refs.length, g.refs.join(', '), g.value, g.footprint.split(':').pop(), g.fields.Description || g.description, ...cols.slice(5, -1).map((c) => g.fields[c] || ''), g.dnp ? 'DNP' : '']) };
+  }
+  function wireList(P, A) {
+    const cols = ['Wire', 'From', 'From pin', 'To', 'To pin', 'Net', 'Pages'];
+    return { cols, rows: A.wires.map((w) => [w.no || '', w.a.fullRef || w.a.ref, w.a.number + (pinLabel(w.a) ? ' ' + pinLabel(w.a) : ''), w.b.fullRef || w.b.ref, w.b.number + (pinLabel(w.b) ? ' ' + pinLabel(w.b) : ''), plain(w.net.name), Array.from(new Set([P.instances[w.a.inst].page, P.instances[w.b.inst].page])).join(', ')]), keys: A.wires.map((w) => w.key) };
+  }
+  function connectors(P, A) {
+    const out = [];
+    for (const e of Array.from(A.parts.values()).filter((x) => x.connector).sort((a, b) => ncmp(a.ref, b.ref))) {
+      const rows = [];
+      for (const u of e.units) {
+        for (const pin of K.symbolPins(u.sym)) {
+          const net = P.nets[u.inst.netOf[pin.group]];
+          const others = net ? net.pins.filter((p) => !(p.ref === e.ref && p.number === pin.number)) : [];
+          const conn = net && others.length ? others.slice(0, 4).map((p) => p.ref + '.' + p.number).join(', ') + (others.length > 4 ? ` +${others.length - 4}` : '') : (net && net.noConnect ? 'no connect' : '');
+          rows.push({ pin: pin.number, name: pinLabel(pin), wire: net ? A.wireNo[net.id] || '' : '', net: net && (net.named || net.pins.length > 1) ? plain(net.name) : '', to: conn });
+        }
+      }
+      rows.sort((a, b) => ncmp(a.pin, b.pin));
+      out.push({ ref: e.ref, value: prop(e.sym, 'Value'), footprint: prop(e.sym, 'Footprint').split(':').pop(), page: e.units[0].page, rows });
+    }
+    return out;
+  }
+  // Wires grouped by the pair of parts they join: a loom (cable) list.
+  function looms(P, A) {
+    const m = new Map();
+    for (const w of A.wires) {
+      if (w.a.ref === w.b.ref) continue;
+      const k = w.a.ref + '~' + w.b.ref;
+      let g = m.get(k);
+      if (!g) {
+        const ea = A.parts.get(w.a.ref), eb = A.parts.get(w.b.ref);
+        m.set(k, g = { a: w.a.ref, b: w.b.ref, connectors: (ea && ea.connector ? 1 : 0) + (eb && eb.connector ? 1 : 0), wires: [] });
+      }
+      g.wires.push(w);
+    }
+    return Array.from(m.values()).sort((x, y) => y.connectors - x.connectors || y.wires.length - x.wires.length || ncmp(x.a, y.a));
+  }
+  function issuesTable(P, A) {
+    return { cols: ['Severity', 'Page', 'Zone', 'Problem'], rows: A.issues.map((i) => [i.sev === 'error' ? 'Error' : 'Warning', i.page, i.zone, i.msg]) };
+  }
+
+  // ---------------------------------------------------------------- comparison
+  function partSig(P, A) {
+    const m = new Map();
+    for (const e of A.parts.values()) {
+      const s = e.sym, f = {};
+      for (const p of s.props) if (p.name !== 'Reference' && !p.name.startsWith('ki_') && !p.name.startsWith('Sim.')) f[p.name] = K.unescape(p.value || '');
+      f['Symbol'] = s.libId;
+      if (s.dnp) f['DNP'] = 'yes';
+      m.set(e.ref, { fields: f, e });
+    }
+    return m;
+  }
+  function diff(P0, A0, P1, A1) {
+    const s0 = partSig(P0, A0), s1 = partSig(P1, A1);
+    const parts = [];
+    for (const [ref, b] of s1) {
+      const a = s0.get(ref);
+      if (!a) { parts.push({ kind: 'added', ref, value: b.fields.Value || '', e: b.e }); continue; }
+      const ch = [];
+      for (const k of new Set([...Object.keys(a.fields), ...Object.keys(b.fields)])) if ((a.fields[k] || '') !== (b.fields[k] || '')) ch.push({ field: k, from: a.fields[k] || '', to: b.fields[k] || '' });
+      if (ch.length) parts.push({ kind: 'changed', ref, value: b.fields.Value || '', changes: ch, e: b.e });
+    }
+    for (const [ref, a] of s0) if (!s1.has(ref)) parts.push({ kind: 'removed', ref, value: a.fields.Value || '', page: a.e.units[0].page });
+    parts.sort((x, y) => ncmp(x.ref, y.ref));
+    const live = (ref) => s0.has(ref) && s1.has(ref);
+    const pk = (p) => p.ref + '.' + p.number;
+    const net0 = new Map();
+    const real = (P) => (p) => !P.instances[p.inst].orphan;
+    for (const n of P0.nets) if (!n.bus) for (const p of n.pins) if (real(P0)(p)) net0.set(pk(p), n);
+    // Match every new net to the old net it shares most pins with; the best match is its heir.
+    const matches = [];
+    const heir = new Map();
+    for (const n of P1.nets) {
+      if (n.bus || !n.pins.length) continue;
+      const keys = n.pins.filter((p) => live(p.ref) && real(P1)(p)).map(pk);
+      if (!keys.length) continue;
+      const count = new Map();
+      for (const k of keys) { const o = net0.get(k); if (o) count.set(o, (count.get(o) || 0) + 1); }
+      let old = null, c = 0;
+      for (const [o, v] of count) if (v > c) { old = o; c = v; }
+      matches.push({ n, keys, old, c });
+      if (old && (!heir.has(old) || heir.get(old).c < c)) heir.set(old, { n, c });
+    }
+    const nets = [];
+    for (const { n, keys, old } of matches) {
+      if (!old) { if (keys.length > 1) nets.push({ kind: 'new', net: n.id, name: plain(n.name), added: keys, removed: [] }); continue; }
+      const oldKeys = old.pins.filter((p) => live(p.ref) && real(P0)(p)).map(pk);
+      const S1 = new Set(keys), S0 = new Set(oldKeys);
+      const added = keys.filter((k) => !S0.has(k));
+      if (heir.get(old).n !== n) {
+        // Part of an old net that was cut off from it
+        nets.push({ kind: 'split', net: n.id, name: plain(n.name), oldName: plain(old.name), added, removed: [], moved: keys.filter((k) => S0.has(k)) });
+        continue;
+      }
+      const removed = oldKeys.filter((k) => !S1.has(k));
+      if (added.length || removed.length) nets.push({ kind: 'changed', net: n.id, name: plain(n.name), oldName: plain(old.name), added, removed });
+      else if (plain(old.name) !== plain(n.name) && (old.named || n.named)) nets.push({ kind: 'renamed', net: n.id, name: plain(n.name), oldName: plain(old.name), added: [], removed: [] });
+    }
+    nets.sort((x, y) => ncmp(x.name, y.name));
+    return { parts, nets, count: parts.length + nets.length };
+  }
+
+  // ---------------------------------------------------------------- CSV
+  function csv(cols, rows) {
+    const q = (v) => { const s = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    return [cols, ...rows].map((r) => r.map(q).join(',')).join('\r\n') + '\r\n';
+  }
+
+  root.Loom = { analyze, check, zoneOf, isConnector, bom, wireList, connectors, looms, issuesTable, diff, csv };
+  if (typeof module !== 'undefined') module.exports = root.Loom;
+})(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -120,6 +120,40 @@
       const pr = await send(token, 'POST', `/repos/${enc(full)}/pulls`, { title: opts.title, head: opts.branch, base: opts.base, body: opts.body || '' }, 'the pull request');
       return { number: pr.number, url: pr.html_url, existed: false };
     },
+    async user(token) {
+      return json(token, '/user', 'your GitHub account');
+    },
+    /** A small text file on a branch: {text, sha} or null if the branch or file doesn't exist. */
+    async readFile(token, full, branch, path) {
+      try {
+        const f = await json(token, `/repos/${enc(full)}/contents/${enc(path)}?ref=${encodeURIComponent(branch)}`, path);
+        const bin = atob((f.content || '').replace(/\s/g, ''));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return { text: new TextDecoder().decode(bytes), sha: f.sha };
+      } catch (e) { if (e.status === 404) return null; throw e; }
+    },
+    /** Write one file on a branch. Creates the branch with no history (an orphan) if it doesn't exist. Returns the new blob sha. */
+    async writeFile(token, full, branch, path, text, sha, message) {
+      const bytes = new TextEncoder().encode(text);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      const body = { message, content: btoa(bin), branch };
+      if (sha) body.sha = sha;
+      try {
+        const r = await send(token, 'PUT', `/repos/${enc(full)}/contents/${enc(path)}`, body, path);
+        return r.content.sha;
+      } catch (e) {
+        if (sha || (e.status !== 404 && e.status !== 422)) throw e;
+        let exists = true;
+        try { await json(token, `/repos/${enc(full)}/git/ref/heads/${enc(branch)}`, 'the branch ' + branch); } catch (e2) { if (e2.status === 404) exists = false; else throw e2; }
+        if (exists) throw e;
+        const tree = await send(token, 'POST', `/repos/${enc(full)}/git/trees`, { tree: [{ path, mode: '100644', type: 'blob', content: text }] }, 'the new file tree');
+        const commit = await send(token, 'POST', `/repos/${enc(full)}/git/commits`, { message, tree: tree.sha, parents: [] }, 'the commit');
+        await send(token, 'POST', `/repos/${enc(full)}/git/refs`, { ref: 'refs/heads/' + branch, sha: commit.sha }, 'the branch');
+        return gitBlobSha(text);
+      }
+    },
     async history(token, full, ref, path, n) {
       const q = `/repos/${enc(full)}/commits?sha=${encodeURIComponent(ref)}&per_page=${n || 20}` + (path ? '&path=' + encodeURIComponent(path) : '');
       const list = await json(token, q, 'the commit history');

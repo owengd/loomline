@@ -490,6 +490,9 @@
       this.dimOthers = false;
       this.showGrid = true;
       this.flash = null;
+      // Loomline annotations: { groupColor: Map(g -> css), symMarks: Map(si -> {color, dash}),
+      // tags: [{x, y, text, color, size, ha, va}], markers: [{x, y, sev}] }
+      this.annot = null;
       this.pointers = new Map();
       this._raf = 0;
       this._bindInput();
@@ -512,6 +515,14 @@
       const head = im.data.slice(0, 8);
       const mime = head.startsWith('/9j') ? 'image/jpeg' : 'image/png';
       img.src = 'data:' + mime + ';base64,' + im.data;
+    }
+    setAnnot(a) { this.annot = a; this.redraw(); }
+    /** Annotation marker under a screen point (css px), or null. */
+    markerAt(x, y, tol) {
+      const a = this.annot; if (!a || !a.markers) return null;
+      let best = null, bd = tol || 18;
+      for (const m of a.markers) { const d = Math.hypot(m.x * this.scale + this.ox - x, m.y * this.scale + this.oy - y); if (d < bd) { bd = d; best = m; } }
+      return best;
     }
     setHighlight(groups, symIdx, sheetIdx) {
       this.hlGroups = groups && groups.size ? groups : null;
@@ -822,14 +833,31 @@
         const s = S.sheets.find((x) => x.idx === selSheet);
         if (s) { ctx.globalAlpha = 1; ctx.fillStyle = P.selFill; const b = s.bb; ctx.fillRect(b[0], b[1], b[2] - b[0], b[3] - b[1]); }
       }
+      const an = this.annot;
+      const gcol = an && an.groupColor && an.groupColor.size ? an.groupColor : null;
+      if (an && an.symMarks && an.symMarks.size) {
+        ctx.globalAlpha = 1;
+        for (const sy of S.syms) {
+          const mk = an.symMarks.get(sy.si); if (!mk) continue;
+          const b = sy.body || sy.bb; if (!vis(b)) continue;
+          const pd = 1.2;
+          ctx.fillStyle = mk.fill || 'transparent';
+          if (mk.fill) ctx.fillRect(b[0] - pd, b[1] - pd, b[2] - b[0] + 2 * pd, b[3] - b[1] + 2 * pd);
+          ctx.strokeStyle = mk.color; ctx.lineWidth = Math.max(0.3, 2.2 * px);
+          ctx.setLineDash(mk.dash ? [5 * px, 3 * px] : []);
+          ctx.strokeRect(b[0] - pd, b[1] - pd, b[2] - b[0] + 2 * pd, b[3] - b[1] + 2 * pd);
+        }
+        ctx.setLineDash([]);
+      }
       const later = [];
       // strokes
       for (const s of S.strokes) {
         if (!vis(s.bb)) continue;
         if (anyHl && isHl(s)) { later.push(s); continue; }
         ctx.globalAlpha = s.role === 'frame' ? Math.min(1, dim + 0.3) : dim;
-        ctx.strokeStyle = col(s);
-        ctx.lineWidth = Math.max(s.w, (s.role === 'bus' ? 2 : 1.1) * px);
+        const gc = gcol && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? gcol.get(s.g) : null;
+        ctx.strokeStyle = gc || col(s);
+        ctx.lineWidth = gc ? Math.max(s.w * 1.6, 2 * px) : Math.max(s.w, (s.role === 'bus' ? 2 : 1.1) * px);
         this._dash(s.dash, px);
         if (isPrev(s)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); this._path(s.p, false); ctx.stroke(); ctx.restore(); continue; }
         this._path(s.p, false);
@@ -841,7 +869,8 @@
         if (anyHl && isHl(c)) { later.push(c); continue; }
         ctx.globalAlpha = dim;
         if (isPrev(c)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); this._circle(c, P, px, false); ctx.restore(); continue; }
-        this._circle(c, P, px, false);
+        const gc = gcol && c.g >= 0 && c.kind === 'junction' ? gcol.get(c.g) : null;
+        this._circle(c, gc ? Object.assign({}, P, { hl: gc }) : P, px, !!gc);
       }
       // text
       const texts = [];
@@ -875,6 +904,46 @@
         ctx.setLineDash([]);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         for (const o of later) if (o.runs) this._text(o, o.g >= 0 && hl && hl.has(o.g) ? P.hl : col(o), true, isPrev(o) ? pv.d : null);
+      }
+      // annotation tags (wire numbers, cross-references) and check markers, in screen space
+      if (an && an.tags && an.tags.length) {
+        ctx.globalAlpha = 1;
+        for (const t of an.tags) {
+          const fpx = (t.size || 1) * EM * sc;
+          if (fpx < 6.5) continue;
+          const sx = t.x * sc + this.ox, sy = t.y * sc + this.oy;
+          if (sx < -200 || sy < -50 || sx > this.cssW + 200 || sy > this.cssH + 50) continue;
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.font = '600 ' + fpx.toFixed(1) + 'px ' + FONT;
+          const w = ctx.measureText(t.text).width, padX = fpx * 0.3, h = fpx * 1.25;
+          let x0 = t.ha === 'center' ? sx - w / 2 - padX : t.ha === 'right' ? sx - w - 2 * padX : sx;
+          let y0 = t.va === 'top' ? sy : t.va === 'center' ? sy - h / 2 : sy - h;
+          ctx.fillStyle = this.dark ? 'rgba(29,32,35,0.88)' : 'rgba(251,250,246,0.9)';
+          ctx.strokeStyle = t.color; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.rect(x0, y0, w + 2 * padX, h); ctx.fill(); if (t.box !== false) ctx.stroke();
+          ctx.fillStyle = t.color; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+          ctx.fillText(t.text, x0 + padX, y0 + h / 2 + fpx * 0.04);
+        }
+        ctx.textBaseline = 'alphabetic';
+      }
+      if (an && an.markers && an.markers.length) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.globalAlpha = 1;
+        for (const m of an.markers) {
+          const sx = m.x * sc + this.ox, sy = m.y * sc + this.oy;
+          if (sx < -20 || sy < -20 || sx > this.cssW + 20 || sy > this.cssH + 20) continue;
+          const r = 9;
+          ctx.fillStyle = m.sev === 'error' ? '#d23a2a' : '#d99a00';
+          ctx.strokeStyle = this.dark ? '#1d2023' : '#ffffff'; ctx.lineWidth = 2;
+          ctx.beginPath();
+          if (m.sev === 'error') ctx.arc(sx, sy, r, 0, Math.PI * 2);
+          else { ctx.moveTo(sx, sy - r - 1); ctx.lineTo(sx + r + 1, sy + r - 1); ctx.lineTo(sx - r - 1, sy + r - 1); ctx.closePath(); }
+          ctx.fill(); ctx.stroke();
+          ctx.fillStyle = '#fff'; ctx.font = '700 12px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText('!', sx, sy + (m.sev === 'error' ? 0.5 : 2));
+          if (m.current) { ctx.strokeStyle = m.sev === 'error' ? '#d23a2a' : '#d99a00'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(sx, sy, r + 6, 0, Math.PI * 2); ctx.stroke(); }
+        }
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
       }
       // editing overlay: wire being drawn, snap target
       const ov = this.overlay;
