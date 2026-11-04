@@ -167,6 +167,7 @@ CSV, or printed / saved as a PDF:
 | Wire list | Every wire: number, from part and pin, to part and pin, net, pages |
 | Loom list | The same wires grouped by the two parts they join, connectors first |
 | Connector pin-outs | For each connector or terminal strip: pin, name, wire, net and where it goes |
+| PLC I/O list | Every I/O module and each channel: terminal points, signal, wire number, what it connects to, used or spare, and the E-bus budget |
 | Bill of materials | Parts grouped by value and footprint, plus MPN / manufacturer fields if present |
 | Design check | Every problem the check found, with page and zone |
 | Install record | Fitted and tested status for every wire and part, with who and when |
@@ -174,6 +175,24 @@ CSV, or printed / saved as a PDF:
 The wire list turns each net into individual wires by joining its pins in the shortest way the
 drawing allows (pins on the same sheet first). That matches how a loom is usually made up, but
 check it against the drawing for nets where the order of terminations matters.
+
+### Beckhoff I/O
+
+**Add a part → Beckhoff I/O** has 53 Beckhoff EtherCAT parts: the EK1100 coupler, power and
+E-bus supply terminals (EL9100, EL9110, EL9400, EL9410), and digital in and out, relay, analog
+in and out, RTD and load-cell terminals (EL1002…EL1889, EL2002…EL2809, EL2622, EL3001…EL3124,
+EL3202, EL3356, EL4002…EL4038). Each is a box with one pin per terminal point, numbered as on
+the terminal itself and named by channel (DI3, AO1, AI2+, R1+, UD+…), with order code,
+signal type and channel count in its fields. Terminal point assignments were taken from
+Beckhoff's own documentation; if you use a variant (-0010 and so on), check its datasheet.
+
+The **PLC I/O list** report lists every module and channel, marks channels as used or spare,
+and adds up the E-bus load against what the couplers and EL9410s supply. So far only some
+terminals carry an E-bus figure; the report says how many don't. Spare channels on I/O
+modules aren't flagged by the design check.
+
+The same symbols are in `library/loomline/Loomline_Beckhoff.kicad_sym` for KiCad on the
+desktop: add it in KiCad under Preferences → Manage Symbol Libraries.
 
 ## 6. Design check
 
@@ -240,7 +259,7 @@ it comes from and its licence.
 ## Updating the app
 
 After changing any file, bump `CACHE` in `sw.js` and the `?v=` numbers on the CSS and script
-links in `index.html` (for example `1.5.1`), so installed copies pick up the new version straight away.
+links in `index.html` (for example `1.6.1`), so installed copies pick up the new version straight away.
 
 ## Files
 
@@ -254,6 +273,7 @@ js/storage.js         IndexedDB cache for downloaded files
 js/zip.js             ZIP reader for "Download ZIP" archives, and writer for edited files
 library/              part library (KiCad symbols as gzipped JSON, plus a search index); see library/README.md
 tools/build-kicad-library.js  rebuilds library/ from a checkout of KiCad's symbol library
+tools/build-loomline-library.js  builds Loomline's own libraries (Beckhoff I/O so far) from tools/*-data.js
 js/loom.js            wire numbers, wire list, cross-references, design check, reports, revision compare
 js/edit.js            schematic edits as text splices: fields, move, rotate, wires, labels, copy
 js/app.js             UI: projects, sheets, inspector, search, deep links, editing, saving
