@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="fonts/ibm-plex-sans-condensed-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/ibm-plex-mono-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=1.4.0">
+<link rel="stylesheet" href="css/app.css?v=1.5.0">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -49,6 +49,14 @@
     <symbol id="i-print" viewBox="0 0 24 24"><path d="M7 8V3.5h10V8M7 17H4.5V9.5a1.5 1.5 0 0 1 1.5-1.5h12a1.5 1.5 0 0 1 1.5 1.5V17H17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M7 13.5h10v7H7Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
     <symbol id="i-number" viewBox="0 0 24 24"><path d="M9.5 3.5 7.5 20.5M16.5 3.5l-2 17M4 8.5h16M3.5 15.5h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-sync" viewBox="0 0 24 24"><path d="M19.5 9A8 8 0 0 0 5 7.5M4.5 15A8 8 0 0 0 19 16.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M5 3.5v4h4M19 20.5v-4h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-draw" viewBox="0 0 24 24"><rect x="3.5" y="12" width="8.5" height="8.5" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16.5" cy="7.5" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="m14 20.5 6.5-6.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-line" viewBox="0 0 24 24"><path d="M4 18 10 8l5 7 5-9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+    <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+    <symbol id="i-arc" viewBox="0 0 24 24"><path d="M4.5 17a8 8 0 0 1 15 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6.5V5h14v1.5M12 5v14M9 19h6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-style" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16" stroke="currentColor" stroke-width="1.6"/><path d="M4 17h16" stroke="currentColor" stroke-width="3.4" stroke-dasharray="3 2"/></symbol>
+    <symbol id="i-part" viewBox="0 0 24 24"><rect x="7" y="5" width="10" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 9h4M3 15h4M17 9h4M17 15h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 9v6M9 12h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-flip" viewBox="0 0 24 24"><path d="M5 19V5h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M5 19h14V5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
     <symbol id="i-nc" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
@@ -98,6 +106,7 @@
 
   <main class="stage" id="stage">
     <canvas id="canvas" aria-label="Schematic. Tap a wire to trace its net, tap a part to see its details."></canvas>
+    <div class="drawbar" id="drawBar" hidden></div>
     <div class="banner" id="banner" hidden><span class="msg" id="bannerMsg"></span><span class="actions" id="bannerActions"></span></div>
     <button class="scale" id="scaleChip" title="Grid dots on or off"><span class="ruler" id="scaleRuler"></span><span id="scaleText">1.27 mm</span></button>
 
@@ -127,9 +136,10 @@
     <button class="rail-btn mode" data-mode="select" aria-pressed="true"><svg><use href="#i-hand"/></svg><span>SELECT</span></button>
     <button class="rail-btn mode" data-mode="wire"><svg><use href="#i-wire"/></svg><span>WIRE</span></button>
     <button class="rail-btn mode" data-mode="label"><svg><use href="#i-tag"/></svg><span>LABEL</span></button>
+    <button class="rail-btn mode" data-mode="draw"><svg><use href="#i-draw"/></svg><span>DRAW</span></button>
     <button class="rail-btn wide-only" data-tab="sheets"><svg><use href="#i-hier"/></svg><span>SHEETS</span></button>
     <button class="rail-btn" data-tab="nets"><svg><use href="#i-net"/></svg><span>NETS</span></button>
-    <button class="rail-btn" data-tab="parts"><svg><use href="#i-chip"/></svg><span>PARTS</span></button>
+    <button class="rail-btn wide-only" data-tab="parts"><svg><use href="#i-chip"/></svg><span>PARTS</span></button>
     <button class="rail-btn wide-only" data-tab="info"><svg><use href="#i-info"/></svg><span>INFO</span></button>
     <button class="rail-btn" data-tab="check"><svg><use href="#i-alert"/></svg><span>CHECK</span><b class="badge" id="checkBadge" hidden>0</b></button>
     <button class="rail-btn" data-tab="install"><svg><use href="#i-install"/></svg><span>INSTALL</span></button>
@@ -165,13 +175,13 @@
 
 <input type="file" id="fileInput" multiple hidden>
 
-<script src="js/kicad-core.js?v=1.4.0"></script>
-<script src="js/render.js?v=1.4.0"></script>
-<script src="js/storage.js?v=1.4.0"></script>
-<script src="js/zip.js?v=1.4.0"></script>
-<script src="js/edit.js?v=1.4.0"></script>
-<script src="js/loom.js?v=1.4.0"></script>
-<script src="js/github.js?v=1.4.0"></script>
-<script src="js/app.js?v=1.4.0"></script>
+<script src="js/kicad-core.js?v=1.5.0"></script>
+<script src="js/render.js?v=1.5.0"></script>
+<script src="js/storage.js?v=1.5.0"></script>
+<script src="js/zip.js?v=1.5.0"></script>
+<script src="js/edit.js?v=1.5.0"></script>
+<script src="js/loom.js?v=1.5.0"></script>
+<script src="js/github.js?v=1.5.0"></script>
+<script src="js/app.js?v=1.5.0"></script>
 </body>
 </html>

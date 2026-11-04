@@ -206,6 +206,29 @@ branch history shows who fitted and tested what, and when. Two tablets ticking a
 are merged item by item (the later tick wins). Sharing needs a token with write access; with a
 read-only token the log stays on the device.
 
+## 9. Drawing and adding parts
+
+**DRAW** in the rail opens a palette across the top of the drawing:
+
+| Tool | How |
+| --- | --- |
+| PART | Opens **Add a part**: search 10,000 symbols from KiCad's library (relays, switches, fuses, lamps, connectors, power symbols, sensors…), or browse by category. Tap one to preview it, then **PLACE** and tap the drawing. Tap again to place another; **ROTATE** turns the last one |
+| LINE | Tap each point, then **FINISH** |
+| RECT | Tap two opposite corners |
+| CIRCLE | Tap the centre, then a point on the edge |
+| ARC | Tap the start, a point it passes through, and the end |
+| TEXT | Tap where it goes and type it; choose size, direction, bold or italic |
+
+**STYLE** sets line width, dashes, fill and colour for new shapes. In SELECT mode, tap a shape's
+outline or a text to select it: **STYLE** or **EDIT**, **MOVE** and **DELETE** work on it.
+
+Everything snaps to the 1.27 mm grid. A placed part gets the next free reference (K3, SW12…),
+and its symbol is copied into the schematic file, the same way KiCad does it, so the file
+opens in KiCad with nothing else to install. For a part with several units (a dual op-amp, a
+relay with separate coil and contacts), select it and tap **ADD UNIT** to place the next one.
+The part library is downloaded once and then works offline. See `library/README.md` for where
+it comes from and its licence.
+
 ## Limits
 
 - KiCad 5 `.sch` files aren't supported. Open and save them once in KiCad 6 or newer.
@@ -217,7 +240,7 @@ read-only token the log stays on the device.
 ## Updating the app
 
 After changing any file, bump `CACHE` in `sw.js` and the `?v=` numbers on the CSS and script
-links in `index.html` (for example `1.4.1`), so installed copies pick up the new version straight away.
+links in `index.html` (for example `1.5.1`), so installed copies pick up the new version straight away.
 
 ## Files
 
@@ -229,6 +252,8 @@ js/render.js          canvas renderer, gestures, hit-testing
 js/github.js          GitHub REST access and project discovery
 js/storage.js         IndexedDB cache for downloaded files
 js/zip.js             ZIP reader for "Download ZIP" archives, and writer for edited files
+library/              part library (KiCad symbols as gzipped JSON, plus a search index); see library/README.md
+tools/build-kicad-library.js  rebuilds library/ from a checkout of KiCad's symbol library
 js/loom.js            wire numbers, wire list, cross-references, design check, reports, revision compare
 js/edit.js            schematic edits as text splices: fields, move, rotate, wires, labels, copy
 js/app.js             UI: projects, sheets, inspector, search, deep links, editing, saving
@@ -236,6 +261,7 @@ sw.js                 offline app shell
 samples/              KiCad's complex_hierarchy demo (GPL-3.0, see NOTICE.md); safe to delete
 test/compare-pcb.js   node test: compares schematic nets with the pad nets in .kicad_pcb files
 test/edit-test.js     node test: applies edits, re-parses and checks connectivity
+test/library-test.js  node test: places library parts and draws shapes, then re-parses
 test/loom-test.js     node test: wire numbers, wire list, checks and self-compare on every demo project
 fonts/                IBM Plex (SIL Open Font License, see OFL-LICENSE.txt)
 ```
