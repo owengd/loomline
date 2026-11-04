@@ -24,7 +24,7 @@ const entry = (lib, name) => {
 };
 const apply = (r) => { files = files.map((f) => (f.path === r.path ? { path: f.path, text: r.text } : f)); };
 let P = K.buildProject(files);
-const cases = [['Relay', 'G5V-1'], ['Switch', 'SW_Push'], ['Device', 'Fuse'], ['Connector', 'Conn_01x04_Pin'], ['Relay', 'FINDER-40.52'], ['power', '+24V'], ['Device', 'Lamp'], ['Regulator_Linear', 'LM7805_TO220'], ['Loomline_Beckhoff', 'EK1100'], ['Loomline_Beckhoff', 'EL1008'], ['Loomline_Beckhoff', 'EL3356'], ['Loomline_Beckhoff', 'EL2809']];
+const cases = [['Relay', 'G5V-1'], ['Switch', 'SW_Push'], ['Device', 'Fuse'], ['Connector', 'Conn_01x04_Pin'], ['Relay', 'FINDER-40.52'], ['power', '+24V'], ['Device', 'Lamp'], ['Regulator_Linear', 'LM7805_TO220'], ['Loomline_Beckhoff', 'EK1100'], ['Loomline_Beckhoff', 'EL1008'], ['Loomline_Beckhoff', 'EL3356'], ['Loomline_Beckhoff', 'EL2809'], ['Loomline_Beckhoff', 'C6017-0030']];
 let x = 30;
 for (const [lib, name] of cases) {
   const inst = P.root, sh = inst.sheet;
