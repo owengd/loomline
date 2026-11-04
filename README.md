@@ -89,7 +89,8 @@ showing what's selected.
 | To | Do this |
 | --- | --- |
 | Trace a net | Tap a wire, pin end, label or junction. It's drawn bold orange on every sheet; nothing else fades |
-| Follow it a connector at a time | **STEP** in the status bar (or Layers → *Trace in steps*) lights the net only from the wire you tapped to the first connector or terminal pins, with the rest of the net in pale orange and the connectors it stops at boxed. **CONTINUE** carries on through them to the next connectors, **BACK** goes back a step, **ALL** shows the whole net again. Off-page jumps (power symbols, global labels) are a step too. Step mode stays on for later taps until you press **ALL** |
+| Follow it a section at a time | **STEP** in the status bar (or Layers → *Trace in steps*) lights only the wire you tapped, up to the first junction or pin, with the rest of the net in pale orange and the parts it stops at boxed. **CONTINUE** adds the next sections, **BACK** goes back a step, **ALL** shows the whole net again. Layers → *Steps stop only at connectors* makes each step run to the next connectors instead. Off-page jumps (power symbols, global labels) are a step too. Step mode stays on for later taps until you press **ALL** |
+| Say what a cable is | Tap a wire, then **CABLE**: type, product code, core size, colour / marking and length for that section (between junctions and pins). Product codes and types already used are offered as you type, and picking a known product code fills in its type and size. The details are saved in the schematic as a KiCad net class flag on the wire (fields Cable_Type, Cable_PN, Cable_Size, Cable_Colour, Cable_Length; only the type shows on the drawing), so they go through the usual branch and pull request and KiCad keeps them. Tapping a cabled wire shows its details in the status bar; **Reports → Cable schedule** lists every section and totals length by cable |
 | Follow it to another sheet | **NEXT SHEET** in the status bar steps through each sheet the net reaches |
 | See every pin on the net | **NETS** in the rail (or tap the status bar) opens the Net Navigator |
 | Inspect a part | Tap the part body or its reference, then **INFO** for fields and pins |
@@ -168,6 +169,7 @@ CSV, or printed / saved as a PDF:
 | Wire list | Every wire: number, from part and pin, to part and pin, net, pages |
 | Loom list | The same wires grouped by the two parts they join, connectors first |
 | Connector pin-outs | For each connector or terminal strip: pin, name, wire, net and where it goes |
+| Cable schedule | Every cable section with type, product code, size, colour, length and both ends, plus total length per cable for ordering |
 | PLC I/O list | Every I/O module and each channel: terminal points, signal, wire number, what it connects to, used or spare, and the E-bus budget |
 | Bill of materials | Parts grouped by value and footprint, plus MPN / manufacturer fields if present |
 | Design check | Every problem the check found, with page and zone |
