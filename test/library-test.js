@@ -14,8 +14,8 @@ const libs = {};
 const entry = (lib, name) => {
   if (!libs[lib]) {
     const idx = JSON.parse(fs.readFileSync(path.join(libDir, 'index.json'), 'utf8'));
-    const file = idx.libs.find((l) => l.name === lib).file;
-    const raw = fs.readFileSync(path.join(libDir, 'kicad', file));
+    const meta = idx.libs.find((l) => l.name === lib);
+    const raw = fs.readFileSync(path.join(libDir, meta.dir || 'kicad/', meta.file));
     libs[lib] = JSON.parse((raw[0] === 0x1f ? zlib.gunzipSync(raw) : raw).toString('utf8')).libs[lib].symbols;
   }
   const text = libs[lib][name];
@@ -24,7 +24,7 @@ const entry = (lib, name) => {
 };
 const apply = (r) => { files = files.map((f) => (f.path === r.path ? { path: f.path, text: r.text } : f)); };
 let P = K.buildProject(files);
-const cases = [['Relay', 'G5V-1'], ['Switch', 'SW_Push'], ['Device', 'Fuse'], ['Connector', 'Conn_01x04_Pin'], ['Relay', 'FINDER-40.52'], ['power', '+24V'], ['Device', 'Lamp'], ['Regulator_Linear', 'LM7805_TO220']];
+const cases = [['Relay', 'G5V-1'], ['Switch', 'SW_Push'], ['Device', 'Fuse'], ['Connector', 'Conn_01x04_Pin'], ['Relay', 'FINDER-40.52'], ['power', '+24V'], ['Device', 'Lamp'], ['Regulator_Linear', 'LM7805_TO220'], ['Loomline_Beckhoff', 'EK1100'], ['Loomline_Beckhoff', 'EL1008'], ['Loomline_Beckhoff', 'EL3356'], ['Loomline_Beckhoff', 'EL2809']];
 let x = 30;
 for (const [lib, name] of cases) {
   const inst = P.root, sh = inst.sheet;
