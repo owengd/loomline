@@ -735,28 +735,33 @@
   // fields Cable_Type, Cable_PN, Cable_Size, Cable_Colour and Cable_Length. KiCad keeps them, shows
   // the visible one, and lists them in the label's properties. No Netclass field is set.
   const CABLE_FIELDS = ['Cable_Type', 'Cable_PN', 'Cable_Size', 'Cable_Colour', 'Cable_Length'];
-  function cableFieldLines(name, value, at, hide, v8) {
+  function cableFieldLines(name, value, at, angle, hide, v8) {
     const eff = v8 ? ['\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t\t(italic yes)', '\t\t)', '\t\t(justify left)'].concat(hide ? ['\t\t(hide yes)'] : []).concat(['\t)'])
       : [`\t(effects (font (size 1.27 1.27) italic) (justify left)${hide ? ' hide' : ''})`];
-    return [`(property ${qstr(name)} ${qstr(value)}`, `\t(at ${fnum(at[0])} ${fnum(at[1])} 0)`].concat(eff, [')']);
+    return [`(property ${qstr(name)} ${qstr(value)}`, `\t(at ${fnum(at[0])} ${fnum(at[1])} ${angle})`].concat(eff, [')']);
+  }
+  // The flag is a short stem with a dot beside the wire, and the visible text runs along the wire
+  // from the dot: above a horizontal wire, or to the left of a vertical one reading upwards.
+  function cableFlagLines(p, vertical, fields, v8, id, extra) {
+    const L = 1.27;
+    const angle = vertical ? 90 : 0;
+    const at = vertical ? [p[0] - L, p[1] - 0.762] : [p[0] + 0.762, p[1] - L];
+    const shown = fields.Cable_Type ? 'Cable_Type' : CABLE_FIELDS.find((f) => fields[f]);
+    const lines = ['(netclass_flag ""', `\t(length ${fnum(L)})`, '\t(shape dot)', `\t(at ${fnum(p[0])} ${fnum(p[1])} ${angle})`];
+    if (v8) lines.push('\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', '\t\t(justify left bottom)', '\t)');
+    else lines.push('\t(effects (font (size 1.27 1.27)) (justify left bottom))');
+    lines.push(`\t(uuid ${qstr(id || uuid())})`);
+    for (const f of CABLE_FIELDS) if (fields[f]) for (const l of cableFieldLines(f, fields[f], at, angle, f !== shown, v8)) lines.push('\t' + l);
+    for (const x of extra || []) lines.push('\t' + x);
+    lines.push(')');
+    return lines;
   }
   /** Adds a cable flag at p (on wire w, which is split there if p is inside it). */
   function addCableFlag(sheet, w, p, fields) {
     const v8 = !sheet.version || sheet.version >= 20231120;
     const vertical = Math.abs(w.a[0] - w.b[0]) < 1e-3;
-    const L = 2.54;
-    const angle = vertical ? 270 : 0;                       // flag to the right of a vertical wire, above a horizontal one
-    const head = vertical ? [p[0] + L, p[1]] : [p[0], p[1] - L];
-    const at = [head[0] + 1.016, head[1]];
-    const shown = fields.Cable_Type ? 'Cable_Type' : CABLE_FIELDS.find((f) => fields[f]);
-    const lines = ['(netclass_flag ""', `\t(length ${fnum(L)})`, '\t(shape round)', `\t(at ${fnum(p[0])} ${fnum(p[1])} ${angle})`];
-    if (v8) lines.push('\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', '\t\t' + justifyFor('local', vertical ? 'bottom' : 'right'), '\t)');
-    else lines.push(`\t(effects (font (size 1.27 1.27)) ${justifyFor('local', vertical ? 'bottom' : 'right')})`);
-    lines.push(`\t(uuid ${qstr(uuid())})`);
-    for (const f of CABLE_FIELDS) if (fields[f]) for (const l of cableFieldLines(f, fields[f], at, f !== shown, v8)) lines.push('\t' + l);
-    lines.push(')');
     const sp = new Splicer(sheet.text);
-    const out = [lines];
+    const out = [cableFlagLines(p, vertical, fields, v8)];
     if (interior(p, w)) {
       const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
       setXY(sp, xys[w.seg + 1], p[0], p[1]);
@@ -765,28 +770,16 @@
     sp.insert(insertPoint(sheet), out.map((l) => block(l, '\t')).join(''));
     return { path: sheet.path, text: sp.apply() };
   }
-  /** Sets the cable fields of an existing flag: changed values are replaced, empty ones removed, new ones added hidden. */
+  /** Rewrites an existing cable flag with new values (and the in-line layout); other fields it has are kept. */
   function setCableFields(sheet, label, fields) {
     const v8 = !sheet.version || sheet.version >= 20231120;
-    const sp = new Splicer(sheet.text);
-    const have = new Map(label.props.map((p) => [p.name, p]));
-    const add = [];
-    for (const f of CABLE_FIELDS) {
-      const v = fields[f] || '', p = have.get(f);
-      if (p && !v) { const r = nodeRange(sheet.text, p.src); sp.replace(r[0], r[1], ''); }
-      else if (p && v !== p.value) setTok(sp, p.src, 2, qstr(v));
-      else if (!p && v) add.push(f);
-    }
-    if (add.length) {
-      const anyVisible = label.props.some((p) => CABLE_FIELDS.includes(p.name) && !p.fx.hide && (fields[p.name] || ''));
-      const ref = label.props.find((p) => CABLE_FIELDS.includes(p.name));
-      const at = ref ? ref.p : [label.p[0] + 1, label.p[1] - 2.54];
-      const anchor = label.props.length ? label.props[label.props.length - 1].src : K.find(label.src, 'uuid');
-      const ind = indentAt(sheet.text, anchor.s);
-      let out = '';
-      add.forEach((f, i) => { out += '\n' + cableFieldLines(f, fields[f], at, anyVisible || i > 0, v8).map((l) => ind + l).join('\n'); });
-      sp.insert(anchor.e, out);
-    }
+    const text = sheet.text;
+    const vertical = label.angle === 90 || label.angle === 270;
+    const extra = label.props.filter((p) => !CABLE_FIELDS.includes(p.name)).map((p) => text.slice(p.src.s, p.src.e).replace(/\n\s*/g, ' '));
+    const r = nodeRange(text, label.src);
+    const ind = indentAt(text, label.src.s);
+    const sp = new Splicer(text);
+    sp.replace(r[0], r[1], block(cableFlagLines(label.p, vertical, fields, v8, label.uuid, extra), ind));
     return { path: sheet.path, text: sp.apply() };
   }
 

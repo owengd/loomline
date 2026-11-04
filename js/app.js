@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.8.0';
+  const VERSION = '1.8.1';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -571,7 +571,10 @@
     });
     // Picking a known product code or type fills in what that cable already has.
     const fill = (key) => () => {
-      const k = known.find((x) => x[key] && x[key] === inputs[key].value.trim()); if (!k) return;
+      const v = inputs[key].value.trim();
+      const m = known.filter((x) => x[key] && x[key] === v);
+      if (m.length !== 1) return;   // a type used with several product codes doesn't pick one for you
+      const k = m[0];
       for (const f of ['Cable_Type', 'Cable_PN', 'Cable_Size']) if (!inputs[f].value.trim() && k[f]) inputs[f].value = k[f];
     };
     inputs.Cable_PN.addEventListener('change', fill('Cable_PN'));
