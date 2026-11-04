@@ -14,13 +14,13 @@ for (const net of nets) {
   const inst = P.instances[ii];
   const w = inst.sheet.wires.find((x) => groups.includes(x.group));
   if (!w) continue;
-  const tr = L.traceSteps(P, inst, w.node);
+  const tr = L.traceSteps(P, inst, w.node, { by: process.env.BY || "section" });
   let got = 0, want = 0;
   for (const s of tr.steps) for (const set of s.items.values()) got += set.size;
   for (const [i, gs] of net.inst) for (const g of gs) want += P.instances[i].sheet.groups[g].items.length;
   const ok = got === want;
   if (!ok) fail++;
-  console.log(`${ok ? 'PASS' : 'FAIL'} ${net.name}: ${tr.steps.length} steps, ${got}/${want} items, stops ${tr.steps.map((s) => s.stops.map((x) => x.kind === 'conn' ? x.ref + '.' + x.number : '>' + x.name).join(',')).join(' | ')}`);
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${net.name}: ${tr.steps.length} steps, ${got}/${want} items, stops ${tr.steps.map((s) => s.stops.map((x) => x.kind === 'conn' || x.kind === 'pin' ? x.ref + '.' + x.number : x.kind === 'junction' ? 'T' : '>' + x.name).join(',')).join(' | ')}`);
 }
 console.log(fail ? fail + ' FAILED' : 'ALL PASSED');
 process.exit(fail ? 1 : 0);
