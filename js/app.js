@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.6.0';
+  const VERSION = '1.6.1';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {

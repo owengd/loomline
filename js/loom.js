@@ -331,7 +331,7 @@
       const eb = prop(e.sym, 'Ebus_mA'), sup = prop(e.sym, 'Ebus_supply_mA');
       if (sup) supply += +sup || 0;
       else if (eb) ebus += +eb || 0;
-      else ebusUnknown++;
+      else if (type !== 'IPC') ebusUnknown++;   // an Industrial PC is not on the E-bus
       const byCh = new Map();
       for (const u of e.units) for (const pin of K.symbolPins(u.sym)) {
         const c = channelOf(pin.name || '');
