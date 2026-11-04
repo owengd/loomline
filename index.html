@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Schematic Tracer</title>
+<meta name="description" content="Open KiCad schematics from your GitHub repo and tap any wire to trace its net across every sheet.">
+<meta name="theme-color" content="#10202a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preload" href="fonts/ibm-plex-sans-condensed-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V6M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z M14 3v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="9" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 8.4v7.2M18 11.4c0 3.6-6 2.6-11 5.4" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-mark" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="8" fill="#1a2e3a"/><path d="M5 20h6l2-5 3 9 3-13 2 9h6" fill="none" stroke="#ff5a1f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="20" r="2" fill="#4cc46e"/><circle cx="27" cy="20" r="2" fill="#4cc46e"/></symbol>
+  </defs>
+</svg>
+
+<div class="app" id="app">
+  <header class="topbar">
+    <button class="tb-btn tb-project" id="btnProjects" aria-label="Projects and revisions">
+      <svg class="mark"><use href="#i-mark"/></svg>
+      <span class="t"><span class="name" id="projName">Schematic Tracer</span><span class="rev" id="projRev">No project open</span></span>
+    </button>
+    <button class="tb-btn tb-up" id="btnUp" aria-label="Up to parent sheet" disabled><svg><use href="#i-up"/></svg></button>
+    <button class="tb-btn tb-sheet" id="btnSheets" aria-label="Sheets">
+      <span class="page" id="sheetPage">–</span>
+      <span class="label"><span class="sname" id="sheetName">No sheet</span><span class="spath" id="sheetPath"></span></span>
+      <svg class="chev"><use href="#i-chev"/></svg>
+    </button>
+    <button class="tb-btn" id="btnSearch" aria-label="Search parts and nets"><svg><use href="#i-search"/></svg></button>
+  </header>
+
+  <main class="stage" id="stage">
+    <canvas id="canvas" aria-label="Schematic. Tap a wire to trace its net, tap a part to inspect it."></canvas>
+    <div class="banner" id="banner" hidden><span class="msg" id="bannerMsg"></span><span class="actions" id="bannerActions"></span></div>
+
+    <div class="zoomctl" id="zoomctl">
+      <button class="fab signal" id="btnZoomNet" aria-label="Zoom to traced net" hidden><svg><use href="#i-target"/></svg></button>
+      <button class="fab" id="btnZoomIn" aria-label="Zoom in"><svg><use href="#i-plus"/></svg></button>
+      <button class="fab" id="btnZoomOut" aria-label="Zoom out"><svg><use href="#i-minus"/></svg></button>
+      <button class="fab" id="btnFit" aria-label="Fit sheet"><svg><use href="#i-fit"/></svg></button>
+    </div>
+
+    <aside class="inspector" id="inspector" hidden aria-live="polite">
+      <button class="grab" id="grab" aria-label="Expand or collapse details"><span></span></button>
+      <div class="ins-head">
+        <div class="titles">
+          <div class="eyebrow" id="insEyebrow"></div>
+          <div class="ins-title" id="insTitle"></div>
+          <div class="ins-sub" id="insSub"></div>
+        </div>
+        <button class="iconbtn" id="insCopy" aria-label="Copy name"><svg><use href="#i-copy"/></svg></button>
+        <button class="iconbtn" id="insClose" aria-label="Clear selection"><svg><use href="#i-close"/></svg></button>
+      </div>
+      <div class="ins-body" id="insBody"></div>
+    </aside>
+
+    <section class="welcome" id="welcome" hidden>
+      <div class="inner">
+        <svg class="art" viewBox="0 0 420 120" aria-hidden="true">
+          <rect x="40" y="26" width="60" height="68" rx="3" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="2"/>
+          <rect x="300" y="18" width="70" height="84" rx="3" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="2"/>
+          <path d="M100 44h70v-20h80v32h50" fill="none" stroke="#ff5a1f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M100 76h120v8h80" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="2"/>
+          <path d="M170 24v-12h-40" fill="none" stroke="#ff5a1f" stroke-width="4" stroke-linecap="round"/>
+          <circle cx="170" cy="24" r="5" fill="#ff5a1f"/>
+          <path d="M120 4l-10 8 10 8h-28v-16z" fill="none" stroke="#ff5a1f" stroke-width="2.5" stroke-linejoin="round"/>
+          <text x="86" y="16" font-family="Plex Mono, monospace" font-size="11" fill="#ff5a1f" text-anchor="end">CAN_H</text>
+        </svg>
+        <h1>Tap a wire. <em>See the whole net.</em></h1>
+        <p class="lede">Open your team's KiCad schematics straight from GitHub. Every pin, label and sheet on the traced net lights up, across the whole hierarchy.</p>
+        <div class="cards">
+          <div class="card">
+            <h2>Connect GitHub</h2>
+            <p>Read-only access to your schematics repo using a fine-grained token. The latest commit loads automatically.</p>
+            <button class="btn primary" id="wConnect"><svg><use href="#i-git"/></svg>Connect repository</button>
+          </div>
+          <div class="card">
+            <h2>Open from this device</h2>
+            <p>Pick <code>.kicad_sch</code> files, or a ZIP of the project (GitHub → Code → Download ZIP).</p>
+            <button class="btn" id="wOpen"><svg><use href="#i-file"/></svg>Choose files</button>
+          </div>
+          <div class="card" id="wSampleCard">
+            <h2>Try the sample</h2>
+            <p>KiCad's own <code>complex_hierarchy</code> demo: three sheets, one file used twice.</p>
+            <button class="btn" id="wSample">Open sample</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="loading" id="loading" hidden><div class="box"><span class="spinner"></span><span id="loadingMsg">Loading…</span></div></div>
+    <div class="toast" id="toast" hidden></div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+
+<aside class="drawer left" id="drawerProjects" hidden aria-label="Projects">
+  <div class="drawer-head"><h2>Projects</h2><button class="iconbtn" data-close aria-label="Close"><svg><use href="#i-close"/></svg></button></div>
+  <div class="drawer-body" id="projectsBody"></div>
+</aside>
+
+<aside class="drawer right" id="drawerSheets" hidden aria-label="Sheets">
+  <div class="drawer-head"><h2>Sheets</h2><button class="iconbtn" data-close aria-label="Close"><svg><use href="#i-close"/></svg></button></div>
+  <div class="drawer-body" id="sheetsBody"></div>
+</aside>
+
+<div class="search" id="search" hidden role="dialog" aria-label="Search">
+  <div class="search-bar">
+    <input class="input" id="searchInput" type="search" placeholder="Search refs, values, nets, sheets" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+    <button class="iconbtn" id="searchClose" aria-label="Close search"><svg><use href="#i-close"/></svg></button>
+  </div>
+  <div class="results" id="results"></div>
+</div>
+
+<input type="file" id="fileInput" multiple hidden>
+
+<script src="js/kicad-core.js"></script>
+<script src="js/render.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/github.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
