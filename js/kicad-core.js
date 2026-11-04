@@ -580,11 +580,11 @@
     });
 
     // Point lists, kept for step-by-step tracing (which items touch which points).
-    sh.pointLists = [];
+    sh.pointLists = []; sh.pointKeys = [];
     nodes.forEach((n) => { n.pts = []; });
-    for (const list of pointMap.values()) {
+    for (const [k, list] of pointMap) {
       const uniq = Array.from(new Set(list)), pi = sh.pointLists.length;
-      sh.pointLists.push(uniq);
+      sh.pointLists.push(uniq); sh.pointKeys.push(k);
       for (const n of uniq) nodes[n].pts.push(pi);
     }
 

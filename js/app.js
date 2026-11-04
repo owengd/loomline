@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.7.0';
+  const VERSION = '1.8.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -425,6 +425,7 @@
   }
   // ---- step-by-step tracing: follow a net from the tapped wire to the first connector, then on
   let traceStep = Store.pref('traceStep') === true;
+  let traceBy = Store.pref('traceBy') === 'conn' ? 'conn' : 'section';   // steps end at every pin and branch, or only at connectors
   function startNodeOf(inst, item) {
     if (!item) return -1;
     const sh = inst.sheet;
@@ -444,11 +445,11 @@
   function traceOf(s) {
     if (!s || s.type !== 'net' || !s.step) return null;
     const P = state.project;
-    if (!s._tr || s._tr.P !== P) {
+    if (!s._tr || s._tr.P !== P || s._tr.by !== traceBy) {
       const inst = P.instances[s.step.inst];
       let tr = null;
-      try { tr = inst ? Loom.traceSteps(P, inst, s.step.node) : null; } catch (e) { console.error(e); }
-      s._tr = { P, tr: tr && tr.steps.length ? tr : null };
+      try { tr = inst ? Loom.traceSteps(P, inst, s.step.node, { by: traceBy }) : null; } catch (e) { console.error(e); }
+      s._tr = { P, by: traceBy, tr: tr && tr.steps.length ? tr : null };
       if (s._tr.tr) s.step.k = Math.min(s.step.k, s._tr.tr.steps.length - 1);
     }
     return s._tr.tr;
@@ -501,11 +502,13 @@
     const tr = traceOf(s); if (!tr) return '';
     const n = tr.steps.length, k = s.step.k, step = tr.steps[k];
     if (n === 1) return 'Step 1 of 1 · whole net · ';
-    const conns = step.stops.filter((x) => x.kind === 'conn').map((x) => x.ref + '.' + x.number);
+    const conns = step.stops.filter((x) => x.kind === 'conn' || x.kind === 'pin').map((x) => x.ref + '.' + x.number);
+    const tees = step.stops.filter((x) => x.kind === 'junction').length;
     const jump = step.stops.find((x) => x.kind === 'jump');
     const parts = [];
     if (k < n - 1) {
-      if (conns.length) parts.push('to ' + conns.slice(0, 3).join(', ') + (conns.length > 3 ? ` +${conns.length - 3}` : ''));
+      const to = conns.slice(0, 3).concat(tees ? [tees === 1 ? 'a junction' : tees + ' junctions'] : []);
+      if (to.length) parts.push('to ' + to.join(', ') + (conns.length > 3 ? ` +${conns.length - 3}` : ''));
       if (jump) parts.push('⇢ ' + jump.name + ' elsewhere');
     } else parts.push('whole net');
     const away = Array.from(step.items.keys()).filter((ii) => ii !== state.inst.idx).map((ii) => state.project.instances[ii].page);
@@ -523,6 +526,85 @@
       ];
     }
     return startNodeOf(state.inst, s.item) >= 0 && !s.net.bus ? [{ label: 'STEP', icon: 'i-steps', run: () => setTraceStep(true) }] : [];
+  }
+
+  // ---- cable details: a KiCad net class flag with Cable_* fields on one wire of a section
+  function cableSection(inst, node) {
+    let tr = null;
+    try { tr = Loom.traceSteps(state.project, inst, node, { by: 'section', maxSteps: 1 }); } catch (e) { console.error(e); }
+    const items = tr && tr.steps.length ? (tr.steps[0].items.get(inst.idx) || new Set()) : new Set();
+    const sh = inst.sheet;
+    const flags = sh.labels.filter((l) => Loom.isCableFlag(l) && items.has(l.node));
+    const wires = sh.wires.filter((w) => items.has(w.node));
+    return { items, flags, wires };
+  }
+  function cableOfSel(s) {
+    if (!s || s.type !== 'net' || !s.item) return null;
+    const o = itemObj(s.item);
+    if (s.item.type === 'label' && o && o.kind === 'directive') return { flags: [o], flag: o, wires: [], label: o };
+    if (s.item.type !== 'wire' || !o) return null;
+    if (!s._cable || s._cable.P !== state.project) { const c = cableSection(state.inst, o.node); s._cable = { P: state.project, c: Object.assign(c, { flag: c.flags[0] || null }) }; }
+    return s._cable.c;
+  }
+  function cableText(f) {
+    return [f.Cable_Type, f.Cable_PN, f.Cable_Size, f.Cable_Colour, f.Cable_Length].filter(Boolean).join(' · ');
+  }
+  // Values already used in this project, offered as suggestions (and to fill the rest from a known part number).
+  function knownCables() {
+    const seen = new Map();
+    for (const inst of state.project.instances) for (const l of inst.sheet.labels) if (Loom.isCableFlag(l)) { const f = Loom.cableFields(l); const k = f.Cable_PN || f.Cable_Type; if (k && !seen.has(k)) seen.set(k, f); }
+    return Array.from(seen.values());
+  }
+  function cableDialog(s) {
+    const c = cableOfSel(s); if (!c) return;
+    const sh = state.inst.sheet;
+    const cur = c.flag ? Loom.cableFields(c.flag) : {};
+    const known = knownCables();
+    const LABELS = { Cable_Type: ['Type', 'e.g. Spec 55 / Tefzel, CAN bus, 2-core screened'], Cable_PN: ['Product code', 'e.g. 55A0811-20-9'], Cable_Size: ['Core size', 'e.g. 0.75 mm² or 20 AWG'], Cable_Colour: ['Colour / marking', 'e.g. white, ID sleeve 101'], Cable_Length: ['Length', 'e.g. 3.2 m'] };
+    const inputs = {};
+    const rows = Loom.CABLE.map((f) => {
+      const listId = 'dl_' + f;
+      const vals = Array.from(new Set(known.map((k) => k[f]).filter(Boolean))).sort();
+      const inp = h('input', { class: 'input', value: cur[f] || '', placeholder: LABELS[f][1], spellcheck: 'false', autocomplete: 'off', list: vals.length && f !== 'Cable_Length' ? listId : null });
+      inputs[f] = inp;
+      return h('div', { class: 'fieldrow' }, h('label', { text: LABELS[f][0] }), inp, vals.length && f !== 'Cable_Length' ? h('datalist', { id: listId }, ...vals.map((v) => h('option', { value: v }))) : null);
+    });
+    // Picking a known product code or type fills in what that cable already has.
+    const fill = (key) => () => {
+      const k = known.find((x) => x[key] && x[key] === inputs[key].value.trim()); if (!k) return;
+      for (const f of ['Cable_Type', 'Cable_PN', 'Cable_Size']) if (!inputs[f].value.trim() && k[f]) inputs[f].value = k[f];
+    };
+    inputs.Cable_PN.addEventListener('change', fill('Cable_PN'));
+    inputs.Cable_Type.addEventListener('change', fill('Cable_Type'));
+    const net = s.net;
+    const ends = c.flag || (c.wires[0]) ? Loom.sectionEnds(state.project, state.inst, (c.flag || c.wires[0]).node) : [];
+    const where = h('p', { class: 'hint', text: `Section of ${K.plainText(K.unescape(net.shortName))}${ends.length ? ': ' + ends.join(' → ') : ''}. Saved in the schematic as a net class flag on the wire, so KiCad keeps it too.` });
+    const save = () => {
+      const f = {}; for (const k of Loom.CABLE) f[k] = inputs[k].value.trim();
+      const empty = !Loom.CABLE.some((k) => f[k]);
+      closeDialog();
+      if (c.flag) {
+        if (empty) run('Remove cable details', () => E.deleteItems(sh, [{ type: 'label', label: c.flag }]), { anchor: null });
+        else run('Cable details', () => E.setCableFields(sh, c.flag, f));
+        return;
+      }
+      if (empty) return;
+      // Put the flag on the longest wire of the section, on the grid, near its middle.
+      const w = c.wires.slice().sort((a, b) => Math.hypot(b.b[0] - b.a[0], b.b[1] - b.a[1]) - Math.hypot(a.b[0] - a.a[0], a.b[1] - a.a[1]))[0];
+      if (!w) { banner('err', 'Tap a wire to add cable details.'); return; }
+      const len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
+      const n = Math.max(0, Math.round(len / 2 / E.GRID));
+      const t = len ? Math.min(1, n * E.GRID / len) : 0;
+      const ortho = Math.abs(w.a[0] - w.b[0]) < 1e-3 || Math.abs(w.a[1] - w.b[1]) < 1e-3;
+      // Step along the wire from one end in grid steps, so the flag stays exactly on it.
+      const p = ortho ? [w.a[0] + (w.b[0] - w.a[0]) * t, w.a[1] + (w.b[1] - w.a[1]) * t] : [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2];
+      if (E.same(p, w.a) || E.same(p, w.b)) { const q = [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2]; p[0] = q[0]; p[1] = q[1]; }
+      run('Cable details', () => E.addCableFlag(sh, w, p, f));
+    };
+    const acts = [{ label: 'CANCEL', run: closeDialog }];
+    if (c.flag) acts.unshift({ label: 'REMOVE', run: () => { closeDialog(); run('Remove cable details', () => E.deleteItems(sh, [{ type: 'label', label: c.flag }]), { anchor: null }); } });
+    acts.push({ label: 'SAVE', primary: true, run: save });
+    openDialog(c.flag ? 'CABLE DETAILS' : 'ADD CABLE DETAILS', [where, ...rows], acts);
   }
 
   function clearSelection() {
@@ -1228,14 +1310,20 @@
       A.push({ label: 'ZOOM', icon: 'i-target', run: zoomToSelection });
     } else if (s.type === 'net') {
       const it = s.item, o = itemObj(it);
-      A.unshift(...traceActions(s));
-      if (it && it.type === 'label' && o) {
+      const ta = traceActions(s);
+      A.unshift(...ta);
+      if (it && it.type === 'label' && o && o.kind === 'directive') {
+        A.push({ label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) });
+        A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'cable flag' }) });
+        A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete cable flag', () => E.deleteItems(sh, [{ type: 'label', label: o }]), { anchor: null }) });
+      } else if (it && it.type === 'label' && o) {
         A.push({ label: 'RENAME', icon: 'i-edit', run: () => labelDialog({ rename: o }) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'label ' + o.text }) });
         A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate label', () => E.rotateLabel(sh, o)) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete label ' + o.text, () => E.deleteItems(sh, [{ type: 'label', label: o }]), { anchor: null }) });
       } else if (it && it.type === 'wire' && o) {
         const wno = state.A && state.A.wireNo[s.net.id];
+        A.splice(ta.length, 0, { label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) });
         if (wno && !s.net.named) A.push({ label: 'FIX NO.', icon: 'i-number', run: () => fixWireNumber(o, wno) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'wire', uuid: uuidOf(o), name: 'wire' }) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete wire', () => E.deleteItems(sh, [{ type: 'wire', wire: o }]), { anchor: null }) });
@@ -1442,7 +1530,8 @@
       const it = s.item, o = itemObj(it);
       const what = it && o ? (it.type === 'label' ? 'Label · ' : it.type === 'wire' ? 'Wire · ' : it.type === 'pin' ? `Pin ${o.number} · ` : it.type === 'nc' ? 'No-connect · ' : it.type === 'junction' ? 'Junction · ' : '') : '';
       const wno = state.A && state.A.wireNo[net.id];
-      t2.textContent = traceSummary(s) + what + (wno && !net.named ? `Wire ${wno} · ` : '') + (net.bus ? `Bus · ${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`) + ` · ${sheets} sheet${sheets === 1 ? '' : 's'}`;
+      const cab = cableOfSel(s), cf = cab && cab.flag ? Loom.cableFields(cab.flag) : null;
+      t2.textContent = (cf ? cableText(cf) + ' · ' : '') + traceSummary(s) + what + (wno && !net.named ? `Wire ${wno} · ` : '') + (net.bus ? `Bus · ${(net.members || []).length} members` : `${net.pins.length} pin${net.pins.length === 1 ? '' : 's'}`) + ` · ${sheets} sheet${sheets === 1 ? '' : 's'}`;
     } else if (s.type === 'symbol') {
       const inst = s.inst, sym = inst.sheet.symbols[s.si], ref = inst.refs[s.si].ref;
       const unit = sym.lib && sym.lib.unitCount > 1 ? K.unitLetter(inst.refs[s.si].unit || sym.unit) : '';
@@ -2026,7 +2115,7 @@
     const s = state.sel, tr = s && s.type === 'net' && traceOf(s);
     if (tr) {
       if (s.step.k < tr.steps.length - 1) for (const g of groupsFor(s.net, inst)) an.groupColor.set(g, COL.ahead[d]);
-      for (const st of tr.steps[s.step.k].stops) if (st.kind === 'conn' && st.inst === inst.idx) an.symMarks.set(st.si, { color: COL.stop, dash: true });
+      for (const st of tr.steps[s.step.k].stops) if ((st.kind === 'conn' || st.kind === 'pin') && st.inst === inst.idx) an.symMarks.set(st.si, { color: COL.stop, dash: true });
     }
     view.setAnnot(an);
   }
@@ -2039,6 +2128,7 @@
       { label: 'Check markers', icon: show.markers ? 'i-check' : 'i-none', checked: show.markers, run: () => setShow('markers', !show.markers) },
       { label: 'Install status', icon: show.install ? 'i-check' : 'i-none', checked: show.install, run: () => setShow('install', !show.install) },
       { label: 'Trace in steps', icon: traceStep ? 'i-check' : 'i-none', checked: traceStep, run: () => setTraceStep(!traceStep) },
+      { label: 'Steps stop only at connectors', icon: traceBy === 'conn' ? 'i-check' : 'i-none', checked: traceBy === 'conn', run: () => { traceBy = traceBy === 'conn' ? 'section' : 'conn'; Store.pref('traceBy', traceBy); const s = state.sel; if (s && s.step) { s.step.k = 0; applyHighlight(); renderSelectionUI(); } } },
       { label: 'Grid dots', icon: view.showGrid ? 'i-check' : 'i-none', checked: view.showGrid, run: () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); } },
       { sep: true },
       { label: 'Reports', icon: 'i-report', run: () => showTab('reports', true) },
@@ -2128,6 +2218,15 @@
         const budget = { heading: 'E-bus budget', cols: ['Supplied (mA)', 'Used by terminals with stated figures (mA)', 'Terminals without a figure'], rows: [[io.supply, io.ebus, io.ebusUnknown]] };
         const used = io.chans.filter((c) => c.used).length;
         return { group: 'Section', count: `${io.modules.length} modules · ${used}/${io.chans.length} channels used`, sections: io.modules.length ? [mods, chans, budget] : [{ heading: 'No I/O modules', cols: ['Note'], rows: [['Place Beckhoff terminals from the Beckhoff I/O category of Add a part; their channels are listed here.']] }] };
+      } },
+    { id: 'cables', title: 'Cable schedule', desc: 'Every cable section with details (type, product code, core size, colour, length) and its two ends, plus totals by cable type for ordering.',
+      make: (P, A) => {
+        const C = Loom.cables(P, A);
+        if (!C.rows.length) return { count: 'no cables yet', sections: [{ heading: 'No cable details yet', cols: ['Note'], rows: [['Tap a wire, then CABLE, to give that section a type, product code, core size, colour and length.']] }] };
+        const list = { heading: 'Cables', cols: ['Type', 'Product code', 'Size', 'Colour / marking', 'Length', 'Wire', 'From', 'To', 'Net', 'Page', 'Zone'], rows: C.rows.map((r) => [r.f.Cable_Type, r.f.Cable_PN, r.f.Cable_Size, r.f.Cable_Colour, r.f.Cable_Length, r.wire, r.from, r.to, r.net ? K.plainText(K.unescape(r.net.name)) : '', r.page, r.zone]) };
+        const tot = { heading: 'Totals by cable', cols: ['Type', 'Product code', 'Size', 'Sections', 'Total length (m)', 'Sections without a length'], rows: C.totals.map((t) => [t.type, t.pn, t.size, t.n, Math.round(t.m * 100) / 100, t.unknown]) };
+        const m = C.totals.reduce((a, t) => a + t.m, 0);
+        return { group: 'Section', count: `${C.rows.length} sections · ${Math.round(m * 10) / 10} m`, sections: [list, tot] };
       } },
     { id: 'bom', title: 'Bill of materials', desc: 'Parts grouped by value and footprint, with manufacturer fields when the schematic has them.',
       make: (P, A) => { const t = Loom.bom(P, A); return { sections: [t], count: t.rows.reduce((n, r) => n + r[0], 0) + ' parts' }; } },

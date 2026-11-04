@@ -730,7 +730,68 @@
     return { path: sheet.path, text: sp.apply() };
   }
 
+  // ------------------------------------------------------------------ cable details
+  // A cable's details live in a KiCad directive label (net class flag) on one of its wires, as
+  // fields Cable_Type, Cable_PN, Cable_Size, Cable_Colour and Cable_Length. KiCad keeps them, shows
+  // the visible one, and lists them in the label's properties. No Netclass field is set.
+  const CABLE_FIELDS = ['Cable_Type', 'Cable_PN', 'Cable_Size', 'Cable_Colour', 'Cable_Length'];
+  function cableFieldLines(name, value, at, hide, v8) {
+    const eff = v8 ? ['\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t\t(italic yes)', '\t\t)', '\t\t(justify left)'].concat(hide ? ['\t\t(hide yes)'] : []).concat(['\t)'])
+      : [`\t(effects (font (size 1.27 1.27) italic) (justify left)${hide ? ' hide' : ''})`];
+    return [`(property ${qstr(name)} ${qstr(value)}`, `\t(at ${fnum(at[0])} ${fnum(at[1])} 0)`].concat(eff, [')']);
+  }
+  /** Adds a cable flag at p (on wire w, which is split there if p is inside it). */
+  function addCableFlag(sheet, w, p, fields) {
+    const v8 = !sheet.version || sheet.version >= 20231120;
+    const vertical = Math.abs(w.a[0] - w.b[0]) < 1e-3;
+    const L = 2.54;
+    const angle = vertical ? 270 : 0;                       // flag to the right of a vertical wire, above a horizontal one
+    const head = vertical ? [p[0] + L, p[1]] : [p[0], p[1] - L];
+    const at = [head[0] + 1.016, head[1]];
+    const shown = fields.Cable_Type ? 'Cable_Type' : CABLE_FIELDS.find((f) => fields[f]);
+    const lines = ['(netclass_flag ""', `\t(length ${fnum(L)})`, '\t(shape round)', `\t(at ${fnum(p[0])} ${fnum(p[1])} ${angle})`];
+    if (v8) lines.push('\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', '\t\t' + justifyFor('local', vertical ? 'bottom' : 'right'), '\t)');
+    else lines.push(`\t(effects (font (size 1.27 1.27)) ${justifyFor('local', vertical ? 'bottom' : 'right')})`);
+    lines.push(`\t(uuid ${qstr(uuid())})`);
+    for (const f of CABLE_FIELDS) if (fields[f]) for (const l of cableFieldLines(f, fields[f], at, f !== shown, v8)) lines.push('\t' + l);
+    lines.push(')');
+    const sp = new Splicer(sheet.text);
+    const out = [lines];
+    if (interior(p, w)) {
+      const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
+      setXY(sp, xys[w.seg + 1], p[0], p[1]);
+      out.push(wireLines(p, w.b));
+    }
+    sp.insert(insertPoint(sheet), out.map((l) => block(l, '\t')).join(''));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Sets the cable fields of an existing flag: changed values are replaced, empty ones removed, new ones added hidden. */
+  function setCableFields(sheet, label, fields) {
+    const v8 = !sheet.version || sheet.version >= 20231120;
+    const sp = new Splicer(sheet.text);
+    const have = new Map(label.props.map((p) => [p.name, p]));
+    const add = [];
+    for (const f of CABLE_FIELDS) {
+      const v = fields[f] || '', p = have.get(f);
+      if (p && !v) { const r = nodeRange(sheet.text, p.src); sp.replace(r[0], r[1], ''); }
+      else if (p && v !== p.value) setTok(sp, p.src, 2, qstr(v));
+      else if (!p && v) add.push(f);
+    }
+    if (add.length) {
+      const anyVisible = label.props.some((p) => CABLE_FIELDS.includes(p.name) && !p.fx.hide && (fields[p.name] || ''));
+      const ref = label.props.find((p) => CABLE_FIELDS.includes(p.name));
+      const at = ref ? ref.p : [label.p[0] + 1, label.p[1] - 2.54];
+      const anchor = label.props.length ? label.props[label.props.length - 1].src : K.find(label.src, 'uuid');
+      const ind = indentAt(sheet.text, anchor.s);
+      let out = '';
+      add.forEach((f, i) => { out += '\n' + cableFieldLines(f, fields[f], at, anyVisible || i > 0, v8).map((l) => ind + l).join('\n'); });
+      sp.insert(anchor.e, out);
+    }
+    return { path: sheet.path, text: sp.apply() };
+  }
+
   root.KiEdit = {
+    CABLE_FIELDS, addCableFlag, setCableFields,
     GRID, snap, same, fnum, qstr, uuid, connectionPoints,
     setSymbolFields, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addLabel, addNoConnect, nextReference,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty

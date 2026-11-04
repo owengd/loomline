@@ -357,7 +357,8 @@
   // ---------------------------------------------------------------- step-by-step tracing
   // Splits a net into steps from a starting item, the way a run is followed on the boat: a step
   // follows drawn wires (and same-sheet labels and sheet pins, which are the same conductor) and
-  // stops at connector or terminal pins and at off-page jumps (global labels, power symbols).
+  // stops at off-page jumps (global labels, power symbols) and, with opts.by 'conn', at connector
+  // or terminal pins; by default ('section') at every pin and every branch point.
   // The next step carries on through those. Returns { steps: [{ items: Map(instIdx -> Set(node)),
   // stops: [{ inst, kind: 'conn' | 'jump', ref, number, name, si }] }], tagOf } or null.
   const nodeTag = (n) => n.kind === 'wire' ? 'W' + n.ref : n.kind === 'junction' ? 'J' + n.ref : n.kind === 'label' ? 'L' + n.ref : n.kind === 'nc' ? 'N' + n.ref
@@ -365,6 +366,7 @@
   function traceSteps(P, startInst, startNode, opts) {
     opts = opts || {};
     const maxSteps = opts.maxSteps || 500;
+    const bySection = opts.by !== 'conn';
     const sheetOf = (ii) => P.instances[ii].sheet;
     const nodeAt = (ii, n) => sheetOf(ii).nodes[n];
     const sn = nodeAt(startInst.idx, startNode); if (!sn) return null;
@@ -425,7 +427,31 @@
       };
       const expandPoint = (ii, pt, free) => {
         const list = sheetOf(ii).pointLists[pt];
-        if (!free) {
+        if (!free && bySection) {
+          // One cable section at a time: a pin, or a branch (three or more wire ends), ends the step.
+          const k = sheetOf(ii).pointKeys[pt];
+          let deg = 0, junc = -1;
+          const pins = [];
+          for (const m of list) {
+            const nd = nodeAt(ii, m);
+            if (nd.kind === 'wire' || nd.kind === 'entry') {
+              const w = nd.kind === 'wire' ? sheetOf(ii).wires[nd.ref] : sheetOf(ii).entries[nd.ref];
+              deg += K.key(w.a) === k || K.key(w.b) === k ? 1 : 2;
+            } else if (nd.kind === 'junction') junc = m;
+            else if (nd.kind === 'pin' && !seen.has(ii + ':' + m)) { const pi = pinInfo(ii, m); if (pi && !pi.power) pins.push(m); }
+          }
+          if (pins.length || (deg >= 3 && !seen.has(ii + ':' + junc))) {
+            for (const m of pins) {
+              take(ii, m);
+              const pi = pinInfo(ii, m);
+              step.stops.push({ inst: ii, kind: pi.conn ? 'conn' : 'pin', ref: pi.ref, number: pi.pin.number, name: pi.pin.name, si: pi.si });
+              if (pi.conn) for (const q of jumperPins(ii, m)) nextSeeds.push([ii, q]);
+            }
+            if (deg >= 3) { if (junc >= 0) take(ii, junc); step.stops.push({ inst: ii, kind: 'junction', key: k }); }
+            nextPts.push([ii, pt]);
+            return;
+          }
+        } else if (!free) {
           // A connector pin not yet passed stops the step here; the rest of the point waits.
           const conns = list.filter((m) => { const pi = pinInfo(ii, m); return pi && pi.conn && !seen.has(ii + ':' + m); });
           if (conns.length) {
@@ -457,11 +483,62 @@
           if (any) jumped = true;
         }
       }
-      if (step.items.size) steps.push(step);
       seeds = nextSeeds; freePts = nextPts;
-      if (!step.items.size && !seeds.length && !freePts.length) break;
+      if (!seeds.length && !freePts.length) {
+        // Parts of the net joined some other way (bus members, jumpers): carry on from them.
+        for (const [ii, groups] of net.inst) for (const g of groups) {
+          const items = sheetOf(ii).groups[g].items;
+          if (!items.some((m) => seen.has(ii + ':' + m))) seeds.push([ii, items[0]]);
+        }
+        if (seeds.length && step.items.size) step.stops.push({ inst: startInst.idx, kind: 'jump', name: plain(net.shortName) });
+      }
+      if (step.items.size) steps.push(step);
+      else if (!seeds.length && !freePts.length) break;
     }
     return { net, steps, tagOf: (ii, n) => nodeTag(nodeAt(ii, n)) };
+  }
+
+  // ---------------------------------------------------------------- cable schedule
+  // Cable details are KiCad directive labels (net class flags) with Cable_* fields on a wire; each
+  // describes the cable section it sits on (between pins and branch points).
+  const CABLE = ['Cable_Type', 'Cable_PN', 'Cable_Size', 'Cable_Colour', 'Cable_Length'];
+  const isCableFlag = (l) => l.kind === 'directive' && l.props.some((p) => CABLE.includes(p.name) && p.value);
+  const cableFields = (l) => { const o = {}; for (const f of CABLE) { const p = l.props.find((x) => x.name === f); o[f] = p ? K.unescape(p.value) : ''; } return o; };
+  function lengthMetres(s) {
+    const m = /(-?[\d.,]+)\s*(mm|cm|m|ft|')?/i.exec(String(s || '')); if (!m) return null;
+    const v = parseFloat(m[1].replace(',', '.')); if (!isFinite(v)) return null;
+    const u = (m[2] || 'm').toLowerCase();
+    return u === 'mm' ? v / 1000 : u === 'cm' ? v / 100 : u === 'ft' || u === "'" ? v * 0.3048 : v;
+  }
+  function sectionEnds(P, inst, node) {
+    const tr = traceSteps(P, inst, node, { by: 'section', maxSteps: 1 });
+    if (!tr || !tr.steps.length) return [];
+    return tr.steps[0].stops.filter((x) => x.inst === inst.idx).map((x) => {
+      if (x.kind === 'junction') { const [a, b] = x.key.split(',').map((v) => +v / 1000); return 'junction ' + zoneOf(inst, [a, b]); }
+      if (x.kind === 'jump') return '→ ' + x.name;
+      return x.ref + '.' + x.number;
+    });
+  }
+  function cables(P, A) {
+    const rows = [];
+    for (const inst of P.instances) {
+      if (inst.orphan) continue;
+      for (const l of inst.sheet.labels) {
+        if (!isCableFlag(l)) continue;
+        const f = cableFields(l);
+        const net = P.nets[inst.netOf[l.group]];
+        const ends = sectionEnds(P, inst, l.node);
+        rows.push({ inst, label: l, f, net, wire: net && A && A.wireNo[net.id] || '', from: ends[0] || '', to: ends.slice(1).join(', '), page: inst.page, zone: zoneOf(inst, l.p), m: lengthMetres(f.Cable_Length) });
+      }
+    }
+    rows.sort((a, b) => ncmp(a.f.Cable_Type, b.f.Cable_Type) || ncmp(a.f.Cable_PN, b.f.Cable_PN) || a.page - b.page);
+    const totals = new Map();
+    for (const r of rows) {
+      const k = [r.f.Cable_Type, r.f.Cable_PN, r.f.Cable_Size].join('|');
+      let t = totals.get(k); if (!t) totals.set(k, t = { type: r.f.Cable_Type, pn: r.f.Cable_PN, size: r.f.Cable_Size, n: 0, m: 0, unknown: 0 });
+      t.n++; if (r.m == null) t.unknown++; else t.m += r.m;
+    }
+    return { rows, totals: Array.from(totals.values()) };
   }
 
   // ---------------------------------------------------------------- comparison
@@ -532,6 +609,6 @@
     return [cols, ...rows].map((r) => r.map(q).join(',')).join('\r\n') + '\r\n';
   }
 
-  root.Loom = { analyze, check, zoneOf, isConnector, traceSteps, bom, wireList, connectors, looms, issuesTable, plcIO, channelOf, diff, csv };
+  root.Loom = { analyze, check, zoneOf, isConnector, traceSteps, cables, isCableFlag, cableFields, sectionEnds, CABLE, bom, wireList, connectors, looms, issuesTable, plcIO, channelOf, diff, csv };
   if (typeof module !== 'undefined') module.exports = root.Loom;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
