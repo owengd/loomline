@@ -142,8 +142,8 @@ fine-grained token with **Contents: Read and write** and **Pull requests: Read a
 Without one, **DOWNLOAD ZIP** gives you the edited files to commit yourself.
 
 Open the branch in KiCad and run ERC before merging the pull request. The editor covers
-common changes but isn't a replacement for eeschema: it doesn't add new parts from the
-library, edit buses or sheets, or update the PCB.
+common changes but isn't a replacement for eeschema: it doesn't edit buses or sheets, or update
+the PCB.
 
 ## 5. Wire numbers, cross-references and reports
 
