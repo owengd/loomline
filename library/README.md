@@ -25,7 +25,7 @@ does, with its attribution kept.
 ## Loomline libraries
 
 `loomline/` holds libraries drawn for Loomline. `Loomline_Beckhoff.kicad_sym` (KiCad 8
-format, opens in KiCad 8 and 9) has 53 Beckhoff EtherCAT couplers and terminals, built by
+format, opens in KiCad 8 and 9) has the C6017-0030 Industrial PC and 53 Beckhoff EtherCAT couplers and terminals, built by
 `tools/build-loomline-library.js` from the table in `tools/beckhoff-data.js`. Terminal point
 assignments come from Beckhoff's documentation (infosys.beckhoff.com and the terminal
 manuals), checked November 2026. `beckhoff.json` is the same symbols for the app.
