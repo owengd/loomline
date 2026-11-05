@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.8.5';
+  const VERSION = '1.8.6';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -552,6 +552,7 @@
   // Values already used in this project, offered as suggestions (and to fill the rest from a known part number).
   function knownCables() {
     const seen = new Map();
+    for (const c of (window.CABLE_CATALOGUE || [])) seen.set(c.pn, { Cable_Type: c.type, Cable_PN: c.pn, Cable_Size: c.size, Cable_Colour: '', Cable_Length: '', desc: c.desc, cat: true });
     for (const inst of state.project.instances) for (const l of inst.sheet.labels) if (Loom.isCableFlag(l)) { const f = Loom.cableFields(l); const k = f.Cable_PN || f.Cable_Type; if (k && !seen.has(k)) seen.set(k, f); }
     return Array.from(seen.values());
   }
@@ -605,19 +606,26 @@
     const inputs = {};
     const rows = Loom.CABLE.map((f) => {
       const listId = 'dl_' + f;
-      const vals = Array.from(new Set(known.map((k) => k[f]).filter(Boolean))).sort();
+      const vals = Array.from(new Set(known.map((k) => k[f]).filter(Boolean))).sort((a, b) => K.naturalCmp(a, b));
+      const hintFor = (v) => { const k = known.find((x) => x[f] === v); return !k ? '' : f === 'Cable_PN' ? [k.Cable_Type, k.desc].filter(Boolean).join(' · ') : f === 'Cable_Type' ? k.Cable_PN : ''; };
       const inp = h('input', { class: 'input', value: cur[f] || '', placeholder: LABELS[f][1], spellcheck: 'false', autocomplete: 'off', list: vals.length && f !== 'Cable_Length' ? listId : null });
       inputs[f] = inp;
-      return h('div', { class: 'fieldrow' }, h('label', { text: LABELS[f][0] }), inp, vals.length && f !== 'Cable_Length' ? h('datalist', { id: listId }, ...vals.map((v) => h('option', { value: v }))) : null);
+      return h('div', { class: 'fieldrow' }, h('label', { text: LABELS[f][0] }), inp, vals.length && f !== 'Cable_Length' ? h('datalist', { id: listId }, ...vals.map((v) => h('option', { value: v, label: hintFor(v) || null }))) : null);
     });
-    // Picking a known product code or type fills in what that cable already has.
+    // Picking a product code, or a type that only one product code has, fills in the rest.
+    const apply = (k) => { for (const f of ['Cable_Type', 'Cable_PN', 'Cable_Size']) if (k[f]) inputs[f].value = k[f]; desc.textContent = k.desc || ''; };
     const fill = (key) => () => {
       const v = inputs[key].value.trim();
       const m = known.filter((x) => x[key] && x[key] === v);
-      if (m.length !== 1) return;   // a type used with several product codes doesn't pick one for you
-      const k = m[0];
-      for (const f of ['Cable_Type', 'Cable_PN', 'Cable_Size']) if (!inputs[f].value.trim() && k[f]) inputs[f].value = k[f];
+      if (m.length === 1) apply(m[0]);   // a type used with several product codes doesn't pick one for you
     };
+    // The catalogue as a plain list: easier than typing on a tablet.
+    const cat = known.filter((k) => k.cat);
+    const desc = h('p', { class: 'hint', text: (known.find((k) => k.Cable_PN && k.Cable_PN === cur.Cable_PN) || {}).desc || '' });
+    const pick = h('select', { class: 'input', onchange: () => { const k = cat[+pick.value]; if (k) apply(k); } },
+      h('option', { value: '', text: cat.length ? 'Choose from the cable list…' : 'No cable list' }),
+      ...cat.map((k, i) => h('option', { value: String(i), text: `${k.Cable_Type} — ${k.Cable_PN}`, selected: k.Cable_PN === cur.Cable_PN })));
+    rows.unshift(h('div', { class: 'fieldrow' }, h('label', { text: 'Cable list' }), pick), desc);
     inputs.Cable_PN.addEventListener('change', fill('Cable_PN'));
     inputs.Cable_Type.addEventListener('change', fill('Cable_Type'));
     const net = s.net;
