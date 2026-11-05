@@ -98,6 +98,7 @@ showing what's selected.
 | Change sheet | The sheet chip at the top, or **SHEETS** in the rail; ↑ goes to the parent sheet |
 | Enter a sheet | Double-tap the sheet box, or tap it and press **ENTER** |
 | Grid dots | Tap the scale chip in the bottom-left corner |
+| Full screen | The ⤢ button at the top (or Layers → *Full screen*) hides the bars. Tap a handle on the top, right or bottom edge, or swipe in from an edge, to bring them back for a few seconds; selecting something shows the status bar. On Android it also hides the system bars |
 | Share a view | **Copy link** in the Net Navigator or Properties puts the project, sheet and net in the URL |
 | Older revision | ← (Projects) → *Recent changes*, then tap a commit |
 | Clear | **CLEAR** in the status bar, or tap empty space |
