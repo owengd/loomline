@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.8.6';
+  const VERSION = '1.8.7';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -552,7 +552,7 @@
   // Values already used in this project, offered as suggestions (and to fill the rest from a known part number).
   function knownCables() {
     const seen = new Map();
-    for (const c of (window.CABLE_CATALOGUE || [])) seen.set(c.pn, { Cable_Type: c.type, Cable_PN: c.pn, Cable_Size: c.size, Cable_Colour: '', Cable_Length: '', desc: c.desc, cat: true });
+    for (const c of (window.CABLE_CATALOGUE || [])) seen.set(c.pn, { Cable_Type: c.type, Cable_PN: c.pn, Cable_Size: c.size, Cable_Colour: '', Cable_Length: '', desc: c.desc, cores: c.cores || [], cat: true });
     for (const inst of state.project.instances) for (const l of inst.sheet.labels) if (Loom.isCableFlag(l)) { const f = Loom.cableFields(l); const k = f.Cable_PN || f.Cable_Type; if (k && !seen.has(k)) seen.set(k, f); }
     return Array.from(seen.values());
   }
@@ -613,7 +613,7 @@
       return h('div', { class: 'fieldrow' }, h('label', { text: LABELS[f][0] }), inp, vals.length && f !== 'Cable_Length' ? h('datalist', { id: listId }, ...vals.map((v) => h('option', { value: v, label: hintFor(v) || null }))) : null);
     });
     // Picking a product code, or a type that only one product code has, fills in the rest.
-    const apply = (k) => { for (const f of ['Cable_Type', 'Cable_PN', 'Cable_Size']) if (k[f]) inputs[f].value = k[f]; desc.textContent = k.desc || ''; };
+    const apply = (k) => { for (const f of ['Cable_Type', 'Cable_PN', 'Cable_Size']) if (k[f]) inputs[f].value = k[f]; desc.textContent = k.desc || ''; setCores(k); };
     const fill = (key) => () => {
       const v = inputs[key].value.trim();
       const m = known.filter((x) => x[key] && x[key] === v);
@@ -625,7 +625,19 @@
     const pick = h('select', { class: 'input', onchange: () => { const k = cat[+pick.value]; if (k) apply(k); } },
       h('option', { value: '', text: cat.length ? 'Choose from the cable list…' : 'No cable list' }),
       ...cat.map((k, i) => h('option', { value: String(i), text: `${k.Cable_Type} — ${k.Cable_PN}`, selected: k.Cable_PN === cur.Cable_PN })));
-    rows.unshift(h('div', { class: 'fieldrow' }, h('label', { text: 'Cable list' }), pick), desc);
+    // Which core of the cable this section is: fills Colour / marking with its number and colour.
+    const coreSel = h('select', { class: 'input', onchange: () => { if (coreSel.value) inputs.Cable_Colour.value = coreSel.value; } });
+    const setCores = (k) => {
+      const list = (k && k.cores) || [];
+      // A core picked for another cable no longer applies.
+      const cv = inputs.Cable_Colour.value;
+      if (list.length && /^(Core \d|Pair \d|Screen|Centre)/.test(cv) && !list.includes(cv)) inputs.Cable_Colour.value = '';
+      coreSel.replaceChildren(h('option', { value: '', text: list.length ? 'Choose the core…' : 'Pick a cable from the list first' }),
+        ...list.map((c) => h('option', { value: c, text: c, selected: c === inputs.Cable_Colour.value })));
+      coreSel.disabled = !list.length;
+    };
+    setCores(cat.find((k) => k.Cable_PN === cur.Cable_PN));
+    rows.unshift(h('div', { class: 'fieldrow' }, h('label', { text: 'Cable list' }), pick), desc, h('div', { class: 'fieldrow' }, h('label', { text: 'Core' }), coreSel));
     inputs.Cable_PN.addEventListener('change', fill('Cable_PN'));
     inputs.Cable_Type.addEventListener('change', fill('Cable_Type'));
     const net = s.net;
