@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.8.8';
+  const VERSION = '1.8.9';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1264,9 +1264,11 @@
     const r = anchorEl.getBoundingClientRect();
     const m = h('div', { class: 'menu', id: 'menu' }, ...items.map((it) => it.sep ? h('div', { class: 'sep' }) : h('button', { class: (it.danger ? 'danger' : '') + (it.checked !== undefined ? ' toggle' : ''), 'aria-checked': it.checked === undefined ? null : String(!!it.checked), role: it.checked === undefined ? null : 'menuitemcheckbox', onclick: () => { closeMenu(); it.run(); } }, icon(it.icon), it.label)));
     document.body.append(m);
+    // The menu scrolls when it is taller than the screen (CSS caps it); keep it on screen.
+    const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
     const mh = m.offsetHeight, mw = m.offsetWidth;
     m.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.right - mw)) + 'px';
-    m.style.top = (r.top - mh - 6 >= 8 ? r.top - mh - 6 : Math.min(window.innerHeight - mh - 8, r.bottom + 6)) + 'px';
+    m.style.top = (r.top - mh - 6 >= 8 ? r.top - mh - 6 : Math.max(8, Math.min(vh - mh - 8, r.bottom + 6))) + 'px';
     setTimeout(() => document.addEventListener('pointerdown', menuAway, { once: true }), 0);
   }
   function menuAway(e) { const m = $('menu'); if (m && !m.contains(e.target)) closeMenu(); else if (m) document.addEventListener('pointerdown', menuAway, { once: true }); }
@@ -1534,6 +1536,7 @@
   }
   function renderStatus() {
     const s = state.sel, P = state.project;
+    if (immersive && immersive.on && (s || state.mode !== 'select')) peek('status');
     const ico = $('statusIco'), t1 = $('st1'), t2 = $('st2'), acts = $('statusActions');
     acts.replaceChildren();
     ico.classList.remove('trace', 'part');
@@ -2185,6 +2188,7 @@
       { label: 'Cross-references', icon: show.xrefs ? 'i-check' : 'i-none', checked: show.xrefs, run: () => setShow('xrefs', !show.xrefs) },
       { label: 'Check markers', icon: show.markers ? 'i-check' : 'i-none', checked: show.markers, run: () => setShow('markers', !show.markers) },
       { label: 'Install status', icon: show.install ? 'i-check' : 'i-none', checked: show.install, run: () => setShow('install', !show.install) },
+      { label: immersive.on ? 'Leave full screen' : 'Full screen', icon: immersive.on ? 'i-shrink' : 'i-expand', run: () => setImmersive(!immersive.on) },
       { label: 'Trace in steps', icon: traceStep ? 'i-check' : 'i-none', checked: traceStep, run: () => setTraceStep(!traceStep) },
       { label: 'Steps stop only at connectors', icon: traceBy === 'conn' ? 'i-check' : 'i-none', checked: traceBy === 'conn', run: () => { traceBy = traceBy === 'conn' ? 'section' : 'conn'; Store.pref('traceBy', traceBy); const s = state.sel; if (s && s.step) { s.step.k = 0; applyHighlight(); renderSelectionUI(); } } },
       { label: 'Grid dots', icon: view.showGrid ? 'i-check' : 'i-none', checked: view.showGrid, run: () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); } },
@@ -2746,12 +2750,83 @@
     if (e.key === 'Escape' && $('dialogWrap')) { closeDialog(); return; }
     if (e.key === 'Escape' && $('reportWrap')) { closeReport(); return; }
     if (e.key === '/' || (e.key === 'f' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); openSearch(); }
-    else if (e.key === 'Escape') { if (!$('search').hidden) closeSearch(); else if (!$('scrim').hidden) closeDrawers(); else clearSelection(); }
+    else if (e.key === 'Escape') { if (!$('search').hidden) closeSearch(); else if (!$('scrim').hidden) closeDrawers(); else if (!state.sel && immersive.on) setImmersive(false); else clearSelection(); }
     else if (e.key === 'Backspace' && state.inst && state.inst.parent) showInstance(state.inst.parent);
     else if (e.key === '+' || e.key === '=') view.zoomBy(1.4);
     else if (e.key === '-') view.zoomBy(1 / 1.4);
     else if (e.key === '0') view.fit();
   });
+  // ------------------------------------------------------------------ screen fitting
+  // Dialogs and menus size to the visible area, so the on-screen keyboard never hides the field
+  // being typed in; the field is scrolled into the middle of what's left.
+  (function () {
+    const vv = window.visualViewport; if (!vv) return;
+    const fit = () => { const st = document.documentElement.style; st.setProperty('--vvh', Math.round(vv.height) + 'px'); st.setProperty('--vvt', Math.round(vv.offsetTop) + 'px'); };
+    vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); fit();
+  })();
+  document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (!t || !t.matches || !t.matches('input, select, textarea') || !t.closest('.dialog, .panel, .search')) return;
+    const go = () => { try { t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (err) { t.scrollIntoView(); } };
+    setTimeout(go, 120); setTimeout(go, 450);   // again once the keyboard has finished opening
+  });
+
+  // Full screen: the top bar, tools and status bar slide away. A handle on each edge, or a swipe
+  // in from an edge, brings them back for a few seconds; selecting something shows the status bar.
+  var immersive = { on: false, timer: 0, fs: false };   // var: renderStatus may run before this line
+  function setImmersive(on) {
+    immersive.on = on;
+    document.body.classList.toggle('immersive', on);
+    document.body.classList.remove('peek', 'peek-status');
+    $('btnFull').firstElementChild.firstElementChild.setAttribute('href', on ? '#i-shrink' : '#i-expand');
+    $('btnFull').title = on ? 'Leave full screen' : 'Full screen: bars hide; swipe in from an edge or tap a handle to show them';
+    const el = document.documentElement;
+    if (on && !document.fullscreenElement && el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).then(() => { immersive.fs = true; }).catch(() => {});
+    if (!on && document.fullscreenElement && immersive.fs) document.exitFullscreen().catch(() => {});
+    if (!on) immersive.fs = false;
+    if (on) toast('Full screen: swipe in from an edge, or tap a handle, to show the bars');
+  }
+  function peek(kind) {
+    if (!immersive.on) return;
+    const b = document.body.classList;
+    if (kind === 'status') { if (!b.contains('peek')) b.add('peek-status'); } else { b.add('peek'); b.remove('peek-status'); }
+    const top = document.querySelector('.topbar'), st = $('status');
+    document.documentElement.style.setProperty('--bar-top', (top ? top.offsetHeight : 56) + 'px');
+    document.documentElement.style.setProperty('--bar-bottom', (st ? st.offsetHeight : 56) + 'px');
+    clearTimeout(immersive.timer);
+    immersive.timer = setTimeout(unpeekSoon, kind === 'status' ? 6000 : 4500);
+  }
+  function unpeekSoon() {
+    // Not while a menu or dialog is open, or a mode (wire, label, draw, move) needs its buttons.
+    if ($('menu') || $('dialogWrap') || state.mode !== 'select') { immersive.timer = setTimeout(unpeekSoon, 2000); return; }
+    document.body.classList.remove('peek', 'peek-status');
+  }
+  $('btnFull').addEventListener('click', () => setImmersive(!immersive.on));
+  $('edgeTop').addEventListener('click', () => peek('all'));
+  $('edgeRight').addEventListener('click', () => peek('all'));
+  $('edgeBottom').addEventListener('click', () => peek('all'));
+  for (const sel of ['.topbar', '#rail', '#status']) {
+    const el = document.querySelector(sel);
+    if (el) el.addEventListener('pointerdown', () => { if (immersive.on && (document.body.classList.contains('peek') || document.body.classList.contains('peek-status'))) { clearTimeout(immersive.timer); immersive.timer = setTimeout(unpeekSoon, 6000); } });
+  }
+  $('stage').addEventListener('pointerdown', () => { if (immersive.on && document.body.classList.contains('peek')) { clearTimeout(immersive.timer); document.body.classList.remove('peek'); } }, true);
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && immersive.on && immersive.fs) setImmersive(false); });
+  // Swipe in from the top, right or bottom edge.
+  (function () {
+    let sx = 0, sy = 0, edge = null;
+    window.addEventListener('touchstart', (e) => {
+      edge = null; if (!immersive.on || e.touches.length !== 1) return;
+      const t = e.touches[0], W = window.innerWidth, H = window.innerHeight, m = 22;
+      sx = t.clientX; sy = t.clientY;
+      edge = sy < m ? 'top' : sy > H - m ? 'bottom' : sx > W - m ? 'right' : null;
+    }, { passive: true });
+    window.addEventListener('touchmove', (e) => {
+      if (!edge) return;
+      const t = e.touches[0], dx = sx - t.clientX, dy = t.clientY - sy;
+      if ((edge === 'top' && dy > 24) || (edge === 'bottom' && -dy > 24) || (edge === 'right' && dx > 24)) { peek('all'); edge = null; }
+    }, { passive: true });
+  })();
+
   // ------------------------------------------------------------------ boot
   renderStatus();
   renderScale();
