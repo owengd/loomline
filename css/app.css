@@ -475,3 +475,49 @@ textarea.input { min-height: 84px; padding: 10px 12px; resize: vertical; font: 1
   .pick-left { border-right: 0; }
   .pinfo .pdesc, .pinfo .hint { display: none; }
 }
+
+/* ---- keyboard-aware dialogs and menus: they fit the part of the screen above the on-screen keyboard */
+.dialog-wrap { inset: auto 0 auto 0; top: var(--vvt, 0px); height: var(--vvh, 100%); }
+.dialog { overflow: hidden; }
+.dialog-body { min-height: 0; flex: 1 1 auto; overscroll-behavior: contain; }
+.menu { overflow-y: auto; max-height: calc(var(--vvh, 100vh) - 16px); overscroll-behavior: contain; }
+.menu > * { flex-shrink: 0; }
+
+/* ---- short screens (a phone or tablet in landscape): smaller bars, and the rail scrolls */
+.rail { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.rail-btn { flex-shrink: 0; }
+@media (min-width: 761px) and (max-height: 560px) {
+  .topbar { min-height: 50px; padding-top: calc(env(safe-area-inset-top, 0px) + 3px); padding-bottom: 3px; }
+  .chip-btn { height: 38px; }
+  .ib { width: 42px; height: 42px; }
+  .rail { width: 92px; }
+  .rail-btn { min-height: 40px; gap: 1px; font-size: 10px; }
+  .rail-btn svg { width: 20px; height: 20px; }
+  .status { min-height: 52px; }
+  .status-actions .sa { min-width: 76px; }
+  .dialog-wrap { padding: 8px; }
+  .dialog { max-height: calc(100% - 8px); }
+  .dialog-head { min-height: 46px; }
+}
+@media (max-width: 520px) { #btnFull { display: none; } }
+
+/* ---- full screen: bars slide away; a handle on each edge (or a swipe in from it) brings them back */
+.edge-handle { display: none; }
+body.immersive .app { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr); grid-template-areas: "stage panel"; }
+body.immersive .topbar, body.immersive .rail, body.immersive .status { position: fixed; z-index: 40; transition: transform 0.22s ease, visibility 0.22s; box-shadow: var(--shadow); visibility: hidden; }
+body.immersive .topbar { top: 0; left: 0; right: 0; transform: translateY(-105%); }
+body.immersive .rail { top: var(--bar-top, 56px); bottom: var(--bar-bottom, 56px); right: 0; transform: translateX(105%); border-radius: 8px 0 0 8px; }
+body.immersive .status { left: 0; right: 0; bottom: 0; transform: translateY(105%); }
+body.immersive.peek .topbar, body.immersive.peek .rail, body.immersive.peek .status,
+body.immersive.peek-status .status { transform: none; visibility: visible; }
+body.immersive:not(.peek) .edge-handle { display: block; position: fixed; z-index: 39; border: 0; padding: 0; background: transparent; }
+body.immersive.peek-status .edge-handle.bottom { display: none; }
+.edge-handle::after { content: ""; position: absolute; border-radius: 3px; background: var(--fg); opacity: 0.4; }
+.edge-handle.top { top: 0; left: 50%; width: 96px; height: 26px; margin-left: -48px; }
+.edge-handle.top::after { left: 24px; right: 24px; top: calc(6px + env(safe-area-inset-top, 0px)); height: 5px; }
+.edge-handle.bottom { bottom: 0; left: 50%; width: 96px; height: 26px; margin-left: -48px; }
+.edge-handle.bottom::after { left: 24px; right: 24px; bottom: calc(6px + env(safe-area-inset-bottom, 0px)); height: 5px; }
+.edge-handle.right { right: 0; top: 50%; width: 26px; height: 96px; margin-top: -48px; }
+.edge-handle.right::after { top: 24px; bottom: 24px; right: calc(6px + env(safe-area-inset-right, 0px)); width: 5px; }
+@media (prefers-reduced-motion: reduce) { body.immersive .topbar, body.immersive .rail, body.immersive .status { transition: none; } }
+@media print { .edge-handle { display: none !important; } }
