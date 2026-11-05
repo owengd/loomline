@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.8.7';
+  const VERSION = '1.8.8';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -645,6 +645,7 @@
     const where = h('p', { class: 'hint', text: `Section of ${K.plainText(K.unescape(net.shortName))}${ends.length ? ': ' + ends.join(' → ') : ''}. Saved in the schematic as a net class flag on the wire, so KiCad keeps it too.` });
     const save = () => {
       const f = {}; for (const k of Loom.CABLE) f[k] = inputs[k].value.trim();
+      if (Loom.CABLE.some((k) => f[k])) f.Cable_Label = Loom.cableLabel(f);
       const empty = !Loom.CABLE.some((k) => f[k]);
       closeDialog();
       if (c.flag) {
@@ -653,7 +654,7 @@
         return;
       }
       if (empty) return;
-      const spot = cableSpot(c.wires, f.Cable_Type || Loom.CABLE.map((k) => f[k]).find(Boolean));
+      const spot = cableSpot(c.wires, f.Cable_Label);
       if (!spot) { banner('err', 'Tap a wire to add cable details.'); return; }
       run('Cable details', () => E.addCableFlag(sh, spot.w, spot.p, f, spot.side));
     };
@@ -1370,7 +1371,7 @@
       A.unshift(...ta);
       if (it && it.type === 'label' && o && o.kind === 'directive') {
         A.push({ label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) });
-        if (Loom.isCableFlag(o)) A.push({ label: 'FLIP SIDE', icon: 'i-flip', run: () => run('Flip cable tag', () => E.setCableFields(sh, o, Loom.cableFields(o), E.cableSideOf(o) === 'a' ? 'b' : 'a')) });
+        if (Loom.isCableFlag(o)) A.push({ label: 'FLIP SIDE', icon: 'i-flip', run: () => run('Flip cable tag', () => { const f = Loom.cableFields(o); f.Cable_Label = Loom.cableLabel(f); return E.setCableFields(sh, o, f, E.cableSideOf(o) === 'a' ? 'b' : 'a'); }) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'cable flag' }) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete cable flag', () => E.deleteItems(sh, [{ type: 'label', label: o }]), { anchor: null }) });
       } else if (it && it.type === 'label' && o) {

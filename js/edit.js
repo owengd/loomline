@@ -734,7 +734,7 @@
   // A cable's details live in a KiCad directive label (net class flag) on one of its wires, as
   // fields Cable_Type, Cable_PN, Cable_Size, Cable_Colour and Cable_Length. KiCad keeps them, shows
   // the visible one, and lists them in the label's properties. No Netclass field is set.
-  const CABLE_FIELDS = ['Cable_Type', 'Cable_PN', 'Cable_Size', 'Cable_Colour', 'Cable_Length'];
+  const CABLE_FIELDS = ['Cable_Label', 'Cable_Type', 'Cable_PN', 'Cable_Size', 'Cable_Colour', 'Cable_Length'];   // Cable_Label: the text shown on the drawing
   function cableFieldLines(name, value, at, angle, hide, v8) {
     const eff = v8 ? ['\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t\t(italic yes)', '\t\t)', '\t\t(justify left)'].concat(hide ? ['\t\t(hide yes)'] : []).concat(['\t)'])
       : [`\t(effects (font (size 1.27 1.27) italic) (justify left)${hide ? ' hide' : ''})`];
@@ -754,7 +754,7 @@
     const just = side === 'b' ? '(justify right bottom)' : '(justify left bottom)';
     const at = cableTextAt(p, vertical, side);
     const fangle = vertical ? 90 : 0;
-    const shown = fields.Cable_Type ? 'Cable_Type' : CABLE_FIELDS.find((f) => fields[f]);
+    const shown = CABLE_FIELDS.find((f) => fields[f]);
     const lines = ['(netclass_flag ""', `\t(length ${fnum(L)})`, '\t(shape dot)', `\t(at ${fnum(p[0])} ${fnum(p[1])} ${angle})`];
     if (v8) lines.push('\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', '\t\t' + just, '\t)');
     else lines.push(`\t(effects (font (size 1.27 1.27)) ${just})`);

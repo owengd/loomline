@@ -507,6 +507,18 @@
   // describes the cable section it sits on (between pins and branch points).
   const CABLE = ['Cable_Type', 'Cable_PN', 'Cable_Size', 'Cable_Colour', 'Cable_Length'];
   const isCableFlag = (l) => l.kind === 'directive' && l.props.some((p) => CABLE.includes(p.name) && p.value);
+  // The tag shown on the drawing: core colour, gauge, and how many cores the cable has, e.g.
+  // "White/Blue 26 AWG 4 core". Falls back to the type when there's nothing to build it from.
+  function cableLabel(f) {
+    const col = String(f.Cable_Colour || '').trim()
+      .replace(/^(Core|Pair)\s*\d+\s*/i, '').replace(/\s*stripe$/i, '').replace(/^Screen.*$/i, 'Screen').replace(/^Centre.*$/i, 'Centre');
+    const size = String(f.Cable_Size || '').trim();
+    const m = /(\d+)\s*core/i.exec(f.Cable_Type || '');
+    const cores = m ? m[1] + ' core' : '';
+    const parts = [col, size, cores].filter(Boolean);
+    if (!size && !cores) return [col, f.Cable_Type].filter(Boolean).join(' ') || f.Cable_PN || '';
+    return parts.join(' ');
+  }
   const cableFields = (l) => { const o = {}; for (const f of CABLE) { const p = l.props.find((x) => x.name === f); o[f] = p ? K.unescape(p.value) : ''; } return o; };
   function lengthMetres(s) {
     const m = /(-?[\d.,]+)\s*(mm|cm|m|ft|')?/i.exec(String(s || '')); if (!m) return null;
@@ -613,6 +625,6 @@
     return [cols, ...rows].map((r) => r.map(q).join(',')).join('\r\n') + '\r\n';
   }
 
-  root.Loom = { analyze, check, zoneOf, isConnector, traceSteps, cables, isCableFlag, cableFields, sectionEnds, CABLE, bom, wireList, connectors, looms, issuesTable, plcIO, channelOf, diff, csv };
+  root.Loom = { analyze, check, zoneOf, isConnector, traceSteps, cables, isCableFlag, cableFields, cableLabel, sectionEnds, CABLE, bom, wireList, connectors, looms, issuesTable, plcIO, channelOf, diff, csv };
   if (typeof module !== 'undefined') module.exports = root.Loom;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
