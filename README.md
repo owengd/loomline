@@ -170,7 +170,7 @@ CSV, or printed / saved as a PDF:
 | Wire list | Every wire: number, from part and pin, to part and pin, net, pages |
 | Loom list | The same wires grouped by the two parts they join, connectors first |
 | Connector pin-outs | For each connector or terminal strip: pin, name, wire, net and where it goes |
-| Cable schedule | Every cable section with type, product code, size, colour, length and both ends, plus total length per cable for ordering |
+| Cable schedule | Total cable length per type and product code for ordering (the cores of one cable — same cable, same two ends, same length — count once as a cable run), each cable run with the cores tagged, and every tagged core with its two ends |
 | PLC I/O list | Every I/O module and each channel: terminal points, signal, wire number, what it connects to, used or spare, and the E-bus budget |
 | Bill of materials | Parts grouped by value and footprint, plus MPN / manufacturer fields if present |
 | Design check | Every problem the check found, with page and zone |
