@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.8.9';
+  const VERSION = '1.9.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -2281,14 +2281,18 @@
         const used = io.chans.filter((c) => c.used).length;
         return { group: 'Section', count: `${io.modules.length} modules · ${used}/${io.chans.length} channels used`, sections: io.modules.length ? [mods, chans, budget] : [{ heading: 'No I/O modules', cols: ['Note'], rows: [['Place Beckhoff terminals from the Beckhoff I/O category of Add a part; their channels are listed here.']] }] };
       } },
-    { id: 'cables', title: 'Cable schedule', desc: 'Every cable section with details (type, product code, core size, colour, length) and its two ends, plus totals by cable type for ordering.',
+    { id: 'cables', title: 'Cable schedule', desc: 'Total cable length by type and product code (for ordering), each cable run, and every tagged core with its two ends.',
       make: (P, A) => {
         const C = Loom.cables(P, A);
         if (!C.rows.length) return { count: 'no cables yet', sections: [{ heading: 'No cable details yet', cols: ['Note'], rows: [['Tap a wire, then CABLE, to give that section a type, product code, core size, colour and length.']] }] };
         const list = { heading: 'Cables', cols: ['Type', 'Product code', 'Size', 'Colour / marking', 'Length', 'Wire', 'From', 'To', 'Net', 'Page', 'Zone'], rows: C.rows.map((r) => [r.f.Cable_Type, r.f.Cable_PN, r.f.Cable_Size, r.f.Cable_Colour, r.f.Cable_Length, r.wire, r.from, r.to, r.net ? K.plainText(K.unescape(r.net.name)) : '', r.page, r.zone]) };
-        const tot = { heading: 'Totals by cable', cols: ['Type', 'Product code', 'Size', 'Sections', 'Total length (m)', 'Sections without a length'], rows: C.totals.map((t) => [t.type, t.pn, t.size, t.n, Math.round(t.m * 100) / 100, t.unknown]) };
+        const r2 = (v) => Math.round(v * 100) / 100;
         const m = C.totals.reduce((a, t) => a + t.m, 0);
-        return { group: 'Section', count: `${C.rows.length} sections · ${Math.round(m * 10) / 10} m`, sections: [list, tot] };
+        const tot = { heading: 'Total length by cable', sub: 'Each cable run counted once, however many of its cores are tagged', cols: ['Type', 'Product code', 'Size', 'Cable runs', 'Total length (m)', 'Cores tagged', 'Runs without a length'],
+          rows: C.totals.map((t) => [t.type, t.pn, t.size, t.runs, r2(t.m), t.n, t.unknown]).concat([['All cables', '', '', C.runs.length, r2(m), C.rows.length, C.totals.reduce((a, t) => a + t.unknown, 0)]]) };
+        const runs = { heading: 'Cable runs', sub: 'Cores of one cable: same cable, same two ends, same length', cols: ['Type', 'Product code', 'Between', 'Length', 'Cores tagged', 'Page'],
+          rows: C.runs.map((r) => [r.type, r.pn, r.ends, r.length || '', r.cores.join(', '), r.page]) };
+        return { group: 'Section', count: `${C.runs.length} cable runs · ${Math.round(m * 10) / 10} m`, sections: [tot, runs, list] };
       } },
     { id: 'bom', title: 'Bill of materials', desc: 'Parts grouped by value and footprint, with manufacturer fields when the schematic has them.',
       make: (P, A) => { const t = Loom.bom(P, A); return { sections: [t], count: t.rows.reduce((n, r) => n + r[0], 0) + ' parts' }; } },

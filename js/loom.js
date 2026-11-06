@@ -548,13 +548,27 @@
       }
     }
     rows.sort((a, b) => ncmp(a.f.Cable_Type, b.f.Cable_Type) || ncmp(a.f.Cable_PN, b.f.Cable_PN) || a.page - b.page);
-    const totals = new Map();
+    // The cores of one cable are separate sections (one per conductor) between the same two parts,
+    // with the same length. Group them into cable runs so a 4-core cable's length counts once.
+    const endPart = (e) => String(e || '').replace(/\.[^.]*$/, '');
+    const runs = new Map();
     for (const r of rows) {
-      const k = [r.f.Cable_Type, r.f.Cable_PN, r.f.Cable_Size].join('|');
-      let t = totals.get(k); if (!t) totals.set(k, t = { type: r.f.Cable_Type, pn: r.f.Cable_PN, size: r.f.Cable_Size, n: 0, m: 0, unknown: 0 });
-      t.n++; if (r.m == null) t.unknown++; else t.m += r.m;
+      const ends = [endPart(r.from)].concat(String(r.to || '').split(', ').map(endPart)).filter(Boolean).sort();
+      const k = [r.f.Cable_PN || r.f.Cable_Type, ends.join('~'), r.m == null ? '?' + r.inst.idx + ':' + r.label.uuid : r.m].join('|');
+      let run = runs.get(k);
+      if (!run) runs.set(k, run = { type: r.f.Cable_Type, pn: r.f.Cable_PN, size: r.f.Cable_Size, ends: ends.join(' ↔ '), m: r.m, length: r.f.Cable_Length, cores: [], page: r.page });
+      run.cores.push(r.f.Cable_Colour || '?');
+      r.run = run;
     }
-    return { rows, totals: Array.from(totals.values()) };
+    const totals = new Map();
+    for (const run of runs.values()) {
+      const k = [run.type, run.pn, run.size].join('|');
+      let t = totals.get(k); if (!t) totals.set(k, t = { type: run.type, pn: run.pn, size: run.size, runs: 0, n: 0, m: 0, unknown: 0 });
+      t.runs++; t.n += run.cores.length;
+      if (run.m == null) t.unknown++; else t.m += run.m;
+    }
+    const runList = Array.from(runs.values()).sort((a, b) => ncmp(a.type, b.type) || ncmp(a.ends, b.ends));
+    return { rows, runs: runList, totals: Array.from(totals.values()).sort((a, b) => ncmp(a.type, b.type)) };
   }
 
   // ---------------------------------------------------------------- comparison
