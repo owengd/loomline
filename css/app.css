@@ -690,7 +690,11 @@ body.immersive .dock { display: none; }
 @media (prefers-reduced-motion: reduce) { body.immersive .top-wrap { transition: none; } }
 @media print { .ribbon, .dock { display: none !important; } }
 /* The ribbon has Fit and Up a sheet, so the title bar keeps only the quick ones. */
-#btnFit, #btnUp { display: none; }
+#btnUp { display: none; }
+#btnFit { display: grid !important; }   /* fit the whole sheet, beside the layers button */
+.row.check-kind { cursor: pointer; }
+.row.check-kind .main { align-items: center; }
+.row.check-kind input { width: 20px; height: 20px; accent-color: var(--blue); flex: none; }
 @media (min-width: 761px) and (max-height: 480px) {
   .topbar { min-height: 40px; padding-top: calc(env(safe-area-inset-top, 0px) + 1px); padding-bottom: 1px; }
   .topbar .ib { width: 40px; height: 40px; }
