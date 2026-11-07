@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.0.0';
+  const VERSION = '2.0.1';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -500,6 +500,28 @@
     renderSelectionUI();
     showTraceStep(s);
   }
+  // Sheets the traced net reaches, in page order
+  function tracePages(s) {
+    const tr = traceOf(s); if (!tr) return [];
+    const set = new Set();
+    for (const st of tr.steps) for (const ii of st.items.keys()) set.add(ii);
+    return Array.from(set).map((ii) => state.project.instances[ii]).sort((a, b) => a.order - b.order);
+  }
+  // Jump to the next sheet the net continues on, moving the step on to where it first reaches that sheet.
+  function traceNextPage(s) {
+    const tr = traceOf(s); if (!tr) return;
+    const pages = tracePages(s); if (pages.length < 2) return;
+    const i = pages.indexOf(state.inst);
+    const next = pages[(i + 1) % pages.length];
+    const first = tr.steps.findIndex((st) => st.items.has(next.idx));
+    if (first > s.step.k) s.step.k = first;
+    showInstance(next);
+    applyHighlight();
+    renderSelectionUI();
+    const b = itsBox(next, traceIts(s, next, false));
+    if (b) view.animateTo(b);
+    toast(`Page ${next.page}: ${instLabel(next)}`);
+  }
   function setTraceStep(on) {
     traceStep = on; Store.pref('traceStep', on);
     const s = state.sel;
@@ -526,11 +548,14 @@
     const tr = traceOf(s);
     if (tr) {
       const last = tr.steps.length - 1;
-      return [
-        { label: 'CONTINUE', icon: 'i-next', primary: true, disabled: s.step.k >= last, run: () => traceMove(1) },
-        { label: 'BACK', icon: 'i-undo', disabled: s.step.k === 0, run: () => traceMove(-1) },
-        { label: 'ALL', icon: 'i-net', run: () => setTraceStep(false) }
+      const pg = tracePages(s);
+      const A = [
+        { label: 'BACK', icon: 'i-back', disabled: s.step.k === 0, run: () => traceMove(-1), trace: true },
+        { label: 'STEP', icon: 'i-next', primary: true, disabled: s.step.k >= last, run: () => traceMove(1), trace: true }
       ];
+      if (pg.length > 1) A.push({ label: 'NEXT PAGE', icon: 'i-hier', run: () => traceNextPage(s), trace: true });
+      A.push({ label: 'ALL', icon: 'i-net', run: () => setTraceStep(false) });
+      return A;
     }
     return startNodeOf(state.inst, s.item) >= 0 && !s.net.bus ? [{ label: 'STEP', icon: 'i-steps', run: () => setTraceStep(true) }] : [];
   }
@@ -1566,7 +1591,7 @@
     return h('button', { class: 'sa' + (cls ? ' ' + cls : ''), onclick: fn, disabled: !!disabled }, icon(ico), label);
   }
   function putActions(acts, list) {
-    const max = window.matchMedia('(max-width: 760px)').matches ? 3 : 6;
+    const max = (window.matchMedia('(max-width: 760px)').matches ? 3 : 6) + (list.some((a) => a.trace) ? 1 : 0);
     const shown = list.length > max ? list.slice(0, max - 1) : list;
     for (const a of shown) acts.append(statusAction(a.label, a.icon, a.run, a.disabled, a.danger ? 'danger' : a.primary ? 'primary' : ''));
     if (list.length > max) {
@@ -2778,9 +2803,19 @@
     try { state.A = Loom.analyze(state.project); } catch (e) { console.error(e); state.A = null; }
     renderCheckBadge();
   }
+  // Kinds of problem that can be hidden from the check (some drawings never use no-connect flags)
+  const CHECK_KINDS = { pin: 'Unconnected pins', nc: 'No-connect flag on a connected net', dangling: 'Loose wire ends', label: 'Labels with no pins', global1: 'Global labels used once', annotate: 'Not annotated', value: 'Missing values', dupref: 'Duplicate references', drive: 'Outputs driving each other', sheetpin: 'Sheet pins with no label', hier: 'Labels with no sheet pin', ebus: 'E-bus power' };
+  const checkHide = new Set(Store.pref('checkHide') || []);
+  const shownIssues = () => (state.A ? state.A.issues.filter((i) => !checkHide.has(i.code)) : []);
+  function toggleCheckKind(code) {
+    if (checkHide.has(code)) checkHide.delete(code); else checkHide.add(code);
+    Store.pref('checkHide', Array.from(checkHide));
+    renderCheckBadge(); updateAnnot();
+    if (state.panelOpen) { state._keepScroll = true; renderPanel(); }
+  }
   function renderCheckBadge() {
     const b = $('checkBadge'); if (!b) return;
-    const A = state.A, errs = A ? A.issues.filter((i) => i.sev === 'error').length : 0, all = A ? A.issues.length : 0;
+    const A = state.A, I = shownIssues(), errs = I.filter((i) => i.sev === 'error').length, all = I.length;
     b.hidden = !all;
     b.textContent = String(errs || all);
     b.className = 'badge' + (errs ? ' bad' : ' warn');
@@ -2818,7 +2853,7 @@
       const b = sy.body || sy.bb;
       an.tags.push({ x: (b[0] + b[2]) / 2, y: b[3] + 0.6, text: '⇄ ' + txt, color: COL.xref[d], size: 0.95, ha: 'center', va: 'top' });
     }
-    if (show.markers) for (const is of A.issues) if (is.inst === inst.idx) an.markers.push({ x: is.p[0], y: is.p[1], sev: is.sev, issue: is, current: state.curIssue && state.curIssue.msg === is.msg && state.curIssue.p === is.p });
+    if (show.markers) for (const is of shownIssues()) if (is.inst === inst.idx) an.markers.push({ x: is.p[0], y: is.p[1], sev: is.sev, issue: is, current: state.curIssue && state.curIssue.msg === is.msg && state.curIssue.p === is.p });
     const cmp = state.compare && state.compare.diff;
     if (cmp) {
       for (const n of cmp.nets) { const net = P.nets[n.net]; if (net) for (const g of groupsFor(net, inst)) an.groupColor.set(g, COL.net); }
@@ -2880,22 +2915,35 @@
   // ---- design check
   function renderCheck(body) {
     const A = state.A; if (!A) return;
-    const errs = A.issues.filter((i) => i.sev === 'error').length, warns = A.issues.length - errs;
+    const I = shownIssues();
+    const errs = I.filter((i) => i.sev === 'error').length, warns = I.length - errs;
     body.append(h('div', { class: 'chips' },
       h('span', { class: 'chip ' + (errs ? 'bad' : 'ok'), text: `${errs} error${errs === 1 ? '' : 's'}` }),
       h('span', { class: 'chip ' + (warns ? 'warn' : 'ok'), text: `${warns} warning${warns === 1 ? '' : 's'}` })));
     body.append(h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: show.markers, onchange: (e) => setShow('markers', e.target.checked) }), 'Show markers on the drawing'));
-    if (!A.issues.length) body.append(h('p', { class: 'empty', text: 'No problems found. The checks run again after every edit.' }));
+    // Filter: one switch per kind of problem found (or hidden)
+    const counts = new Map();
+    for (const is of A.issues) counts.set(is.code, (counts.get(is.code) || 0) + 1);
+    const codes = Object.keys(CHECK_KINDS).filter((c) => counts.has(c) || checkHide.has(c));
+    if (codes.length) {
+      const f = h('div', { class: 'rows' });
+      for (const c of codes) {
+        const box = h('input', { type: 'checkbox', checked: !checkHide.has(c), onchange: () => toggleCheckKind(c) });
+        f.append(h('label', { class: 'row check-kind' }, h('span', { class: 'main' }, box, h('span', { class: 'nm', text: CHECK_KINDS[c] })), h('span', { class: 'meta', text: String(counts.get(c) || 0) })));
+      }
+      body.append(section('Show these problems', checkHide.size ? checkHide.size + ' kind' + (checkHide.size === 1 ? '' : 's') + ' hidden' : 'all shown', f));
+    }
+    if (!I.length) body.append(h('p', { class: 'empty', text: A.issues.length ? 'Nothing to show: the problems found are all of kinds you have hidden.' : 'No problems found. The checks run again after every edit.' }));
     else {
       const rows = h('div', { class: 'rows' });
-      for (const is of A.issues.slice(0, 600)) {
+      for (const is of I.slice(0, 600)) {
         const cur = state.curIssue && state.curIssue.msg === is.msg && state.curIssue.p === is.p;
         rows.append(h('button', { class: 'row issue ' + is.sev + (cur ? ' current' : ''), onclick: () => { pickIssue(is, true); afterPick(); } },
           h('span', { class: 'main' }, h('span', { class: 'sev', 'aria-label': is.sev === 'error' ? 'Error' : 'Warning' }), h('span', { class: 'nm', text: is.msg })),
           h('span', { class: 'meta', text: 'p' + is.page + ' · ' + is.zone })));
       }
-      if (A.issues.length > 600) rows.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: `${A.issues.length - 600} more in the Design check report` })));
-      body.append(section('Problems', String(A.issues.length), rows));
+      if (I.length > 600) rows.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: `${I.length - 600} more in the Design check report` })));
+      body.append(section('Problems', String(I.length), rows));
     }
     body.append(h('p', { class: 'hint', text: 'Checks for unconnected pins, wire ends that touch nothing, labels that reach no pins, global labels used once, sheet pins without a hierarchical label, duplicate or unannotated references, missing values, and outputs driving each other. It covers the common mistakes; run ERC in KiCad before release.' }));
   }
@@ -2962,7 +3010,7 @@
     { id: 'bom', title: 'Bill of materials', desc: 'Parts grouped by value and footprint, with manufacturer fields when the schematic has them.',
       make: (P, A) => { const t = Loom.bom(P, A); return { sections: [t], count: t.rows.reduce((n, r) => n + r[0], 0) + ' parts' }; } },
     { id: 'check', title: 'Design check', desc: 'Every problem the live check found, with page and zone.',
-      make: (P, A) => { const t = Loom.issuesTable(P, A); return { sections: [t], count: t.rows.length + ' problems' }; } },
+      make: (P, A) => { const t = Loom.issuesTable(P, Object.assign({}, A, { issues: shownIssues() })); return { sections: [t], count: t.rows.length + ' problems' + (checkHide.size ? ' (some kinds hidden)' : '') }; } },
     { id: 'install', title: 'Install record', desc: 'Fitted and tested status for every wire and part, with who and when.',
       make: (P, A) => {
         const wires = { heading: 'Wires', cols: ['Wire', 'From', 'To', 'Fitted', 'Fitted by', 'Tested', 'Tested by', 'Note'], rows: A.wires.map((w) => { const x = ist(w.key), it = x.it || {}; return [w.no || '', pinText(w.a), pinText(w.b), x.fitted ? 'yes' : '', whenText(it.fitted), x.tested ? 'yes' : '', whenText(it.tested), it.note && it.note.v ? it.note.v : '']; }) };
@@ -3407,7 +3455,7 @@
   function copyLink() { writeHash(); copy(location.href); }
 
   // ------------------------------------------------------------------ controls
-  $('btnFit').addEventListener('click', () => view.fit());
+  $('btnFit').addEventListener('click', () => { if (view.scene) view.fit(view.scene.page, 12); });
   $('wConnect').addEventListener('click', () => openDrawer('drawerProjects'));
   $('wOpen').addEventListener('click', () => $('fileInput').click());
   $('wSample').addEventListener('click', loadSample);
