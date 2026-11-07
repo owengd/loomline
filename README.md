@@ -82,9 +82,13 @@ Folders of schematics with no `.kicad_pro` are listed too.
 
 ## 3. Using it
 
-The layout follows the KiCad Editor Android app: chips along the top for the sheet, nets and
-parts; a tool rail on the right (along the bottom on a phone); and a status bar at the bottom
-showing what's selected.
+The layout follows desktop electrical CAD (AutoCAD Electrical, Capital X Panel Designer), sized
+for fingers: a dark title bar with the sheet and nets chips; a **ribbon** of tools in tabs
+(**Home**, **Insert**, **Wire**, **Draw**, **Analyse**, **View**; tap the open tab again, or the
+arrow at the right, to fold it away); a **Stencils** dock on the left; panels and their tab rail
+on the right (along the bottom on a phone); and a status bar at the bottom showing what's
+selected and what you can do with it. On a wide screen the Properties panel opens when you
+select a part (View → *Properties* turns that off).
 
 | To | Do this |
 | --- | --- |
@@ -111,9 +115,9 @@ and `0` to zoom.
 
 ## 4. Editing
 
-The three buttons at the top of the rail switch mode: **SELECT** (tap to select and trace),
-**WIRE** and **LABEL**. Every change is a small edit to the schematic text, so the rest of the
-file stays exactly as KiCad wrote it.
+The ribbon's **Home** tab has selection, the clipboard and arrange tools; **Wire** and
+**Insert** add wiring and labels; **Draw** adds lines, shapes and text. Every change is a small
+edit to the schematic text, so the rest of the file stays exactly as KiCad wrote it.
 
 | To | Do this |
 | --- | --- |
@@ -121,9 +125,11 @@ file stays exactly as KiCad wrote it.
 | Move | Select a part, label or wire → **MOVE**, drag, then **DONE**. Attached wires stretch to follow |
 | Rotate / mirror | Select a part → **ROTATE**, **MIRROR ↔** or **MIRROR ↕** (labels rotate too) |
 | Delete | Select → **DELETE**. Junctions that are no longer needed go with it |
-| Copy a part | Select it → **COPY**. The copy gets the next free reference and starts in move mode |
-| Draw a wire | **WIRE**, then tap points; it snaps to the 1.27 mm grid and finishes when it lands on a pin or wire. **FLIP** swaps the corner, **BACK** removes the last point |
-| Add a label | **LABEL**, tap a wire or pin, choose local, global or hierarchical and type the name |
+| Duplicate a part | Select it → **DUPLICATE**. The copy gets the next free reference and starts in move mode |
+| Select several things | Home → **Box select**, then drag a box: everything wholly inside it is selected (drag again to add more, tap an item to add or remove it, two fingers still pan). **Select all** takes the whole sheet. Then **MOVE**, **COPY**, **DUPLICATE** or **DELETE** the lot |
+| Copy and paste | Select one thing or a box of things → **Copy**, then **Paste** and tap where the top-left of the copy goes, on this sheet or any other (even another project). Parts get the next free references, and their symbols come along. `Ctrl+C`, `Ctrl+V`, `Ctrl+D` (duplicate), `Ctrl+A` and `Delete` work on a keyboard |
+| Draw a wire | Wire → **Draw wire**, then tap points; it snaps to the 1.27 mm grid and finishes when it lands on a pin or wire. **FLIP** swaps the corner, **BACK** removes the last point |
+| Add a label | Insert → **Net label**, **Off-sheet** (a KiCad global label: joins the net across sheets) or **Sheet port** (hierarchical label), then tap a wire or pin and type the name |
 | No-connect flag | Tap a pin → **NO-CONN** |
 | Undo / redo | The arrows in the top bar, or `Ctrl+Z` / `Ctrl+Y` |
 
@@ -179,6 +185,14 @@ CSV, or printed / saved as a PDF:
 The wire list turns each net into individual wires by joining its pins in the shortest way the
 drawing allows (pins on the same sheet first). That matches how a loom is usually made up, but
 check it against the drawing for nets where the order of terminations matters.
+
+### Hydraulic valves
+
+**Add a part → Hydraulics** has the Bucher WS22GD cartridge seat valve (2/2, size 5, normally
+closed) and the normally open WS22OD. The symbol shows the valve to ISO 1219 with ports 1 and 2;
+its three pins are the coil's M8 plug (1 = +V, 3 = 0 V, 4 = not used), so the coil wiring traces
+and appears in the wire list like any other part. Reference letter Y. The coil (12 V DC holding,
+15 W), connector, ordering code and hydraulic ratings are in the part's fields (INFO).
 
 ### Beckhoff I/O
 
@@ -236,21 +250,45 @@ branch history shows who fitted and tested what, and when. Two tablets ticking a
 are merged item by item (the later tick wins). Sharing needs a token with write access; with a
 read-only token the log stays on the device.
 
-## 9. Drawing and adding parts
+## 9. Stencils, parts and drawing
 
-**DRAW** in the rail opens a palette across the top of the drawing:
+**Stencils** (Insert → *Stencils*, or the top of the rail) opens a dock of ready-made pieces, like
+the stencil panel in Capital X:
+
+- **Wires & junctions**: straight runs, corners, tees, a four-way cross, a crossover (two wires
+  crossing without joining), a junction dot and a no-connect flag.
+- **Labels & connectors**: net label, off-sheet connector, sheet port, cable tag and text.
+- **Parts**: power symbols, fuses and protection, switches, relays, loads and indicators,
+  connectors, passives, the Beckhoff I/O terminals and the Bucher hydraulic valves, each with a
+  picture. **All 10,000 parts…** opens the full library; the search box at the top searches the
+  stencils and the library together. **Recently used** keeps your last twelve.
+
+Tap a stencil, then tap the drawing to place it (tap again for another; **DONE** when finished),
+or drag it straight from the dock onto the drawing (a sideways drag or a long press picks it up).
+
+Stencils join what they're dropped on:
+
+- A **tee** or **cross** dropped on a wire branches off it (its arms that lie along the wire are
+  already there), with a junction.
+- A **two-pin part** (fuse, switch, resistor, diode, lamp…) dropped on a straight wire turns to
+  line up with it and goes in series: the wire between its pins is removed.
+- A **power symbol** or other part dropped on a wire, pin or wire end connects its nearest pin
+  there, splitting the wire and adding a junction if needed.
+- If a drop would also touch a net it shouldn't, the app says which nets merged and offers
+  **UNDO**.
+
+The **Draw** tab has the drawing tools:
 
 | Tool | How |
 | --- | --- |
-| PART | Opens **Add a part**: search 10,000 symbols from KiCad's library (relays, switches, fuses, lamps, connectors, power symbols, sensors…), or browse by category. Tap one to preview it, then **PLACE** and tap the drawing. Tap again to place another; **ROTATE** turns the last one |
-| LINE | Tap each point, then **FINISH** |
-| RECT | Tap two opposite corners |
-| CIRCLE | Tap the centre, then a point on the edge |
-| ARC | Tap the start, a point it passes through, and the end |
-| TEXT | Tap where it goes and type it; choose size, direction, bold or italic |
+| Line | Tap each point, then **FINISH** |
+| Rectangle | Tap two opposite corners |
+| Circle | Tap the centre, then a point on the edge |
+| Arc | Tap the start, a point it passes through, and the end |
+| Text | Tap where it goes and type it; choose size, direction, colour, bold or italic |
 
-**STYLE** sets line width, dashes, fill and colour for new shapes. In SELECT mode, tap a shape's
-outline or a text to select it: **STYLE** or **EDIT**, **MOVE** and **DELETE** work on it.
+**Line style** sets width, dashes, fill and colour for new shapes (or the selected one). Tap a
+shape's outline or a text to select it: **STYLE** or **EDIT**, **MOVE** and **DELETE** work on it.
 
 Everything snaps to the 1.27 mm grid. A placed part gets the next free reference (K3, SW12…),
 and its symbol is copied into the schematic file, the same way KiCad does it, so the file
@@ -286,14 +324,16 @@ library/              part library (KiCad symbols as gzipped JSON, plus a search
 tools/build-kicad-library.js  rebuilds library/ from a checkout of KiCad's symbol library
 tools/build-loomline-library.js  builds Loomline's own libraries (Beckhoff I/O so far) from tools/*-data.js
 js/loom.js            wire numbers, wire list, cross-references, design check, reports, revision compare
-js/edit.js            schematic edits as text splices: fields, move, rotate, wires, labels, copy
-js/app.js             UI: projects, sheets, inspector, search, deep links, editing, saving
+js/edit.js            schematic edits as text splices: fields, move, rotate, wires, labels, copy and paste, parts dropped into wires
+js/app.js             UI: ribbon, stencil dock, projects, sheets, inspector, search, deep links, editing, saving
 sw.js                 offline app shell
 samples/              KiCad's complex_hierarchy demo (GPL-3.0, see NOTICE.md); safe to delete
 test/compare-pcb.js   node test: compares schematic nets with the pad nets in .kicad_pcb files
 test/edit-test.js     node test: applies edits, re-parses and checks connectivity
 test/library-test.js  node test: places library parts and draws shapes, then re-parses
 test/loom-test.js     node test: wire numbers, wire list, checks and self-compare on every demo project
+test/stencil-test.js  node test: stencils on wires, parts dropped in series, copy and paste, group move
+test/trace-test.js    node test: step-by-step tracing
 fonts/                IBM Plex (SIL Open Font License, see OFL-LICENSE.txt)
 ```
 

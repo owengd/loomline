@@ -7,13 +7,13 @@
 <meta name="description" content="Loomline: design, trace and install electrical systems from KiCad schematics on GitHub.">
 <meta name="application-name" content="Loomline">
 <meta name="apple-mobile-web-app-title" content="Loomline">
-<meta name="theme-color" content="#f7f5f0">
+<meta name="theme-color" content="#1e2a38">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="fonts/ibm-plex-sans-condensed-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/ibm-plex-mono-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=1.9.0">
+<link rel="stylesheet" href="css/app.css?v=2.0.0">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -81,6 +81,20 @@
     <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="9" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 8.4v7.2M18 11.4c0 3.6-6 2.6-11 5.4" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-mark" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="8" fill="#1a2e3a"/><path d="M5 20h6l2-5 3 9 3-13 2 9h6" fill="none" stroke="#ff5a1f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="20" r="2" fill="#4cc46e"/><circle cx="27" cy="20" r="2" fill="#4cc46e"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.2"/><path d="m13 12 6 6.5-2.6.2-1.4 2.3z" fill="currentColor"/></symbol>
+    <symbol id="i-selall" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.2"/><rect x="7.5" y="7.5" width="9" height="9" rx="1" fill="currentColor" opacity="0.35"/></symbol>
+    <symbol id="i-paste" viewBox="0 0 24 24"><path d="M9 4h6v3H9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 5.5H6v15h12v-15h-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 12h6M9 15.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-dup" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9.5" y="9.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15 12.5v5M12.5 15h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-stencil" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="17.3" cy="6.8" r="3.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 17.3h7.5M6.8 13.5v7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M13.5 21 17.3 13.5 21 21z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-glabel" viewBox="0 0 24 24"><path d="M2.5 12 7 7.5h14.5v9H7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M10 12h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-hlabel" viewBox="0 0 24 24"><path d="M3 7.5h12l4.5 4.5-4.5 4.5H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M19.5 12H22" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 21V9M6 9h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 3v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9.5 4.5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-junction" viewBox="0 0 24 24"><path d="M3 12h18M12 12v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></symbol>
+    <symbol id="i-tee" viewBox="0 0 24 24"><path d="M3 8h18M12 8v13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="8" r="2.4" fill="currentColor"/></symbol>
+    <symbol id="i-props" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M14.5 3.5v17M16.5 8h2M16.5 12h2M16.5 16h2M6.5 8h5M6.5 12h5M6.5 16h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></symbol>
+    <symbol id="i-dim" viewBox="0 0 24 24"><circle cx="9" cy="12" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="15.5" cy="12" r="5.5" fill="currentColor" opacity="0.3"/></symbol>
+    <symbol id="i-none" viewBox="0 0 24 24"></symbol>
   </defs>
 </svg>
 
@@ -88,8 +102,10 @@
 <button class="edge-handle right" id="edgeRight" aria-label="Show the tools"></button>
 <button class="edge-handle bottom" id="edgeBottom" aria-label="Show the status bar"></button>
 <div class="app" id="app">
+  <div class="top-wrap" id="topWrap">
   <header class="topbar">
     <button class="ib" id="btnProjects" aria-label="Projects" title="Projects"><svg><use href="#i-back"/></svg></button>
+    <svg class="app-mark" aria-hidden="true"><use href="#i-mark"/></svg>
     <button class="title-btn" id="btnTitle" aria-label="Project and revision">
       <span class="ptitle" id="projName">LOOMLINE</span>
       <span class="prev" id="projRev">No project open</span>
@@ -111,6 +127,18 @@
       <button class="ib" id="btnSettings" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button>
     </div>
   </header>
+  <div class="ribbon" id="ribbon">
+    <div class="rb-tabs" id="rbTabs" role="tablist" aria-label="Tool tabs"></div>
+    <div class="rb-tools" id="rbTools" role="toolbar"></div>
+  </div>
+  </div>
+
+  <aside class="dock" id="dock" hidden aria-label="Stencils">
+    <div class="dock-head"><span class="panel-title">Stencils</span><button class="ib" id="dockClose" aria-label="Close stencils"><svg><use href="#i-close"/></svg></button></div>
+    <div class="dock-search"><svg><use href="#i-search"/></svg><input class="input" id="dockSearch" type="search" placeholder="Find stencils and parts" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"></div>
+    <div class="dock-body" id="dockBody"></div>
+    <div class="dock-foot"><span id="dockHint">Tap a stencil, then tap the drawing. Or drag it on.</span></div>
+  </aside>
 
   <main class="stage" id="stage">
     <canvas id="canvas" aria-label="Schematic. Tap a wire to trace its net, tap a part to see its details."></canvas>
@@ -141,18 +169,15 @@
   </aside>
 
   <nav class="rail" id="rail" aria-label="Tools">
-    <button class="rail-btn mode" data-mode="select" aria-pressed="true"><svg><use href="#i-hand"/></svg><span>SELECT</span></button>
-    <button class="rail-btn mode" data-mode="wire"><svg><use href="#i-wire"/></svg><span>WIRE</span></button>
-    <button class="rail-btn mode" data-mode="label"><svg><use href="#i-tag"/></svg><span>LABEL</span></button>
-    <button class="rail-btn mode" data-mode="draw"><svg><use href="#i-draw"/></svg><span>DRAW</span></button>
-    <button class="rail-btn wide-only" data-tab="sheets"><svg><use href="#i-hier"/></svg><span>SHEETS</span></button>
-    <button class="rail-btn" data-tab="nets"><svg><use href="#i-net"/></svg><span>NETS</span></button>
-    <button class="rail-btn wide-only" data-tab="parts"><svg><use href="#i-chip"/></svg><span>PARTS</span></button>
-    <button class="rail-btn wide-only" data-tab="info"><svg><use href="#i-info"/></svg><span>INFO</span></button>
-    <button class="rail-btn" data-tab="check"><svg><use href="#i-alert"/></svg><span>CHECK</span><b class="badge" id="checkBadge" hidden>0</b></button>
-    <button class="rail-btn" data-tab="install"><svg><use href="#i-install"/></svg><span>INSTALL</span></button>
-    <button class="rail-btn wide-only" data-tab="reports"><svg><use href="#i-report"/></svg><span>REPORTS</span></button>
-    <button class="rail-btn" data-tab="more"><svg><use href="#i-more"/></svg><span>MORE</span></button>
+    <button class="rail-btn" id="railDock" aria-pressed="false"><svg><use href="#i-stencil"/></svg><span>Stencils</span></button>
+    <button class="rail-btn" data-tab="sheets"><svg><use href="#i-hier"/></svg><span>Sheets</span></button>
+    <button class="rail-btn" data-tab="nets"><svg><use href="#i-net"/></svg><span>Nets</span></button>
+    <button class="rail-btn wide-only" data-tab="parts"><svg><use href="#i-chip"/></svg><span>Parts</span></button>
+    <button class="rail-btn wide-only" data-tab="info"><svg><use href="#i-info"/></svg><span>Properties</span></button>
+    <button class="rail-btn" data-tab="check"><svg><use href="#i-alert"/></svg><span>Check</span><b class="badge" id="checkBadge" hidden>0</b></button>
+    <button class="rail-btn" data-tab="install"><svg><use href="#i-install"/></svg><span>Install</span></button>
+    <button class="rail-btn wide-only" data-tab="reports"><svg><use href="#i-report"/></svg><span>Reports</span></button>
+    <button class="rail-btn" data-tab="more"><svg><use href="#i-more"/></svg><span>More</span></button>
   </nav>
 
   <footer class="status" id="status">
@@ -183,14 +208,14 @@
 
 <input type="file" id="fileInput" multiple hidden>
 
-<script src="js/kicad-core.js?v=1.9.0"></script>
-<script src="js/render.js?v=1.9.0"></script>
-<script src="js/storage.js?v=1.9.0"></script>
-<script src="js/zip.js?v=1.9.0"></script>
-<script src="js/edit.js?v=1.9.0"></script>
-<script src="js/loom.js?v=1.9.0"></script>
-<script src="js/cables.js?v=1.9.0"></script>
-<script src="js/github.js?v=1.9.0"></script>
-<script src="js/app.js?v=1.9.0"></script>
+<script src="js/kicad-core.js?v=2.0.0"></script>
+<script src="js/render.js?v=2.0.0"></script>
+<script src="js/storage.js?v=2.0.0"></script>
+<script src="js/zip.js?v=2.0.0"></script>
+<script src="js/edit.js?v=2.0.0"></script>
+<script src="js/loom.js?v=2.0.0"></script>
+<script src="js/cables.js?v=2.0.0"></script>
+<script src="js/github.js?v=2.0.0"></script>
+<script src="js/app.js?v=2.0.0"></script>
 </body>
 </html>
