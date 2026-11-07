@@ -30,4 +30,10 @@ format, opens in KiCad 8 and 9) has the C6017-0030 Industrial PC and 58 Beckhoff
 assignments come from Beckhoff's documentation (infosys.beckhoff.com and the terminal
 manuals), checked November 2026. `beckhoff.json` is the same symbols for the app.
 
+`Loomline_Hydraulics.kicad_sym` has Bucher Hydraulics cartridge valves: WS22GD (2/2 seat valve,
+size 5, normally closed) and WS22OD (the normally open version), from data sheet 400-P-121110-EN
+(03.2021). The valve is drawn to ISO 1219 (solenoid, two positions, spring, hydraulic ports 1 and 2
+as drawing only); its pins are the coil's M8x1 plug: 1 = +V, 3 = 0 V, 4 = not used. Coil, connector,
+ordering code and hydraulic data are in hidden fields. `hydraulics.json` is the same for the app.
+
 Marine switching, industrial controls and harness connectors will follow, drawn to IEC 60617.
