@@ -112,7 +112,7 @@ function pretty(text, d) {
     if (it[0] === 'pts') { lines.push('\t'.repeat(d) + '(pts'); lines.push('\t'.repeat(d + 1) + it.slice(1).join(' ')); lines.push('\t'.repeat(d) + ')'); return; }
     let i = 0; const atoms = []; while (i < it.length && it[i][0] !== '(') atoms.push(it[i++]);
     lines.push('\t'.repeat(d) + '(' + atoms.join(' '));
-    for (; i < it.length; i++) walk(it[i], d + 1);
+    for (; i < it.length; i++) { if (it[i][0] === '(') walk(it[i], d + 1); else lines.push('\t'.repeat(d + 1) + it[i]); }   // trailing atoms such as a bare hide
     lines.push('\t'.repeat(d) + ')');
   })(text, d || 0);
   return lines.join('\n');
@@ -139,6 +139,60 @@ for (const p of B.parts) {
   rows.push([p.code, 'Beckhoff ' + p.code + ': ' + p.desc, `Beckhoff EtherCAT ${p.type} ${TYPE_TEXT[p.type]} PLC I/O terminal`, 'A', 1, p.pins.length + (p.extra || []).length, 0]);
 }
 const libs = [{ meta: writeLib('Loomline_Beckhoff', 'Beckhoff I/O', 'beckhoff.json', beckhoff), rows }];
+
+// ---- Hydraulic solenoid cartridge valves (ISO 1219 valve graphic, electrical pins = the coil plug)
+// Bucher WS22GD / WS22OD, data sheet 400-P-121110-EN (03.2021): 2/2 seat valve, size 5, direct acting,
+// 350 bar, 30 l/min (with booster), cavity ALM M20x1.5. Coil plug M8x1 3-pin: pin 1 +V
+// (48 / 24 / 12 V DC), pin 3 0 V, pin 4 not used. 12 V DC holding, 15 W.
+const HYD = [
+  { code: 'WS22GD', nc: true, desc: '2/2 cartridge seat valve, size 5, solenoid, direct acting, normally closed (de-energised closed), virtually leak-free both ways, 350 bar, 30 l/min with booster (15 l/min 1→2 without), cavity ALM M20x1.5' },
+  { code: 'WS22OD', nc: false, desc: '2/2 cartridge seat valve, size 5, solenoid, direct acting, normally open (de-energised open), virtually leak-free both ways, 350 bar, 30 l/min with booster (15 l/min 1→2 without), cavity ALM M20x1.5' }
+];
+function hydSymbol(v) {
+  const L = (pts, w, fill) => `(polyline (pts ${pts.map(([x, y]) => `(xy ${f(x)} ${f(y)})`).join(' ')}) (stroke (width ${w || 0.254}) (type default)) (fill (type ${fill || 'none'})))`;
+  const R = (x0, y0, x1, y1, w) => `(rectangle (start ${f(x0)} ${f(y0)}) (end ${f(x1)} ${f(y1)}) (stroke (width ${w || 0.254}) (type default)) (fill (type none)))`;
+  const T = (txt, x, y, size, just) => `(text ${q(txt)} (at ${f(x)} ${f(y)} 0) ${font(size || 1.27, just ? { justify: just } : {})})`;
+  const arrowUp = (x, y) => L([[x - 0.6, y - 1.2], [x, y], [x + 0.6, y - 1.2], [x - 0.6, y - 1.2]], 0.15, 'outline');
+  const arrowDn = (x, y) => L([[x - 0.6, y + 1.2], [x, y], [x + 0.6, y + 1.2], [x - 0.6, y + 1.2]], 0.15, 'outline');
+  const H = 3.81;                       // half height of the valve boxes
+  const sol = [-7.62, -2.54];           // solenoid actuator box x range
+  const bxA = [-2.54, 5.08];            // box next to the solenoid: the energised position
+  const bxB = [5.08, 12.7];             // box next to the spring: the rest (de-energised) position
+  const open = (x0, x1) => { const c = (x0 + x1) / 2; return [L([[c, -H + 0.6], [c, H - 0.6]], 0.254), arrowUp(c, H - 0.4), arrowDn(c, -H + 0.4)]; };
+  const shut = (x0, x1) => { const c = (x0 + x1) / 2; return [L([[c, H], [c, 1.27]]), L([[c - 1.27, 1.27], [c + 1.27, 1.27]]), L([[c, -H], [c, -1.27]]), L([[c - 1.27, -1.27], [c + 1.27, -1.27]])]; };
+  const rest = v.nc ? shut : open, active = v.nc ? open : shut;
+  const cB = (bxB[0] + bxB[1]) / 2;
+  const body = [
+    R(sol[0], -H + 1.27, sol[1], H - 1.27), L([[sol[0], -H + 1.27], [sol[1], H - 1.27]]),          // solenoid (ISO 1219)
+    R(bxA[0], -H, bxA[1], H), R(bxB[0], -H, bxB[1], H),
+    ...active(bxA[0], bxA[1]), ...rest(bxB[0], bxB[1]),
+    L([[bxB[1], 0], [13.335, 1.27], [13.97, -1.27], [14.605, 1.27], [15.24, -1.27], [15.875, 1.27], [16.51, 0]]),  // spring
+    L([[cB, H], [cB, H + 2.54]]), L([[cB, -H], [cB, -H - 2.54]]),                                      // hydraulic ports on the rest box
+    T('2', cB + 1.27, H + 1.9, 1.27, 'left'), T('1', cB + 1.27, -H - 1.9, 1.27, 'left'),
+    L([[-7.62, 2.54], [-10.16, 2.54]], 0.254), L([[-7.62, 0], [-10.16, 0]], 0.254),
+    T('M8', -10.16, 4.445, 1.016, 'left')
+  ];
+  const top = H + 3.81, bottom = -H - 3.81;
+  const hidden = (n, val) => prop(n, val, 0, bottom - 2.54, { hide: true });
+  const fields = [
+    prop('Reference', 'Y', 2.54, top + 2.54), prop('Value', v.code, 2.54, top),
+    hidden('Footprint', ''), hidden('Datasheet', 'https://www.bucherhydraulics.com/ff/400-P-121110-en'),
+    hidden('Description', 'Bucher Hydraulics ' + v.code + ': ' + v.desc),
+    hidden('Manufacturer', 'Bucher Hydraulics'), hidden('MPN', v.code),
+    hidden('Coil', '12 V DC holding (standard), 15 W, 100% duty; booster 48 V DC 4-5 ms, or 24 V DC switching pulse >= 70 ms'),
+    hidden('Connector', 'M8x1 3-pin male: pin 1 +V, pin 3 0 V, pin 4 not used (option F: flying leads 1000 mm)'),
+    hidden('Ordering', 'W S 22' + (v.nc ? 'G' : 'O') + ' D Z 5 - <design stage> <voltage> D; Z = M20x1.5, 5 = size, e.g. 12D = 12 V DC; V after size = FKM seals; confirm with Bucher'),
+    hidden('Hydraulic', 'Ports 1 and 2; 350 bar; 30 l/min with booster, 15 l/min (1→2) without; cavity ALM M20x1.5, 50 Nm'),
+    prop('ki_keywords', `Bucher hydraulic cartridge seat valve solenoid 2/2 ${v.nc ? 'normally closed NC' : 'normally open NO'} ${v.code} WS22`, 0, 0, { hide: true })
+  ];
+  const pins = [['1', '+V', 'passive', 2.54], ['3', '0V', 'passive', 0], ['4', 'n/c', 'no_connect', -2.54]]
+    .map(([n, name, type, y]) => `(pin ${type} line (at ${f(-12.7)} ${f(y)} 0) (length 2.54) (name ${q(name)} ${font(1.016)}) (number ${q(n)} ${font(1.27)}))`);
+  return `(symbol ${q(v.code)} (pin_names (offset 0.254) hide) (exclude_from_sim yes) (in_bom yes) (on_board yes) ${fields.join(' ')} ` +
+    `(symbol ${q(v.code + '_0_1')} ${body.join(' ')}) (symbol ${q(v.code + '_1_1')} ${pins.join(' ')}))`;
+}
+const hyd = {}, hydRows = [];
+for (const v of HYD) { hyd[v.code] = hydSymbol(v); hydRows.push([v.code, 'Bucher Hydraulics ' + v.code + ': ' + v.desc, 'Bucher hydraulic cartridge seat valve solenoid 2/2 ' + (v.nc ? 'normally closed NC' : 'normally open NO'), 'Y', 1, 3, 0]); }
+libs.push({ meta: writeLib('Loomline_Hydraulics', 'Hydraulics', 'hydraulics.json', hyd), rows: hydRows });
 
 // ---- merge into the app's index, Loomline libraries first
 const idxPath = path.join(out, 'index.json');
