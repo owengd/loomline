@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '1.9.0';
+  const VERSION = '2.0.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -61,12 +61,13 @@
     onTap: (wp, type) => setTimeout(() => onCanvasTap(wp, type), 30),
     onDoubleTap: (wp, x, y) => {
       // While drawing, a quick second tap is another point, not a zoom.
-      if (state.mode === 'wire' || state.mode === 'label' || state.mode === 'draw') { setTimeout(() => onCanvasTap(wp, 'touch'), 30); return; }
+      if (state.mode === 'wire' || state.mode === 'label' || state.mode === 'draw' || state.mode === 'box' || state.mode === 'paste') { setTimeout(() => onCanvasTap(wp, 'touch'), 30); return; }
       const hit = view.hitTest(wp, 10);
       if (hit && hit.type === 'sheet') openChildSheet(hit.idx);
       else view.zoomBy(2, x, y);
     },
-    onView: () => { if (!state._scaleRaf) state._scaleRaf = requestAnimationFrame(() => { state._scaleRaf = 0; renderScale(); }); }
+    onView: () => { if (!state._scaleRaf) state._scaleRaf = requestAnimationFrame(() => { state._scaleRaf = 0; renderScale(); }); },
+    onHover: (wp) => hoverPreview(wp)
   });
 
   // ------------------------------------------------------------------ theme
@@ -77,7 +78,8 @@
     const dark = t === 'dark' || (t === 'auto' && mq.matches);
     view.setTheme(dark);
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = dark ? '#1d1f22' : '#f7f5f0';
+    if (meta) meta.content = dark ? '#10151b' : '#1e2a38';
+    if (typeof thumbCache !== 'undefined') { thumbCache.clear(); if (typeof renderDock === 'function' && !$('dock').hidden) renderDock(); }
   }
   mq.addEventListener && mq.addEventListener('change', applyTheme);
   view.dimOthers = Store.pref('dim') === true;
@@ -379,6 +381,8 @@
     if (state.mode === 'wire') { wireTap(wp, type); return; }
     if (state.mode === 'label') { labelTap(wp, type); return; }
     if (state.mode === 'draw') { drawTap(wp, type); return; }
+    if (state.mode === 'box') { boxTap(wp, type); return; }
+    if (state.mode === 'paste') { pasteAt(gridSnap(wp)); setMode('select'); return; }
     if (state.mode === 'move') return;
     const mk = view.markerAt(wp[0] * view.scale + view.ox, wp[1] * view.scale + view.oy, type === 'mouse' ? 12 : 20);
     if (mk && mk.issue) { pickIssue(mk.issue, false); return; }
@@ -394,7 +398,9 @@
   function applyHighlight() {
     const s = state.sel, inst = state.inst;
     updateAnnot();
+    if (!s || s.type !== 'multi') { view.mSyms = null; view.mIts = null; }
     if (!s || !inst) { view.setHighlight(null); return; }
+    if (s.type === 'multi') { const r = multiResolve(s.m); view.setHighlight(null, -1, -1); view.setMulti(r.syms, r.its); return; }
     if (s.type === 'net') { const its = traceIts(s, inst); if (its) view.setHighlight(null, -1, -1, null, its); else view.setHighlight(groupsFor(s.net, inst), -1, -1); }
     else if (s.type === 'symbol') view.setHighlight(null, s.inst === inst ? s.si : -1, -1);
     else if (s.type === 'sheet') view.setHighlight(null, -1, s.inst === inst ? s.idx : -1);
@@ -413,6 +419,7 @@
     state.sel = { type: 'symbol', inst, si };
     applyHighlight();
     if (state.panelOpen && state.tab === 'nets') showTab('info');
+    else if (!state.panelOpen && propsFollow()) showTab('info', true);
     renderSelectionUI();
     writeHash();
     if (focus) { const b = symBox(inst, si); if (b) { view.animateTo(b); view.flashBox(b); } }
@@ -704,7 +711,9 @@
     if (open) renderPanel();
     if (open && state.tab === 'install' && !show.install) setShow('install', true);
     if (open && state.tab === 'install') scheduleSync(0);
+    if (open && !wideLayout() && typeof dockOpen !== 'undefined' && dockOpen) { dockOpen = false; $('dock').hidden = true; $('railDock').setAttribute('aria-pressed', 'false'); }
     requestAnimationFrame(() => view.resize());
+    renderRibbon();
   }
   function showTab(tab, open) {
     state.tab = tab;
@@ -893,6 +902,17 @@
       body.append(h('p', { class: 'empty', text: s ? 'A net is highlighted. Tap a part or sheet to see its properties.' : 'Tap a part or sheet on the schematic to see its properties.' }));
       return;
     }
+    if (s.type === 'multi') {
+      const r = multiResolve(s.m), sh = state.inst.sheet;
+      body.append(h('div', { class: 'head' },
+        h('div', { class: 'titles' }, h('div', { class: 'eyebrow', text: 'Selection' }), h('div', { class: 'title', text: r.items.length + ' items' }), h('div', { class: 'sub', text: multiSummary(s.m) })),
+        h('button', { class: 'iconbtn', 'aria-label': 'Clear selection', onclick: clearSelection }, icon('i-close'))));
+      body.append(h('div', { class: 'actions' }, ...selectionActions().filter((a) => a.label !== 'ADD MORE').map((a) => h('button', { class: 'btn small', onclick: a.run }, icon(a.icon), a.label))));
+      const rows = h('div', { class: 'rows' });
+      sh.symbols.forEach((sym, i) => { if (s.m.sym.has(sym.uuid)) rows.append(h('button', { class: 'row', onclick: () => selectSymbol(state.inst, i, true) }, h('span', { class: 'main' }, h('span', { class: 'ref', text: state.inst.refs[i].ref }), h('span', { class: 'nm', text: K.unescape((sym.props.find((p) => p.name === 'Value') || {}).value || '') })), h('span', { class: 'meta', text: sym.libId }))); });
+      if (rows.childNodes.length) body.append(section('Parts', String(rows.childNodes.length), rows));
+      return;
+    }
     if (s.type === 'symbol') {
       const inst = s.inst, sym = inst.sheet.symbols[s.si], ref = inst.refs[s.si].ref, lib = sym.lib;
       const unit = lib && lib.unitCount > 1 ? K.unitLetter(inst.refs[s.si].unit || sym.unit) : '';
@@ -997,6 +1017,7 @@
     if (s.type === 'graphic') { const o = graphicObj(s.it, sh); return { type: 'graphic', kind: s.it[0], uuid: o && uuidOf(o) }; }
     if (s.type === 'net' && s.item) { const o = itemObj(s.item); return { type: 'net', item: s.item.type, uuid: uuidOf(o), p: o && (o.p || o.pos || o.a), pin: s.item.type === 'pin' ? { sym: sh.symbols[s.item.si].uuid, pi: s.item.pi } : null }; }
     if (s.type === 'net') return { type: 'netname', name: s.net.name };
+    if (s.type === 'multi') return { type: 'multi', m: s.m };
     return null;
   }
   function restoreSelection(a) {
@@ -1007,6 +1028,7 @@
     else if (a.type === 'sheet') { const idx = sh.sheets.findIndex((x) => x.uuid === a.uuid); if (idx >= 0) state.sel = { type: 'sheet', inst: state.inst, idx }; }
     else if (a.type === 'graphic' && a.uuid) { const list = a.kind === 'T' ? sh.texts : a.kind === 'B' ? sh.textBoxes : sh.graphics; const idx = list.findIndex((o) => uuidOf(o) === a.uuid); if (idx >= 0) state.sel = { type: 'graphic', inst: state.inst, it: a.kind + idx }; }
     else if (a.type === 'netname') { const n = P.nets.find((x) => x.name === a.name); if (n) state.sel = { type: 'net', net: n, item: null }; }
+    else if (a.type === 'multi') { if (multiCount(a.m)) state.sel = { type: 'multi', inst: state.inst, m: a.m }; }
     else if (a.type === 'net') {
       let item = null, g = -1;
       if (a.pin) { const si = sh.symbols.findIndex((x) => x.uuid === a.pin.sym); if (si >= 0) { item = { type: 'pin', si, pi: a.pin.pi }; const p = K.symbolPins(sh.symbols[si])[a.pin.pi]; g = p ? p.group : -1; } }
@@ -1118,16 +1140,21 @@
 
   // ---- modes
   function setMode(mode) {
-    if (state.mode === 'move' && mode !== 'move') { view.dragHandler = null; view.preview = null; }
+    if ((state.mode === 'move' && mode !== 'move') || (state.mode === 'box' && mode !== 'box')) { view.dragHandler = null; view.preview = null; state.boxStart = null; }
     state.mode = mode;
+    if (mode === 'box') view.dragHandler = boxDrag;
+    if (mode === 'wire') setRibbonTab('wire', true);
+    if (mode === 'draw' && state.draw && ['line', 'rect', 'circle', 'arc', 'text'].includes(state.draw.tool)) setRibbonTab('draw', true);
     for (const b of document.querySelectorAll('.rail-btn.mode')) b.setAttribute('aria-pressed', String(b.dataset.mode === mode || (mode === 'move' && b.dataset.mode === 'select')));
     if (mode !== 'wire') { state.wire = { anchors: [], flips: [] }; view.overlay = null; }
     if (mode === 'wire' || mode === 'label' || mode === 'draw') { view.overlay = { pts: [], dots: [] }; }
-    if (mode === 'draw') state.draw = { tool: (state.draw && state.draw.tool) || 'part', pts: [], part: state.draw && state.draw.part };
+    if (mode === 'draw') state.draw = { tool: (state.draw && state.draw.tool) || 'part', pts: [], part: state.draw && state.draw.part, stencil: state.draw && state.draw.stencil };
+    if (mode !== 'draw') markArmed(null);
     if (mode === 'draw' && state.draw.tool === 'part' && !state.draw.part) setTimeout(openPartPicker, 0);
     view.redraw();
     renderStatus();
     renderDrawBar();
+    renderRibbon();
   }
   for (const b of document.querySelectorAll('.rail-btn.mode')) b.addEventListener('click', () => {
     if (!state.project) return;
@@ -1224,11 +1251,11 @@
       const shapeSel = h('select', { class: 'input', id: 'lblShape' }, ...[['bidirectional', 'Bidirectional'], ['input', 'Input'], ['output', 'Output'], ['tri_state', 'Tri-state'], ['passive', 'Passive']].map(([v, l]) => h('option', { value: v, text: l })));
       shapeSel.value = Store.pref('labelShape') || 'bidirectional';
       const shapeField = h('div', { class: 'field' }, h('label', { for: 'lblShape', text: 'Shape' }), shapeSel);
-      kind = seg('Label type', [['local', 'LOCAL'], ['global', 'GLOBAL'], ['hier', 'HIER.']], last, (v) => { shapeField.hidden = v === 'local'; });
+      kind = seg('Label type', [['local', 'NET LABEL'], ['global', 'OFF-SHEET'], ['hier', 'SHEET PORT']], o.kind || last, (v) => { shapeField.hidden = v === 'local'; });
       shape = shapeSel;
       dir = seg('Direction', [['right', '→'], ['up', '↑'], ['left', '←'], ['bottom', '↓']], o.spin || 'right');
       body.push(h('div', { class: 'field' }, h('label', { text: 'Type' }), kind.el), shapeField, h('div', { class: 'field' }, h('label', { text: 'Text direction' }), dir.el),
-        h('p', { class: 'hint', text: 'Local labels join wires with the same name on this sheet. Global labels join across every sheet. Hierarchical labels connect to a sheet pin on the parent sheet.' }));
+        h('p', { class: 'hint', text: 'Net labels join wires with the same name on this sheet. Off-sheet connectors (KiCad global labels) join across every sheet. Sheet ports (hierarchical labels) connect to a pin on the parent sheet.' }));
     }
     const go = () => {
       const v = name.value.trim();
@@ -1319,6 +1346,7 @@
     const snapD = (d) => [E.snap(d[0]), E.snap(d[1])];
     const tagFor = () => {
       const t = state.moveTarget, sh = state.inst.sheet;
+      if (t.type === 'multi') { const r = state.sel && state.sel.type === 'multi' ? multiResolve(state.sel.m) : { syms: new Set(), its: new Set() }; return { sym: -1, syms: r.syms, its: r.its }; }
       if (t.type === 'symbol') return { sym: sh.symbols.findIndex((x) => x.uuid === t.uuid), its: null };
       if (t.type === 'graphic') { const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : sh.graphics; return { sym: -1, its: new Set([t.kind + list.findIndex((o) => uuidOf(o) === t.uuid)]) }; }
       const list = t.type === 'label' ? sh.labels : sh.wires;
@@ -1326,12 +1354,18 @@
       return { sym: -1, its: new Set([(t.type === 'label' ? 'L' : 'W') + idx]) };
     };
     view.dragHandler = {
-      move: (d) => { const tg = tagFor(); view.preview = { sym: tg.sym, its: tg.its, d: snapD(d) }; view.redraw(); },
+      move: (d) => { const tg = tagFor(); view.preview = { sym: tg.sym, syms: tg.syms || null, its: tg.its, d: snapD(d) }; view.redraw(); },
       end: (d) => {
         view.preview = null;
         const sd = snapD(d);
         if (!sd[0] && !sd[1]) { view.redraw(); return; }
         const t = state.moveTarget, sh = state.inst.sheet;
+        if (t.type === 'multi') {
+          if (!state.sel || state.sel.type !== 'multi') { setMode('select'); return; }
+          const r = multiResolve(state.sel.m);
+          run('Move ' + t.name, () => E.moveItems(sh, r.items, sd), { checkMerges: true });
+          return;
+        }
         if (t.type === 'graphic') {
           const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : sh.graphics;
           const o = list.find((x) => uuidOf(x) === t.uuid);
@@ -1360,7 +1394,7 @@
       A.push({ label: 'EDIT', icon: 'i-edit', run: () => fieldsDialog(s.inst, s.si) });
       A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'symbol', uuid: sym.uuid, name: ref }) });
       A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate ' + ref, () => E.transformSymbol(sh, sym, 'rotate'), { checkMerges: true }) });
-      A.push({ label: 'COPY', icon: 'i-copy2', run: () => copyPart(s.inst, s.si) });
+      A.push({ label: 'DUPLICATE', icon: 'i-dup', run: () => copyPart(s.inst, s.si) });
       const missing = missingUnits(s.inst, s.si);
       if (missing.length) A.push({ label: 'ADD UNIT', icon: 'i-plus', run: () => addMissingUnit(s.inst, s.si, missing[0]) });
       A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + ref, () => E.deleteItems(sh, [{ type: 'symbol', sym }]), { anchor: null }) });
@@ -1400,6 +1434,13 @@
       const sheet = sh.sheets[s.idx];
       const child = s.inst.children.find((c) => c.sheetSym === sheet);
       A.push({ label: 'ENTER', icon: 'i-open', run: () => child && showInstance(child) });
+    } else if (s.type === 'multi') {
+      const r = multiResolve(s.m), n = r.items.length;
+      A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'multi', name: n + ' items' }) });
+      A.push({ label: 'COPY', icon: 'i-copy2', run: copySel });
+      A.push({ label: 'DUPLICATE', icon: 'i-dup', run: duplicateSel });
+      A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run(`Delete ${n} item${n === 1 ? '' : 's'}`, () => E.deleteItems(sh, r.items), { anchor: null }) });
+      A.push({ label: 'ADD MORE', icon: 'i-box', run: () => setMode('box') });
     } else if (s.type === 'graphic') {
       const o = graphicObj(s.it, sh);
       if (o) {
@@ -1565,6 +1606,26 @@
       putActions(acts, [{ label: 'DONE', icon: 'i-close', run: () => setMode('select') }]);
       return;
     }
+    if (state.mode === 'box') {
+      const n = s && s.type === 'multi' ? multiResolve(s.m).items.length : 0;
+      setIco('i-box');
+      t1.textContent = n ? `${n} selected` : 'Box select';
+      t2.textContent = 'Drag a box round items · tap one to add or remove it · two fingers pan';
+      const L = [];
+      if (n) L.push({ label: 'DONE', icon: 'i-check', primary: true, run: () => setMode('select') });
+      L.push({ label: 'ALL', icon: 'i-selall', run: selectAll });
+      if (n) L.push({ label: 'NONE', icon: 'i-close', run: () => { clearSelection(); renderStatus(); } });
+      if (!n) L.push({ label: 'CANCEL', icon: 'i-close', run: () => setMode('select') });
+      putActions(acts, L);
+      return;
+    }
+    if (state.mode === 'paste') {
+      setIco('i-paste');
+      t1.textContent = 'Paste ' + clipText();
+      t2.textContent = 'Tap where the top-left of the copy goes';
+      putActions(acts, [{ label: 'CANCEL', icon: 'i-close', run: () => setMode('select') }]);
+      return;
+    }
     if (state.mode === 'move') {
       setIco('i-move');
       t1.textContent = 'Moving ' + (state.moveTarget ? state.moveTarget.name : '');
@@ -1611,6 +1672,11 @@
       setIco(s.it[0] === 'G' ? 'i-draw' : 'i-text'); ico.classList.add('part');
       t1.textContent = graphicName(s.it, o);
       t2.textContent = s.it[0] === 'G' && o ? `Drawing · line ${o.st && o.st.w ? o.st.w + ' mm' : 'default'}${o.st && o.st.type && o.st.type !== 'default' && o.st.type !== 'solid' ? ' · ' + o.st.type.replace('_', '-') : ''}` : 'Text on the drawing';
+    } else if (s.type === 'multi') {
+      const r = multiResolve(s.m);
+      setIco('i-box'); ico.classList.add('part');
+      t1.textContent = r.items.length + ' selected';
+      t2.textContent = multiSummary(s.m);
     }
     const L = selectionActions();
     L.push({ label: 'CLEAR', icon: 'i-close', run: clearSelection });
@@ -1651,6 +1717,7 @@
 
   function renderSelectionUI() {
     renderStatus();
+    renderRibbon();
     if (state.panelOpen) { state._keepScroll = state.tab === 'sheets'; renderPanel(); }
   }
 
@@ -1825,9 +1892,10 @@
     const st = styleFor(drawStyle());
     if (d.tool === 'part') {
       if (!d.part) { openPartPicker(); return; }
-      placePart(d.part, p);
+      placePart(d.part, wp, type);
       return;
     }
+    if (d.tool === 'stencil') { if (d.stencil) placeStencil(d.stencil, wp, type); return; }
     if (d.tool === 'text') { textDialog({ p }); return; }
     d.pts.push(p);
     if (d.tool === 'rect' && d.pts.length === 2) { const [a, b] = d.pts; d.pts = []; if (a[0] === b[0] || a[1] === b[1]) { toast('Tap two opposite corners.'); drawOverlay(); return; } run('Add rectangle', () => E.addGraphic(sh, 'rect', { a, b }, st), { anchor: null }); }
@@ -1845,7 +1913,7 @@
   }
   function renderDrawStatus(setIco, t1, t2, acts) {
     const d = state.draw, tool = DRAW_TOOLS.find((x) => x[0] === d.tool) || DRAW_TOOLS[0];
-    setIco(tool[2]);
+    setIco(d.tool === 'stencil' ? 'i-stencil' : tool[2]);
     const n = d.pts.length;
     const hints = {
       part: d.part ? `Tap where ${d.part.name} goes` : 'Choose a part to place',
@@ -1853,9 +1921,10 @@
       rect: n ? 'Tap the opposite corner' : 'Tap one corner',
       circle: n ? 'Tap a point on the edge' : 'Tap the centre',
       arc: ['Tap where the arc starts', 'Tap a point the arc passes through', 'Tap where the arc ends'][n] || '',
-      text: 'Tap where the text goes'
+      text: 'Tap where the text goes',
+      stencil: d.stencil ? `Tap where the ${d.stencil.name.toLowerCase()} goes${d.stencil.kind === 'wire' ? ' · on a wire to join it' : ''}` : 'Pick a stencil'
     };
-    t1.textContent = 'Draw · ' + tool[1].toLowerCase();
+    t1.textContent = d.tool === 'stencil' && d.stencil ? 'Place · ' + d.stencil.name : d.tool === 'part' && d.part ? 'Place · ' + d.part.name : 'Draw · ' + tool[1].toLowerCase();
     t2.textContent = hints[d.tool];
     const L = [];
     if (d.tool === 'line' && n > 1) L.push({ label: 'FINISH', icon: 'i-check', primary: true, run: finishLine });
@@ -1863,14 +1932,16 @@
     if (d.tool === 'part') L.push({ label: d.part ? 'CHANGE' : 'CHOOSE', icon: 'i-part', primary: !d.part, run: openPartPicker });
     const last = d.tool === 'part' && d.last && state.inst.sheet.symbols.find((x) => x.uuid === d.last.uuid);
     if (last) L.push({ label: 'ROTATE', icon: 'i-rotate', run: () => { run('Rotate ' + d.last.ref, () => E.transformSymbol(state.inst.sheet, last, 'rotate'), { anchor: null }); const i = state.inst.sheet.symbols.findIndex((x) => x.uuid === d.last.uuid); view.setHighlight(null, i, -1); } });
-    if (d.tool !== 'part') L.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(null) });
+    if (d.tool !== 'part' && d.tool !== 'stencil') L.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(null) });
+    if (d.tool === 'stencil' || d.tool === 'part') L.push({ label: 'STENCILS', icon: 'i-stencil', run: () => setDock(true) });
     L.push({ label: 'DONE', icon: 'i-close', run: () => setMode('select') });
     putActions(acts, L);
     renderDrawBar();
   }
   function renderDrawBar() {
     const bar = $('drawBar');
-    bar.hidden = state.mode !== 'draw';
+    // Shown only when the ribbon is folded away; otherwise its Draw tab has these tools.
+    bar.hidden = state.mode !== 'draw' || ribbonOpen || !['line', 'rect', 'circle', 'arc', 'text'].includes(state.draw && state.draw.tool);
     if (bar.hidden) return;
     bar.replaceChildren(...DRAW_TOOLS.map(([k, l, ic]) => h('button', { class: 'dt', 'aria-pressed': String(state.draw.tool === k), title: l, onclick: () => setDrawTool(k) }, icon(ic), h('span', { text: l }))));
   }
@@ -1899,14 +1970,16 @@
     const txt = h('textarea', { class: 'input', id: 'txtValue', rows: 3, spellcheck: 'true' });
     txt.value = ed ? K.unescape(ed.s) : '';
     const body = [h('div', { class: 'field' }, h('label', { for: 'txtValue', text: 'Text' }), txt)];
-    let size, bold, italic, ang;
+    let size, bold, italic, ang, colour;
     if (!ed) {
       const last = Store.pref('textStyle') || {};
       size = seg('Size', [['1.27', 'SMALL'], ['2', 'MEDIUM'], ['2.54', 'LARGE'], ['3.81', 'TITLE']], last.size || '1.27');
       ang = seg('Direction', [['0', 'ACROSS'], ['90', 'UP']], last.angle || '0');
       bold = h('input', { type: 'checkbox', checked: !!last.bold });
       italic = h('input', { type: 'checkbox', checked: !!last.italic });
+      colour = seg('Colour', [['default', 'DEFAULT'], ['red', 'RED'], ['blue', 'BLUE'], ['green', 'GREEN'], ['black', 'BLACK']], last.colour || 'default');
       body.push(h('div', { class: 'field' }, h('label', { text: 'Size' }), size.el), h('div', { class: 'field' }, h('label', { text: 'Direction' }), ang.el),
+        h('div', { class: 'field' }, h('label', { text: 'Colour' }), colour.el),
         h('label', { class: 'check' }, bold, 'Bold'), h('label', { class: 'check' }, italic, 'Italic'));
     }
     const go = () => {
@@ -1916,9 +1989,9 @@
       const sh = state.inst.sheet;
       if (ed) run('Edit text', () => E.editText(sh, ed, v));
       else {
-        const ts = { size: size.get(), angle: ang.get(), bold: bold.checked, italic: italic.checked };
+        const ts = { size: size.get(), angle: ang.get(), bold: bold.checked, italic: italic.checked, colour: colour.get() };
         Store.pref('textStyle', ts);
-        run('Add text', () => E.addGraphic(sh, 'text', { p: o.p, text: v, size: +ts.size, angle: +ts.angle, bold: ts.bold, italic: ts.italic }, styleFor(drawStyle())), { anchor: null });
+        run('Add text', () => E.addGraphic(sh, 'text', { p: o.p, text: v, size: +ts.size, angle: +ts.angle, bold: ts.bold, italic: ts.italic }, styleFor(Object.assign(drawStyle(), { colour: ts.colour }))), { anchor: null });
       }
     };
     openDialog(ed ? 'EDIT TEXT' : 'ADD TEXT', body, [{ label: 'CANCEL', run: closeDialog }, { label: ed ? 'SAVE' : 'ADD', primary: true, run: go }]);
@@ -2069,16 +2142,17 @@
     }).catch((e) => { $('pickCount').textContent = e.message; });
   }
   function closePicker() { const w = $('pickerWrap'); if (w) w.remove(); }
-  function placePart(entry, p) {
-    const sh = state.inst.sheet;
-    const r = run('Add ' + entry.name, () => E.addLibSymbol(state.project, sh, state.inst, entry, p), { anchor: null });
+  function placePart(entry, wp, type) {
+    const r = run('Add ' + entry.name, () => smartPlace(entry, wp, type), { anchor: null, checkMerges: true });
     if (!r) return;
-    const ni = state.inst.refs.findIndex((x, i) => x.ref === r.ref && state.inst.sheet.symbols[i].unit === r.unit && E.same(state.inst.sheet.symbols[i].p, r.at));
+    rememberStencil({ kind: 'part', lib: entry.lib, name: entry.name });
+    const ni = state.inst.sheet.symbols.findIndex((x) => x.uuid === r.uuid);
     if (ni >= 0) {
-      state.draw.last = { uuid: state.inst.sheet.symbols[ni].uuid, ref: r.ref };
+      if (state.draw) state.draw.last = { uuid: r.uuid, ref: r.ref };
       view.setHighlight(null, ni, -1);
       renderStatus();
-      toast(`${r.ref} placed${r.units.length > 1 ? ` (unit A of ${r.units.length}; select it and tap ADD UNIT for the others)` : ''}. Tap again for another.`);
+      const how = r.how === 'series' ? ' in the wire' : r.how === 'tap' ? ' and connected' : '';
+      toast(`${r.ref} placed${how}${r.units.length > 1 ? ` (unit A of ${r.units.length}; select it and tap ADD UNIT for the others)` : ''}. Tap again for another.`);
     }
   }
   function missingUnits(inst, si) {
@@ -2099,6 +2173,597 @@
     if (!r) return;
     const ni = state.inst.refs.findIndex((x, i) => x.ref === r.ref && (x.unit || state.inst.sheet.symbols[i].unit) === unit);
     if (ni >= 0) { state.sel = { type: 'symbol', inst: state.inst, si: ni }; applyHighlight(); startMove({ type: 'symbol', uuid: state.inst.sheet.symbols[ni].uuid, name: r.ref + K.unitLetter(unit) }); toast(`${r.ref}${K.unitLetter(unit)} added. Drag it into place, then DONE.`); }
+  }
+
+  // ================================================================== 2.0: multi-select, clipboard, stencils, ribbon
+  // ---- multi selection (box select), kept by UUID so it survives the rebuild after each edit
+  const MKINDS = ['sym', 'wire', 'label', 'junction', 'nc', 'graphic'];
+  const emptyMulti = () => ({ sym: new Set(), wire: new Set(), label: new Set(), junction: new Set(), nc: new Set(), graphic: new Set() });
+  const multiCount = (m) => MKINDS.reduce((n, k) => n + m[k].size, 0);
+  function multiResolve(m, inst) {
+    inst = inst || state.inst;
+    const sh = inst.sheet, out = { syms: new Set(), its: new Set(), items: [], copy: [] };
+    sh.symbols.forEach((s, i) => { if (m.sym.has(s.uuid)) { out.syms.add(i); out.items.push({ type: 'symbol', sym: s }); out.copy.push({ type: 'symbol', sym: s, ref: inst.refs[i].ref }); } });
+    for (const [k, list, t] of [['wire', sh.wires, 'W'], ['label', sh.labels, 'L'], ['junction', sh.junctions, 'J'], ['nc', sh.noConnects, 'N']]) {
+      list.forEach((o, i) => {
+        const u = uuidOf(o); if (!u || !m[k].has(u)) return;
+        out.its.add(t + i);
+        out.items.push(k === 'wire' ? { type: 'wire', wire: o } : k === 'label' ? { type: 'label', label: o } : { type: k, item: o });
+        out.copy.push({ type: k, obj: o });
+      });
+    }
+    for (const [list, t] of [[sh.graphics, 'G'], [sh.texts, 'T'], [sh.textBoxes, 'B']]) {
+      list.forEach((o, i) => { const u = uuidOf(o); if (!u || !m.graphic.has(u)) return; out.its.add(t + i); out.items.push({ type: 'node', node: o.src, item: o }); out.copy.push({ type: 'node', obj: o }); });
+    }
+    return out;
+  }
+  function multiSummary(m) {
+    const parts = [[m.sym.size, 'part'], [m.wire.size, 'wire'], [m.label.size, 'label'], [m.junction.size, 'junction'], [m.nc.size, 'no-connect'], [m.graphic.size, 'drawing item']];
+    return parts.filter(([n]) => n).map(([n, w]) => n + ' ' + w + (n === 1 ? '' : 's')).join(' · ') || 'Nothing';
+  }
+  function selectMulti(m) {
+    if (!multiCount(m)) { clearSelection(); return; }
+    state.sel = { type: 'multi', inst: state.inst, m };
+    applyHighlight();
+    renderSelectionUI();
+    if (!state.panelOpen && propsFollow() && state.mode === 'select') showTab('info', true);
+  }
+  // Everything wholly inside box b = [x0, y0, x1, y1] on the current sheet
+  function itemsInBox(b) {
+    const sh = state.inst.sheet, S = sceneFor(state.inst), m = emptyMulti();
+    const inP = (p) => p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
+    const inB = (bb) => bb && bb[0] >= b[0] && bb[2] <= b[2] && bb[1] >= b[1] && bb[3] <= b[3];
+    for (const sy of S.syms) { const bb = sy.body && (sy.body[2] - sy.body[0]) * (sy.body[3] - sy.body[1]) > 0.5 ? sy.body : sy.bb; const u = sh.symbols[sy.si] && sh.symbols[sy.si].uuid; if (u && inB(bb)) m.sym.add(u); }
+    const addP = (k, list, f) => list.forEach((o) => { const u = uuidOf(o); if (u && f(o)) m[k].add(u); });
+    addP('wire', sh.wires, (w) => inP(w.a) && inP(w.b));
+    addP('label', sh.labels, (l) => inP(l.p));
+    addP('junction', sh.junctions, (j) => inP(j.p));
+    addP('nc', sh.noConnects, (n) => inP(n.p));
+    const gb = new Map();
+    const grow = (it, bb) => { if (!it || !'GTB'.includes(it[0]) || !bb) return; const g = gb.get(it); gb.set(it, g ? [Math.min(g[0], bb[0]), Math.min(g[1], bb[1]), Math.max(g[2], bb[2]), Math.max(g[3], bb[3])] : bb.slice()); };
+    for (const x of S.strokes) grow(x.it, x.bb);
+    for (const x of S.circles) grow(x.it, x.bb);
+    for (const x of S.texts) grow(x.it, x.bb);
+    for (const x of S.fills) grow(x.it, x.bb);
+    for (const [it, bb] of gb) if (inB(bb)) { const o = graphicObj(it, sh); const u = o && uuidOf(o); if (u) m.graphic.add(u); }
+    return m;
+  }
+  function mergeMulti(a, b) { const m = emptyMulti(); for (const k of MKINDS) { for (const u of a[k]) m[k].add(u); for (const u of b[k]) m[k].add(u); } return m; }
+  const curMulti = () => (state.sel && state.sel.type === 'multi' && state.sel.inst === state.inst ? state.sel.m : emptyMulti());
+  const boxDrag = {
+    move: (d) => {
+      const a = view._dragStart;
+      state.boxStart = a ? a.slice() : null;
+      view.overlay = a ? { box: [a, [a[0] + d[0], a[1] + d[1]]] } : null;
+      view.redraw();
+    },
+    end: (d) => {
+      const a = state.boxStart; state.boxStart = null; view.overlay = null;
+      if (!a) { view.redraw(); return; }
+      const b = [a[0] + d[0], a[1] + d[1]];
+      const box = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+      if (box[2] - box[0] < 0.5 && box[3] - box[1] < 0.5) { view.redraw(); return; }
+      const got = itemsInBox(box);
+      if (!multiCount(got)) { toast('Nothing lies wholly inside that box.'); view.redraw(); return; }
+      selectMulti(mergeMulti(curMulti(), got));
+    }
+  };
+  function boxTap(wp, type) {
+    const hit = view.hitTest(wp, type === 'mouse' ? 8 : 16);
+    if (!hit) return;
+    const sh = state.inst.sheet, m = mergeMulti(curMulti(), emptyMulti());
+    let k = null, u = null;
+    if (hit.type === 'symbol') { k = 'sym'; u = sh.symbols[hit.si].uuid; }
+    else if (hit.type === 'graphic') { k = 'graphic'; u = uuidOf(graphicObj(hit.it, sh)); }
+    else if (hit.type === 'net' && hit.it) {
+      const it = itemFromTag(hit.it);
+      if (it && it.type === 'pin') { k = 'sym'; u = sh.symbols[it.si].uuid; }
+      else if (it) { k = it.type; u = uuidOf(itemObj(it)); }
+    }
+    if (!k || !u || !m[k]) return;
+    if (m[k].has(u)) m[k].delete(u); else m[k].add(u);
+    selectMulti(m);
+  }
+  function selectAll() {
+    if (!state.inst) return;
+    const m = itemsInBox([-1e6, -1e6, 1e6, 1e6]);
+    selectMulti(m);
+    toast(multiSummary(m));
+  }
+  function startBox() { if (!state.project) return; if (state.sel && state.sel.type !== 'multi') { state.sel = null; applyHighlight(); } setMode('box'); }
+
+  // ---- clipboard: copy on one sheet, paste on any sheet of the project (or another project)
+  const clipText = () => { const c = state.clip; if (!c) return ''; const n = c.items.length; return n + ' item' + (n === 1 ? '' : 's'); };
+  function copyItemsOfSel() {
+    const s = state.sel, sh = state.inst && state.inst.sheet;
+    if (!s || !sh) return null;
+    if (s.type === 'multi') return multiResolve(s.m).copy;
+    if (s.type === 'symbol' && s.inst === state.inst) return [{ type: 'symbol', sym: sh.symbols[s.si], ref: s.inst.refs[s.si].ref }];
+    if (s.type === 'graphic') { const o = graphicObj(s.it, sh); return o ? [{ type: 'node', obj: o }] : null; }
+    if (s.type === 'net' && s.item && (s.item.type === 'wire' || s.item.type === 'label')) { const o = itemObj(s.item); return o ? [{ type: s.item.type, obj: o }] : null; }
+    return null;
+  }
+  const canCopy = () => { const c = copyItemsOfSel(); return !!(c && c.length); };
+  function copySel() {
+    const items = copyItemsOfSel();
+    if (!items || !items.length) { toast('Select something to copy first.'); return null; }
+    state.clip = E.copyItems(state.inst.sheet, items);
+    try { Store.set('clipboard', state.clip); } catch (e) { /* memory only */ }
+    toast(`Copied ${clipText()}. Paste, then tap where it goes (on any sheet).`);
+    renderRibbon();
+    return state.clip;
+  }
+  function pasteAt(p) {
+    if (!state.clip) { toast('Copy something first.'); return; }
+    const r = run('Paste ' + clipText(), () => E.pasteItems(state.project, state.inst.sheet, state.inst, state.clip, p), { anchor: null, checkMerges: true });
+    if (!r) return;
+    const ids = new Set(r.uuids), sh = state.inst.sheet, m = emptyMulti();
+    sh.symbols.forEach((o) => { if (ids.has(o.uuid)) m.sym.add(o.uuid); });
+    for (const [k, list] of [['wire', sh.wires], ['label', sh.labels], ['junction', sh.junctions], ['nc', sh.noConnects], ['graphic', sh.graphics.concat(sh.texts, sh.textBoxes)]]) list.forEach((o) => { const u = uuidOf(o); if (u && ids.has(u)) m[k].add(u); });
+    selectMulti(m);
+    toast(`Pasted ${clipText()}${r.refs.length ? ' as ' + r.refs.slice(0, 4).join(', ') + (r.refs.length > 4 ? '…' : '') : ''}. MOVE to adjust.`);
+  }
+  function startPaste() {
+    if (!state.clip) { toast('Copy something first.'); return; }
+    if (state.sel) { state.sel = null; applyHighlight(); }
+    setMode('paste');
+  }
+  function duplicateSel() {
+    const c = copySel(); if (!c) return;
+    pasteAt([c.origin[0] + 5.08, c.origin[1] + 5.08]);
+  }
+  Store.get('clipboard').then((c) => { if (c && c.items && !state.clip) state.clip = c; }).catch(() => {});
+
+  // ---- smart placement: a part dropped on a wire goes in series (two pins) or taps it (one pin),
+  // and one dropped on a pin or wire end connects its nearest pin there.
+  const insideWire = (p, w) => K.onSegment(p, w.a, w.b) && !E.same(p, w.a) && !E.same(p, w.b);
+  function smartPlace(entry, wp, type) {
+    const P = state.project, inst = state.inst, sh0 = inst.sheet;
+    const snapped = snapPoint(wp, type || 'touch'), p = snapped.p;
+    const old = new Set(sh0.symbols.map((x) => x.uuid));
+    let r = E.addLibSymbol(P, sh0, inst, entry, p);
+    const info = { ref: r.ref, unit: r.unit, units: r.units, how: null };
+    let sh = E.reparse(sh0, r);
+    const mine = () => sh.symbols.find((x) => !old.has(x.uuid));
+    let sym = mine();
+    const pins = () => K.symbolPins(sym);
+    const plain = { text: sh.text, sh };
+    const wire = snapped.on === 'wiremid' ? sh0.wires.find((w) => K.onSegment(p, w.a, w.b)) : null;
+    if (wire && pins().length === 2) {
+      const horiz = Math.abs(wire.a[1] - wire.b[1]) < 1e-6, vert = Math.abs(wire.a[0] - wire.b[0]) < 1e-6;
+      const aligned = () => { const [a, b] = pins().map((x) => x.pos); return horiz ? Math.abs(a[1] - b[1]) < 1e-6 && Math.abs(a[0] - b[0]) > 1e-6 : Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) > 1e-6; };
+      if (horiz || vert) {
+        if (!aligned()) { r = E.transformSymbol(sh, sym, 'rotate', { keepWires: false }); sh = E.reparse(sh, r); sym = mine(); }
+        if (aligned()) {
+          const [a, b] = pins().map((x) => x.pos);
+          const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+          const d = horiz ? [E.snap(p[0] - mid[0]), wire.a[1] - a[1]] : [wire.a[0] - a[0], E.snap(p[1] - mid[1])];
+          if (Math.abs(d[0]) > 1e-6 || Math.abs(d[1]) > 1e-6) { r = E.moveItems(sh, [{ type: 'symbol', sym }], d, { keepWires: false }); sh = E.reparse(sh, r); sym = mine(); }
+          const [qa, qb] = pins().map((x) => x.pos);
+          const w2 = sh.wires.find((w) => uuidOf(w) === uuidOf(wire));
+          if (w2 && K.onSegment(qa, w2.a, w2.b) && K.onSegment(qb, w2.a, w2.b)) { r = E.insertInWire(sh, w2, qa, qb); sh = E.reparse(sh, r); sym = mine(); info.how = 'series'; }
+        }
+        if (!info.how) { sh = plain.sh; sym = mine(); }
+      }
+    }
+    if (!info.how && snapped.on && snapped.on !== 'label') {
+      // bring the nearest pin onto the point
+      let best = null, bd = Infinity;
+      for (const pin of pins()) { const dd = Math.hypot(pin.pos[0] - p[0], pin.pos[1] - p[1]); if (dd < bd) { bd = dd; best = pin; } }
+      if (best && bd > 1e-6) { r = E.moveItems(sh, [{ type: 'symbol', sym }], [p[0] - best.pos[0], p[1] - best.pos[1]], { keepWires: false }); sh = E.reparse(sh, r); sym = mine(); }
+      if (best) info.how = 'tap';
+    }
+    // any pin now sitting inside a wire joins it
+    const cuts = pins().map((x) => x.pos).filter((q) => sh.wires.some((w) => insideWire(q, w)));
+    if (cuts.length) { r = E.connectAt(sh, cuts); sh = E.reparse(sh, r); sym = mine(); if (!info.how) info.how = 'tap'; }
+    info.uuid = sym.uuid;
+    return Object.assign({ path: sh0.path, text: sh.text }, info);
+  }
+
+  // ---- stencils
+  const U = 2.54;
+  const arm = (dx, dy) => [[0, 0], [dx * U, dy * U]];
+  const WIRE_STENCILS = [
+    { id: 'w-tool', kind: 'tool', name: 'Draw wire', desc: 'Free wire: tap each corner', icon: 'i-wire', run: () => setMode('wire') },
+    { id: 'w-h', kind: 'wire', name: 'Straight →', desc: 'Wire, horizontal, from the tap to the right', segs: [[[0, 0], [4 * U, 0]]] },
+    { id: 'w-v', kind: 'wire', name: 'Straight ↓', desc: 'Wire, vertical, from the tap down', segs: [[[0, 0], [0, 4 * U]]] },
+    { id: 'w-rd', kind: 'wire', name: 'Corner ┌', desc: 'Right angle: right and down', segs: [arm(3, 0), arm(0, 3)] },
+    { id: 'w-ld', kind: 'wire', name: 'Corner ┐', desc: 'Right angle: left and down', segs: [arm(-3, 0), arm(0, 3)] },
+    { id: 'w-ru', kind: 'wire', name: 'Corner └', desc: 'Right angle: right and up', segs: [arm(3, 0), arm(0, -3)] },
+    { id: 'w-lu', kind: 'wire', name: 'Corner ┘', desc: 'Right angle: left and up', segs: [arm(-3, 0), arm(0, -3)] },
+    { id: 'w-td', kind: 'wire', name: 'Tee ┬', desc: 'T junction, branch down. Drop it on a wire to branch off it.', segs: [arm(-3, 0), arm(3, 0), arm(0, 3)] },
+    { id: 'w-tu', kind: 'wire', name: 'Tee ┴', desc: 'T junction, branch up', segs: [arm(-3, 0), arm(3, 0), arm(0, -3)] },
+    { id: 'w-tr', kind: 'wire', name: 'Tee ├', desc: 'T junction, branch right', segs: [arm(0, -3), arm(0, 3), arm(3, 0)] },
+    { id: 'w-tl', kind: 'wire', name: 'Tee ┤', desc: 'T junction, branch left', segs: [arm(0, -3), arm(0, 3), arm(-3, 0)] },
+    { id: 'w-x', kind: 'wire', name: 'Cross ┼', desc: 'Four-way junction (connected)', segs: [arm(-3, 0), arm(3, 0), arm(0, -3), arm(0, 3)] },
+    { id: 'w-jump', kind: 'wire', name: 'Crossover', desc: 'Two wires crossing without connecting', segs: [[[-3 * U, 0], [3 * U, 0]], [[0, -3 * U], [0, 3 * U]]], jump: true },
+    { id: 'w-j', kind: 'junction', name: 'Junction', desc: 'Junction dot: joins wires that cross here', icon: 'i-junction' },
+    { id: 'w-nc', kind: 'nc', name: 'No-connect', desc: 'Marks a pin as deliberately unused', icon: 'i-nc' }
+  ];
+  const LABEL_STENCILS = [
+    { id: 'l-net', kind: 'label', label: 'local', name: 'Net label', desc: 'Names a net on this sheet', icon: 'i-tag' },
+    { id: 'l-glob', kind: 'label', label: 'global', name: 'Off-sheet', desc: 'Off-sheet connector (KiCad global label): joins the net across sheets', icon: 'i-glabel' },
+    { id: 'l-hier', kind: 'label', label: 'hier', name: 'Sheet port', desc: 'Hierarchical label: a pin on the parent sheet', icon: 'i-hlabel' },
+    { id: 'l-cable', kind: 'cable', name: 'Cable tag', desc: 'Cable type, product code, core colour and length on a wire', icon: 'i-cable' },
+    { id: 'l-text', kind: 'text', name: 'Text', desc: 'A note on the drawing', icon: 'i-text' }
+  ];
+  const PART_GROUPS = [
+    { id: 'power', title: 'Power', parts: ['power:+24V', 'power:+12V', 'power:+5V', 'power:GND', 'power:GNDPWR', 'power:Earth', 'power:+BATT', 'power:PWR_FLAG'] },
+    { id: 'protect', title: 'Fuses & protection', parts: ['Device:Fuse', 'Device:Fuse_Small', 'Device:Polyfuse', 'Device:CircuitBreaker_1P', 'Device:CircuitBreaker_2P', 'Device:D_TVS', 'Device:Varistor', 'Device:D'] },
+    { id: 'switch', title: 'Switches', parts: ['Switch:SW_Push', 'Switch:SW_Push_Open', 'Switch:SW_SPST', 'Switch:SW_SPDT', 'Switch:SW_Push_LED', 'Switch:SW_Push_DPDT', 'Switch:SW_Reed', 'Switch:SW_DIP_x01'] },
+    { id: 'relay', title: 'Relays', parts: ['Relay:Relay_SPDT', 'Relay:Relay_DPDT', 'Relay:G5LE-1', 'Relay:FINDER-40.31', 'Relay:Relay_SPDT_Latching_1coil'] },
+    { id: 'loads', title: 'Loads & indicators', parts: ['Device:LED', 'Device:Lamp', 'Device:Buzzer', 'Device:Heater', 'Device:Speaker', 'Motor:Motor_DC', 'Motor:Fan', 'Device:Battery'] },
+    { id: 'conn', title: 'Connectors', parts: ['Connector_Generic:Conn_01x02', 'Connector_Generic:Conn_01x03', 'Connector_Generic:Conn_01x04', 'Connector_Generic:Conn_01x06', 'Connector_Generic:Conn_01x08', 'Connector:Screw_Terminal_01x02', 'Connector:Screw_Terminal_01x04', 'Connector:Conn_Coaxial', 'Connector:RJ45'] },
+    { id: 'passive', title: 'Passives', parts: ['Device:R', 'Device:C', 'Device:C_Polarized', 'Device:L', 'Device:D_Schottky', 'Device:Thermistor_NTC', 'Device:Antenna'] },
+    { id: 'beckhoff', title: 'Beckhoff I/O', lib: 'Loomline_Beckhoff' },
+    { id: 'hyd', title: 'Hydraulic valves', lib: 'Loomline_Hydraulics' }
+  ];
+  const stKey = (st) => st.kind === 'part' ? 'p:' + st.lib + ':' + st.name : 's:' + st.id;
+  function stencilById(id) { return WIRE_STENCILS.concat(LABEL_STENCILS).find((x) => x.id === id); }
+  function rememberStencil(st) {
+    const k = stKey(st);
+    const rec = (Store.pref('recentStencils') || []).filter((x) => x !== k);
+    rec.unshift(k); Store.pref('recentStencils', rec.slice(0, 12));
+    if (st.kind === 'part') { const rp = Store.pref('recentParts') || []; Store.pref('recentParts', [st.lib + ':' + st.name].concat(rp.filter((x) => x !== st.lib + ':' + st.name)).slice(0, 20)); }
+  }
+  function stencilFromKey(k) {
+    if (k.startsWith('s:')) return stencilById(k.slice(2));
+    const rest = k.slice(2), i = rest.indexOf(':');
+    return i > 0 ? { kind: 'part', lib: rest.slice(0, i), name: rest.slice(i + 1) } : null;
+  }
+  // Stencil icon for wiring shapes, drawn from its own segments
+  function wireIcon(st) {
+    const pts = st.segs.flat();
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const sc = 16 / Math.max(x1 - x0, y1 - y0, 1e-6);
+    const ox = 12 - (x0 + x1) / 2 * sc, oy = 12 - (y0 + y1) / 2 * sc;
+    const T = (p) => [(p[0] * sc + ox).toFixed(1), (p[1] * sc + oy).toFixed(1)];
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'wire-ico');
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', st.segs.map(([a, b]) => 'M' + T(a).join(' ') + 'L' + T(b).join(' ')).join(''));
+    path.setAttribute('stroke', 'currentColor'); path.setAttribute('stroke-width', '2'); path.setAttribute('stroke-linecap', 'round'); path.setAttribute('fill', 'none');
+    svg.append(path);
+    if (st.segs.length >= 3) { const c = document.createElementNS(ns, 'circle'); const q = T([0, 0]); c.setAttribute('cx', q[0]); c.setAttribute('cy', q[1]); c.setAttribute('r', '2.4'); c.setAttribute('fill', 'currentColor'); svg.append(c); }
+    if (st.jump) path.setAttribute('d', 'M3 12h5.5a3.5 3.5 0 0 1 7 0H21M12 3v18');   // drawn with a hop, as on paper
+    const dot = document.createElementNS(ns, 'circle'); const a = T([0, 0]); dot.setAttribute('cx', a[0]); dot.setAttribute('cy', a[1]); dot.setAttribute('r', '1.2'); dot.setAttribute('fill', '#e2531a'); if (!st.jump && st.segs.length < 3) svg.append(dot);
+    return svg;
+  }
+  // Part thumbnails: drawn once into a hidden canvas and kept as images
+  var thumbCache = new Map();   // var: applyTheme may run before this line
+  let thumbView = null, thumbBusy = Promise.resolve();
+  function thumbFor(st) {
+    const key = (view.dark ? 'd' : 'l') + stKey(st);
+    if (thumbCache.has(key)) return Promise.resolve(thumbCache.get(key));
+    thumbBusy = thumbBusy.then(async () => {
+      if (thumbCache.has(key)) return thumbCache.get(key);
+      const entry = await libEntry(st.lib, st.name);
+      const { scene } = previewScene(entry);
+      if (!thumbView) {
+        const c = h('canvas', { style: 'position:fixed;left:-2000px;top:0;width:150px;height:100px;pointer-events:none', 'aria-hidden': 'true' });
+        document.body.append(c);
+        thumbView = new R.SchematicView(c, {});
+      }
+      thumbView.setTheme(view.dark); thumbView.showGrid = false;
+      thumbView.setScene(scene, true);
+      thumbView.resize();
+      const sy = scene.syms[0];
+      thumbView.fit(sy ? sy.bb : scene.page, 6);
+      thumbView._drawNow();
+      const url = thumbView.canvas.toDataURL('image/png');
+      thumbCache.set(key, url);
+      return url;
+    }).catch(() => null);
+    return thumbBusy;
+  }
+  let thumbObserver = null;
+  function observeThumb(el, st) {
+    if (!thumbObserver) thumbObserver = new IntersectionObserver((es) => {
+      for (const e of es) {
+        if (!e.isIntersecting) continue;
+        thumbObserver.unobserve(e.target);
+        const t = e.target, s = t._st;
+        thumbFor(s).then((url) => { if (url) { const img = h('img', { src: url, alt: '' }); t.querySelector('.th').replaceChildren(img); } });
+      }
+    }, { root: $('dockBody'), rootMargin: '120px' });
+    el._st = st;
+    thumbObserver.observe(el);
+  }
+  // ---- the dock
+  let dockOpen = false;
+  const dockSections = new Set(Store.pref('dockSections') || ['recent', 'wires', 'labels', 'power']);
+  const wideDock = () => window.matchMedia('(min-width: 761px)').matches;
+  function setDock(open) {
+    dockOpen = open;
+    $('dock').hidden = !open;
+    $('railDock').setAttribute('aria-pressed', String(open));
+    if (open) { if (!wideDock() && state.panelOpen) setPanel(false); renderDock(); }
+    Store.pref('dockOpen', open && wideDock());
+    requestAnimationFrame(() => view.resize());
+    renderRibbon();
+  }
+  $('railDock').addEventListener('click', () => setDock(!dockOpen));
+  $('dockClose').addEventListener('click', () => setDock(false));
+  $('dockSearch').addEventListener('input', () => renderDock());
+  function tileFor(st) {
+    const label = st.kind === 'part' ? st.name.replace(/^(SW|Conn|Relay)_/, '').replace(/_/g, ' ') : st.name;
+    const th = h('span', { class: 'th' });
+    if (st.kind === 'wire') th.append(wireIcon(st));
+    else if (st.kind === 'part') th.append(h('span', { class: 'spinner', style: 'width:16px;height:16px;border-width:2px' }));
+    else th.append(icon(st.icon));
+    const armed = state.mode === 'draw' && state.draw && ((state.draw.tool === 'stencil' && state.draw.stencil && stKey(state.draw.stencil) === stKey(st)) || (state.draw.tool === 'part' && state.draw.part && st.kind === 'part' && state.draw.part.lib === st.lib && state.draw.part.name === st.name));
+    const el = h('button', { class: 'tile', type: 'button', title: (st.kind === 'part' ? st.lib + ':' + st.name : st.name) + (st.desc ? '\n' + st.desc : ''), 'aria-pressed': String(!!armed), 'data-k': stKey(st) }, th, h('span', { class: 'tn', text: label }));
+    if (st.kind === 'part') observeThumb(el, st);
+    bindTile(el, st);
+    return el;
+  }
+  function sectionEl(id, title, tiles, extra) {
+    const open = dockSections.has(id) || !!$('dockSearch').value.trim();
+    const head = h('button', { class: 'sg-head', type: 'button', 'aria-expanded': String(open) }, icon('i-chev'), h('span', { text: title }), h('span', { class: 'n', text: String(tiles.length) }));
+    const grid = h('div', { class: 'sg-grid', hidden: !open });
+    head.addEventListener('click', () => {
+      const o = head.getAttribute('aria-expanded') !== 'true';
+      head.setAttribute('aria-expanded', String(o)); grid.hidden = !o;
+      if (o) dockSections.add(id); else dockSections.delete(id);
+      Store.pref('dockSections', Array.from(dockSections));
+      if (o && !grid.childNodes.length) fill();
+    });
+    const fill = () => { grid.replaceChildren(...tiles.map(tileFor)); if (extra) grid.append(extra); };
+    if (open) fill();
+    return h('section', { class: 'sg' }, head, grid);
+  }
+  async function renderDock() {
+    if (!dockOpen) return;
+    const body = $('dockBody'), q = $('dockSearch').value.trim().toLowerCase();
+    const top = body.scrollTop;
+    const match = (st) => !q || q.split(/\s+/).every((t) => (st.name + ' ' + (st.desc || '') + ' ' + (st.lib || '')).toLowerCase().includes(t));
+    const out = [];
+    const rec = (Store.pref('recentStencils') || []).map(stencilFromKey).filter(Boolean).filter(match);
+    if (rec.length && !q) out.push(sectionEl('recent', 'Recently used', rec));
+    const ws = WIRE_STENCILS.filter(match), ls = LABEL_STENCILS.filter(match);
+    if (ws.length) out.push(sectionEl('wires', 'Wires & junctions', ws));
+    if (ls.length) out.push(sectionEl('labels', 'Labels & connectors', ls));
+    let idx = libState.index;
+    if (!idx) { try { idx = await loadLibIndex(); } catch (e) { idx = null; } }
+    for (const g of PART_GROUPS) {
+      let list;
+      if (g.lib) list = idx ? idx.rows.filter((r) => idx.libs[r[0]].name === g.lib).map((r) => ({ kind: 'part', lib: g.lib, name: r[1], desc: r[2] })) : [];
+      else list = g.parts.map((k) => { const i = k.indexOf(':'); const row = idx && idx.rows.find((r) => r[1] === k.slice(i + 1) && idx.libs[r[0]].name === k.slice(0, i)); return { kind: 'part', lib: k.slice(0, i), name: k.slice(i + 1), desc: row ? row[2] : '' }; });
+      list = list.filter(match);
+      if (list.length) out.push(sectionEl(g.id, g.title, list));
+    }
+    if (q && idx) {
+      const terms = q.split(/\s+/);
+      const hits = [];
+      for (let i = 0; i < idx.rows.length && hits.length < 48; i++) if (terms.every((t) => idx.hay[i].includes(t))) { const r = idx.rows[i]; hits.push({ kind: 'part', lib: idx.libs[r[0]].name, name: r[1], desc: r[2] }); }
+      if (hits.length) out.push(sectionEl('lib', 'In the part library', hits));
+    }
+    const more = h('button', { class: 'btn small sg-more', type: 'button', onclick: () => openPartPicker() }, icon('i-part'), 'ALL 10,000 PARTS…');
+    out.push(h('div', { class: 'sg-grid' }, more));
+    if (!out.length) out.push(h('p', { class: 'empty', style: 'padding:12px', text: 'No stencils match.' }));
+    body.replaceChildren(...out);
+    body.scrollTop = top;
+  }
+  function markArmed(st) {
+    for (const t of document.querySelectorAll('.tile[aria-pressed="true"]')) t.setAttribute('aria-pressed', 'false');
+    if (st) for (const t of document.querySelectorAll(`.tile[data-k="${CSS.escape(stKey(st))}"]`)) t.setAttribute('aria-pressed', 'true');
+  }
+  // Tap a tile: it's armed, and every tap on the drawing places one. Drag a tile: it drops where you let go.
+  async function armStencil(st) {
+    if (!state.project) { toast('Open a project first.'); return; }
+    if (st.kind === 'tool') { st.run(); return; }
+    if (state.sel) { state.sel = null; applyHighlight(); }
+    if (st.kind === 'part') {
+      try {
+        const entry = await libEntry(st.lib, st.name);
+        state.draw = { tool: 'part', pts: [], part: entry };
+      } catch (e) { banner('err', e.message); return; }
+    } else state.draw = { tool: 'stencil', pts: [], stencil: st };
+    setMode('draw');
+    markArmed(st);
+    if (!wideDock()) setDock(false);
+    renderStatus();
+  }
+  async function dropStencil(st, wp) {
+    if (!state.project) return;
+    if (st.kind === 'tool') { st.run(); return; }
+    if (st.kind === 'part') {
+      try { const entry = await libEntry(st.lib, st.name); placePart(entry, wp, 'touch'); } catch (e) { banner('err', e.message); }
+      return;
+    }
+    placeStencil(st, wp, 'touch');
+  }
+  function placeStencil(st, wp, type) {
+    const sh = state.inst.sheet, s = snapPoint(wp, type), p = s.p;
+    rememberStencil(st);
+    if (st.kind === 'wire') {
+      let segs = st.segs.map(([a, b]) => [[p[0] + a[0], p[1] + a[1]], [p[0] + b[0], p[1] + b[1]]]);
+      // arms lying along an existing wire are already there (a tee dropped on a wire adds only its branch)
+      segs = segs.filter(([a, b]) => !sh.wires.some((w) => K.onSegment(a, w.a, w.b) && K.onSegment(b, w.a, w.b)));
+      if (!segs.length) { toast('That is already wired.'); return; }
+      run('Add ' + st.name.toLowerCase(), () => E.addWireSegs(sh, segs), { anchor: null, checkMerges: true });
+    } else if (st.kind === 'junction') {
+      run('Add junction', () => E.addJunction(sh, p), { anchor: null });
+    } else if (st.kind === 'nc') {
+      if (s.on !== 'pin') { toast('Tap the end of an unused pin.'); return; }
+      run('No-connect flag', () => E.addNoConnect(sh, p), { anchor: null });
+    } else if (st.kind === 'label') {
+      if (!s.on || s.on === 'label') { toast('Drop a label on a wire, wire end or pin.'); return; }
+      view.overlay = { pts: [], dots: [p], ring: p }; view.redraw();
+      let spin = 'right';
+      const w = sh.wires.find((x) => E.same(x.a, p) || E.same(x.b, p));
+      if (w) { const o = E.same(w.a, p) ? w.b : w.a; if (Math.abs(o[1] - p[1]) < 1e-6) spin = o[0] > p[0] ? 'left' : 'right'; else spin = o[1] > p[1] ? 'up' : 'bottom'; }
+      labelDialog({ p, spin, kind: st.label });
+    } else if (st.kind === 'cable') {
+      const hit = view.hitTest(p, 6);
+      const it = hit && hit.type === 'net' ? itemFromTag(hit.it) : null;
+      if (!it || it.type !== 'wire') { toast('Drop the cable tag on a wire.'); return; }
+      const net = state.project.nets[state.inst.netOf[hit.g]];
+      selectNet(net, it);
+      cableDialog(state.sel);
+    } else if (st.kind === 'text') {
+      textDialog({ p: gridSnap(wp) });
+    }
+  }
+  // Mouse hover while a wiring stencil is armed: show where it would go
+  function hoverPreview(wp) {
+    if (!state.project || state.mode !== 'draw' || !state.draw || state.draw.tool !== 'stencil' || !state.draw.stencil) return;
+    const st = state.draw.stencil, s = snapPoint(wp, 'mouse');
+    view.overlay = { pts: [], dots: [], segs: st.kind === 'wire' ? st.segs.map(([a, b]) => [[s.p[0] + a[0], s.p[1] + a[1]], [s.p[0] + b[0], s.p[1] + b[1]]]) : [], ring: s.on ? s.p : null };
+    view.redraw();
+  }
+  // Drag from the dock: a horizontal move or a long press picks the tile up
+  function bindTile(el, st) {
+    let start = null, dragging = false, ghost = null, lp = 0, pid = null;
+    const overCanvas = (x, y) => { const c = $('canvas').getBoundingClientRect(); const top = document.elementFromPoint(x, y); return x >= c.left && x <= c.right && y >= c.top && y <= c.bottom && (!top || top === $('canvas') || !$('dock').contains(top)) ? [x - c.left, y - c.top] : null; };
+    const begin = (e) => {
+      dragging = true;
+      try { el.setPointerCapture(pid); } catch (err) { /* ignore */ }
+      ghost = h('div', { class: 'drag-ghost' }, el.querySelector('.th').firstElementChild ? el.querySelector('.th').firstElementChild.cloneNode(true) : '', h('span', { text: st.name.slice(0, 14) }));
+      document.body.append(ghost);
+      move(e);
+      if (navigator.vibrate) try { navigator.vibrate(12); } catch (err) { /* ignore */ }
+    };
+    const move = (e) => {
+      ghost.style.left = e.clientX + 'px'; ghost.style.top = e.clientY + 'px';
+      const c = overCanvas(e.clientX, e.clientY);
+      if (c && st.kind !== 'tool') {
+        const wp = view.toWorld(c[0], c[1]), s = snapPoint(wp, 'touch');
+        view.overlay = { pts: [], dots: [], segs: st.kind === 'wire' ? st.segs.map(([a, b]) => [[s.p[0] + a[0], s.p[1] + a[1]], [s.p[0] + b[0], s.p[1] + b[1]]]) : [], ring: s.p };
+      } else view.overlay = null;
+      view.redraw();
+    };
+    const finish = (e, cancel) => {
+      clearTimeout(lp);
+      if (dragging) {
+        const c = !cancel && overCanvas(e.clientX, e.clientY);
+        if (ghost) ghost.remove(); ghost = null;
+        view.overlay = state.mode === 'draw' ? { pts: [], dots: [] } : null; view.redraw();
+        if (c) dropStencil(st, view.toWorld(c[0], c[1]));
+        el._justDragged = true; setTimeout(() => { el._justDragged = false; }, 50);
+      }
+      dragging = false; start = null;
+    };
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button) return;
+      start = [e.clientX, e.clientY]; pid = e.pointerId; dragging = false;
+      clearTimeout(lp);
+      lp = setTimeout(() => { if (start && !dragging) begin(e); }, 420);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      if (dragging) { move(e); return; }
+      const dx = e.clientX - start[0], dy = e.clientY - start[1];
+      if (Math.hypot(dx, dy) > 10) { clearTimeout(lp); if (Math.abs(dx) > Math.abs(dy) * 1.2 || e.pointerType === 'mouse') begin(e); else start = null; }
+    });
+    el.addEventListener('pointerup', (e) => finish(e, false));
+    el.addEventListener('pointercancel', (e) => finish(e, true));
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Once a tile is picked up, a finger moving up or down drags it instead of scrolling the dock.
+    el.addEventListener('touchmove', (e) => { if (dragging) e.preventDefault(); }, { passive: false });
+    el.addEventListener('click', () => { if (!el._justDragged) armStencil(st); });
+  }
+
+  // ---- properties follow the selection on wide screens
+  let propsFollowPref = Store.pref('propsFollow');
+  const propsFollow = () => (propsFollowPref === undefined || propsFollowPref === null ? window.innerWidth >= 1100 : !!propsFollowPref) && wideLayout();
+
+  // ---- the ribbon
+  const RTABS = [['home', 'Home'], ['insert', 'Insert'], ['wire', 'Wire'], ['draw', 'Draw'], ['analyse', 'Analyse'], ['view', 'View']];
+  state.rtab = Store.pref('rtab') || 'home';
+  // On a phone held sideways there's little height, so the tools start folded (tap a tab to open them).
+  var ribbonOpen = Store.pref('ribbonOpen') === undefined || Store.pref('ribbonOpen') === null ? window.innerHeight > 480 : Store.pref('ribbonOpen') !== false;
+  function setRibbonTab(t, open) {
+    state.rtab = t; Store.pref('rtab', t);
+    if (open && !ribbonOpen) { ribbonOpen = true; Store.pref('ribbonOpen', true); }
+    renderRibbon();
+  }
+  const selAct = (label) => selectionActions().find((a) => a.label === label);
+  function drawToolBtn(k, label, ic) {
+    return { label, icon: ic, on: state.mode === 'draw' && state.draw && state.draw.tool === k, run: () => { if (!state.project) return; if (state.sel) { state.sel = null; applyHighlight(); } state.draw = Object.assign({}, state.draw || {}, { tool: k, pts: [] }); if (state.mode !== 'draw') setMode('draw'); else setDrawTool(k); setRibbonTab('draw'); } };
+  }
+  function stencilBtn(id, label) {
+    const st = stencilById(id);
+    return { label: label || st.name, icon: st.icon || 'i-tee', svg: st.kind === 'wire' ? wireIcon(st) : null, on: state.mode === 'draw' && state.draw && state.draw.tool === 'stencil' && state.draw.stencil && state.draw.stencil.id === id, run: () => armStencil(st) };
+  }
+  function ribbonGroups(tab) {
+    const P = !!state.project, s = state.sel;
+    const act = (lbl, label, ic) => { const a = P && selAct(lbl); return { label, icon: ic, disabled: !a, danger: lbl === 'DELETE', run: () => { const x = selAct(lbl); if (x) x.run(); } }; };
+    const show2 = (k, label, ic) => ({ label, icon: ic, on: !!show[k], run: () => setShow(k, !show[k]) });
+    if (tab === 'home') return [
+      { title: 'Select', tools: [
+        { label: 'Select', icon: 'i-hand', on: state.mode === 'select' || state.mode === 'move', run: () => setMode('select') },
+        { label: 'Box select', icon: 'i-box', on: state.mode === 'box', run: startBox },
+        { label: 'Select all', icon: 'i-selall', disabled: !P, run: () => { if (state.mode !== 'box') setMode('box'); selectAll(); } }] },
+      { title: 'Clipboard', tools: [
+        { label: 'Copy', icon: 'i-copy2', disabled: !P || !canCopy(), run: copySel },
+        { label: 'Paste', icon: 'i-paste', disabled: !P || !state.clip, on: state.mode === 'paste', run: startPaste },
+        { label: 'Duplicate', icon: 'i-dup', disabled: !P || !canCopy(), run: duplicateSel },
+        act('DELETE', 'Delete', 'i-trash')] },
+      { title: 'Arrange', tools: [act('MOVE', 'Move', 'i-move'), act('ROTATE', 'Rotate', 'i-rotate'), act('MIRROR ↔', 'Mirror ↔', 'i-mirror'), act('MIRROR ↕', 'Mirror ↕', 'i-mirror'), act('EDIT', 'Edit', 'i-edit')] },
+      { title: 'Navigate', tools: [
+        { label: 'Find', icon: 'i-search', disabled: !P, run: openSearch },
+        { label: 'Fit', icon: 'i-fit', disabled: !P, run: () => view.fit() },
+        { label: 'Zoom to', icon: 'i-target', disabled: !s, run: zoomToSelection },
+        { label: 'Up a sheet', icon: 'i-up', disabled: !(state.inst && state.inst.parent), run: () => state.inst.parent && showInstance(state.inst.parent) }] }
+    ];
+    if (tab === 'insert') return [
+      { title: 'Library', tools: [
+        { label: 'Stencils', icon: 'i-stencil', on: dockOpen, run: () => setDock(!dockOpen) },
+        { label: 'Add part', icon: 'i-part', disabled: !P, run: openPartPicker }] },
+      { title: 'Connect', tools: [stencilBtn('l-net'), stencilBtn('l-glob'), stencilBtn('l-hier'),
+        { label: 'Power', icon: 'i-power', disabled: !P, run: (e) => openMenu(e.currentTarget, PART_GROUPS[0].parts.map((k) => { const n = k.split(':')[1]; return { label: n, icon: 'i-power', run: () => armStencil({ kind: 'part', lib: 'power', name: n }) }; })) }] },
+      { title: 'Annotate', tools: [stencilBtn('l-text'), stencilBtn('l-cable', 'Cable tag')] }
+    ];
+    if (tab === 'wire') return [
+      { title: 'Wire', tools: [
+        { label: 'Draw wire', icon: 'i-wire', on: state.mode === 'wire', run: () => { if (!P) return; if (state.sel) { state.sel = null; applyHighlight(); } setMode('wire'); } },
+        stencilBtn('w-h', 'Straight →'), stencilBtn('w-v', 'Straight ↓')] },
+      { title: 'Connections', tools: [stencilBtn('w-rd', 'Corner'), stencilBtn('w-td', 'Tee'), stencilBtn('w-x', 'Cross'), stencilBtn('w-jump', 'Crossover'), stencilBtn('w-j'), stencilBtn('w-nc')] },
+      { title: 'More', tools: [{ label: 'All shapes', icon: 'i-stencil', on: dockOpen, run: () => { dockSections.add('wires'); Store.pref('dockSections', Array.from(dockSections)); setDock(true); } }, stencilBtn('l-cable', 'Cable tag')] }
+    ];
+    if (tab === 'draw') return [
+      { title: 'Shapes', tools: [drawToolBtn('line', 'Line', 'i-line'), drawToolBtn('rect', 'Rectangle', 'i-rect'), drawToolBtn('circle', 'Circle', 'i-circle'), drawToolBtn('arc', 'Arc', 'i-arc')] },
+      { title: 'Text', tools: [drawToolBtn('text', 'Text', 'i-text')] },
+      { title: 'Style', tools: [{ label: 'Line style', icon: 'i-style', disabled: !P, run: () => { const g = state.sel && state.sel.type === 'graphic' && state.sel.it[0] === 'G' ? graphicObj(state.sel.it) : null; styleDialog(g); } }] }
+    ];
+    if (tab === 'analyse') {
+      const tabBtn = (t, label, ic) => ({ label, icon: ic, disabled: !P, on: state.panelOpen && state.tab === t, run: () => { if (state.panelOpen && state.tab === t) setPanel(false); else showTab(t, true); } });
+      return [
+        { title: 'Browse', tools: [tabBtn('sheets', 'Sheets', 'i-hier'), tabBtn('nets', 'Nets', 'i-net'), tabBtn('parts', 'Parts', 'i-chip'), tabBtn('info', 'Properties', 'i-props')] },
+        { title: 'Check & report', tools: [tabBtn('check', 'Design check', 'i-alert'), tabBtn('reports', 'Reports', 'i-report'), tabBtn('install', 'Install log', 'i-install'), tabBtn('compare', 'Compare', 'i-compare')] }
+      ];
+    }
+    if (tab === 'view') return [
+      { title: 'On the drawing', tools: [show2('wireNos', 'Wire nos.', 'i-number'), show2('xrefs', 'Cross-refs', 'i-link'), show2('markers', 'Check marks', 'i-alert'), show2('install', 'Install', 'i-install'),
+        { label: 'Grid', icon: 'i-more', on: view.showGrid, run: () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); renderRibbon(); } }] },
+      { title: 'Tracing', tools: [
+        { label: 'In steps', icon: 'i-steps', on: traceStep, run: () => { setTraceStep(!traceStep); renderRibbon(); } },
+        { label: 'Stop at conn.', icon: 'i-steps', on: traceBy === 'conn', run: () => { traceBy = traceBy === 'conn' ? 'section' : 'conn'; Store.pref('traceBy', traceBy); renderRibbon(); } },
+        { label: 'Dim others', icon: 'i-dim', on: view.dimOthers, run: () => { view.dimOthers = !view.dimOthers; Store.pref('dim', view.dimOthers); view.redraw(); renderRibbon(); } }] },
+      { title: 'Screen', tools: [
+        { label: 'Properties', icon: 'i-props', on: propsFollow(), run: () => { propsFollowPref = !propsFollow(); Store.pref('propsFollow', propsFollowPref); toast(propsFollowPref ? 'The properties panel opens when you select a part.' : 'The properties panel stays closed until you open it.'); renderRibbon(); } },
+        { label: immersive.on ? 'Exit full' : 'Full screen', icon: immersive.on ? 'i-shrink' : 'i-expand', run: () => { setImmersive(!immersive.on); renderRibbon(); } },
+        { label: 'Theme', icon: 'i-theme', run: () => { const order = ['auto', 'light', 'dark']; const t = order[(order.indexOf(Store.pref('theme') || 'auto') + 1) % 3]; Store.pref('theme', t); applyTheme(); toast('Theme: ' + t); renderRibbon(); } }] }
+    ];
+    return [];
+  }
+  function renderRibbon() {
+    const rb = $('ribbon'); if (!rb) return;
+    rb.classList.toggle('collapsed', !ribbonOpen);
+    const tabs = $('rbTabs');
+    tabs.replaceChildren(...RTABS.map(([k, l]) => h('button', { class: 'rb-tab', role: 'tab', 'aria-selected': String(state.rtab === k), onclick: () => {
+      if (state.rtab === k) { ribbonOpen = !ribbonOpen; Store.pref('ribbonOpen', ribbonOpen); renderRibbon(); renderDrawBar(); requestAnimationFrame(() => view.resize()); return; }
+      setRibbonTab(k, true); requestAnimationFrame(() => view.resize());
+    } }, l)), h('span', { class: 'rb-spacer' }),
+    h('button', { class: 'rb-toggle', 'aria-label': ribbonOpen ? 'Hide the tools' : 'Show the tools', title: ribbonOpen ? 'Hide the tools' : 'Show the tools', onclick: () => { ribbonOpen = !ribbonOpen; Store.pref('ribbonOpen', ribbonOpen); renderRibbon(); renderDrawBar(); requestAnimationFrame(() => view.resize()); } }, icon('i-chev')));
+    if (!ribbonOpen) { $('rbTools').replaceChildren(); return; }
+    const sc = $('rbTools').scrollLeft;
+    $('rbTools').replaceChildren(...ribbonGroups(state.rtab).map((g) => h('div', { class: 'rg', role: 'group', 'aria-label': g.title },
+      h('div', { class: 'rg-tools' }, ...g.tools.map((t) => h('button', { class: 'rt' + (t.danger ? ' danger' : ''), type: 'button', disabled: !!t.disabled, 'aria-pressed': t.on === undefined ? null : String(!!t.on), title: t.label, onclick: (e) => t.run(e) }, t.svg || icon(t.icon), h('span', { text: t.label })))),
+      h('div', { class: 'rg-cap', text: g.title }))));
+    $('rbTools').scrollLeft = sc;
   }
 
   // ================================================================== Loomline: analysis features
@@ -2751,6 +3416,14 @@
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
     if (e.key === 'Escape' && state.mode !== 'select') { setMode('select'); return; }
+    if (state.project && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'c' && canCopy()) { e.preventDefault(); copySel(); return; }
+      if (k === 'v' && state.clip) { e.preventDefault(); startPaste(); return; }
+      if (k === 'd' && canCopy()) { e.preventDefault(); duplicateSel(); return; }
+      if (k === 'a') { e.preventDefault(); if (state.mode !== 'box') setMode('box'); selectAll(); return; }
+    }
+    if (state.project && e.key === 'Delete' && state.sel) { const a = selectionActions().find((x) => x.label === 'DELETE'); if (a) { e.preventDefault(); a.run(); return; } }
     if (e.key === 'Escape' && $('dialogWrap')) { closeDialog(); return; }
     if (e.key === 'Escape' && $('reportWrap')) { closeReport(); return; }
     if (e.key === '/' || (e.key === 'f' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); openSearch(); }
@@ -2794,7 +3467,7 @@
     if (!immersive.on) return;
     const b = document.body.classList;
     if (kind === 'status') { if (!b.contains('peek')) b.add('peek-status'); } else { b.add('peek'); b.remove('peek-status'); }
-    const top = document.querySelector('.topbar'), st = $('status');
+    const top = $('topWrap'), st = $('status');
     document.documentElement.style.setProperty('--bar-top', (top ? top.offsetHeight : 56) + 'px');
     document.documentElement.style.setProperty('--bar-bottom', (st ? st.offsetHeight : 56) + 'px');
     clearTimeout(immersive.timer);
@@ -2809,7 +3482,7 @@
   $('edgeTop').addEventListener('click', () => peek('all'));
   $('edgeRight').addEventListener('click', () => peek('all'));
   $('edgeBottom').addEventListener('click', () => peek('all'));
-  for (const sel of ['.topbar', '#rail', '#status']) {
+  for (const sel of ['#topWrap', '#rail', '#status']) {
     const el = document.querySelector(sel);
     if (el) el.addEventListener('pointerdown', () => { if (immersive.on && (document.body.classList.contains('peek') || document.body.classList.contains('peek-status'))) { clearTimeout(immersive.timer); immersive.timer = setTimeout(unpeekSoon, 6000); } });
   }
@@ -2834,6 +3507,8 @@
   // ------------------------------------------------------------------ boot
   renderStatus();
   renderScale();
+  renderRibbon();
+  if (Store.pref('dockOpen') && wideDock()) setDock(true);
   state.prBase = Store.pref('prBase') || null;
   async function boot() {
     const last = Store.pref('last');
@@ -2851,5 +3526,5 @@
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__tracer = { state, view, selectNet, selectSymbol, showInstance, openProject, snapPoint: (w) => snapPoint(w, 'touch') };
+  window.__tracer = { state, view, selectNet, selectSymbol, showInstance, openProject, snapPoint: (w) => snapPoint(w, 'touch'), armStencil, stencilById, copySel, startPaste, selectAll, setMode, multiResolve, undo };
 })();

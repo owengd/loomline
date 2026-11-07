@@ -14,20 +14,20 @@
   // KiCad's "KiCad Default" schematic colour theme, plus a dark variant of it.
   const PALETTES = {
     light: {
-      bg: '#e4e2dd', paper: '#fbfaf6', grid: 'rgba(120,118,112,0.55)', frame: '#9b2c2c', frameText: '#9b2c2c',
+      bg: '#dde2e8', paper: '#ffffff', grid: 'rgba(96,108,124,0.5)', frame: '#9b2c2c', frameText: '#9b2c2c',
       wire: '#009600', bus: '#000084', junction: '#009600', body: '#840000', bodyfill: '#ffffc2',
       pin: '#840000', pinnum: '#a90000', pinname: '#006464', ref: '#006464', value: '#006464', field: '#840084',
       llabel: '#0f0f0f', glabel: '#840000', hlabel: '#725600', sheet: '#840084', sheetname: '#006464', sheetfile: '#725600',
       sheetpin: '#725600', note: '#0000c2', nc: '#000084', directive: '#840084', rule: '#840084',
-      hl: '#ff5a1f', sel: '#2a7ab0', selFill: 'rgba(42,122,176,0.16)', flash: 'rgba(255,90,31,0.35)'
+      hl: '#ff5a1f', sel: '#1f6fd1', selFill: 'rgba(31,111,209,0.14)', flash: 'rgba(255,90,31,0.35)'
     },
     dark: {
-      bg: '#141618', paper: '#1d2023', grid: 'rgba(140,140,140,0.5)', frame: '#c46a6a', frameText: '#c46a6a',
+      bg: '#11151a', paper: '#1c2128', grid: 'rgba(140,140,140,0.5)', frame: '#c46a6a', frameText: '#c46a6a',
       wire: '#38c158', bus: '#6f8cff', junction: '#38c158', body: '#d26a6a', bodyfill: '#2d2a1d',
       pin: '#d26a6a', pinnum: '#e08a80', pinname: '#4fc2c2', ref: '#4fc2c2', value: '#4fc2c2', field: '#c77ad6',
       llabel: '#e6e6e6', glabel: '#e37d7d', hlabel: '#d6b25a', sheet: '#c77ad6', sheetname: '#4fc2c2', sheetfile: '#d6b25a',
       sheetpin: '#d6b25a', note: '#7f9bff', nc: '#6f8cff', directive: '#c77ad6', rule: '#c77ad6',
-      hl: '#ff7a33', sel: '#5aa9de', selFill: 'rgba(90,169,222,0.18)', flash: 'rgba(255,122,51,0.4)'
+      hl: '#ff7a33', sel: '#5ea3f0', selFill: 'rgba(94,163,240,0.18)', flash: 'rgba(255,122,51,0.4)'
     }
   };
 
@@ -535,6 +535,8 @@
       this.selIt = selIt || null;
       this.redraw();
     }
+    /** Several things selected at once (box select): symbol indices and item tags (W3, L0, G2…). */
+    setMulti(syms, its) { this.mSyms = syms && syms.size ? syms : null; this.mIts = its && its.size ? its : null; this.redraw(); }
     flashBox(bb) {
       this.flash = { bb, t0: performance.now() };
       const tick = () => { this.redraw(); if (this.flash && performance.now() - this.flash.t0 < 1600) requestAnimationFrame(tick); else { this.flash = null; this.redraw(); } };
@@ -816,12 +818,14 @@
       }
 
       const hl = this.hlGroups, selSym = this.selSym, selSheet = this.selSheet, selIt = this.selIt, hlIts = this.hlIts;
-      const anyHl = !!hl || selSym >= 0 || selSheet >= 0 || !!selIt || !!hlIts;
+      const mSyms = this.mSyms, mIts = this.mIts;
+      const inMulti = (o) => (mSyms && o.sym >= 0 && mSyms.has(o.sym)) || (mIts && o.it && mIts.has(o.it));
+      const anyHl = !!hl || selSym >= 0 || selSheet >= 0 || !!selIt || !!hlIts || !!mSyms || !!mIts;
       const dim = anyHl && this.dimOthers ? (this.dark ? 0.32 : 0.28) : 1;
-      const isHl = (o) => (hl && o.g >= 0 && hl.has(o.g)) || (selSym >= 0 && o.sym === selSym) || (selSheet >= 0 && o.sheet === selSheet) || (selIt && o.it === selIt) || (hlIts && o.it && (o.g >= 0 || o.it[0] === 'P') && hlIts.has(o.it));
+      const isHl = (o) => (hl && o.g >= 0 && hl.has(o.g)) || (selSym >= 0 && o.sym === selSym) || (selSheet >= 0 && o.sheet === selSheet) || (selIt && o.it === selIt) || (hlIts && o.it && (o.g >= 0 || o.it[0] === 'P') && hlIts.has(o.it)) || inMulti(o);
       const col = (o) => o.color || P[o.role] || P.note;
       const pv = this.preview;
-      const isPrev = pv ? (o) => (pv.sym >= 0 && o.sym === pv.sym) || (o.it && pv.its && pv.its.has(o.it)) : () => false;
+      const isPrev = pv ? (o) => (pv.sym >= 0 && o.sym === pv.sym) || (pv.syms && o.sym >= 0 && pv.syms.has(o.sym)) || (o.it && pv.its && pv.its.has(o.it)) : () => false;
 
       // images
       for (const im of S.images) {
@@ -845,6 +849,10 @@
       if (selSym >= 0) {
         const s = S.syms.find((x) => x.si === selSym);
         if (s) { ctx.globalAlpha = 1; ctx.fillStyle = P.selFill; const b = s.bb, p = 0.8, o = pv && pv.sym === selSym ? pv.d : [0, 0]; ctx.fillRect(b[0] - p + o[0], b[1] - p + o[1], b[2] - b[0] + 2 * p, b[3] - b[1] + 2 * p); }
+      }
+      if (mSyms) {
+        ctx.globalAlpha = 1; ctx.fillStyle = P.selFill;
+        for (const s of S.syms) if (mSyms.has(s.si)) { const b = s.bb, p = 0.8, o = pv && pv.syms && pv.syms.has(s.si) ? pv.d : [0, 0]; ctx.fillRect(b[0] - p + o[0], b[1] - p + o[1], b[2] - b[0] + 2 * p, b[3] - b[1] + 2 * p); }
       }
       if (selSheet >= 0) {
         const s = S.sheets.find((x) => x.idx === selSheet);
@@ -908,21 +916,21 @@
           if (isPrev(o)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); }
           if (o.p) {
             const net = onNet(o);
-            ctx.strokeStyle = net ? P.hl : selIt && o.it === selIt ? P.sel : col(o);
+            ctx.strokeStyle = net ? P.hl : (selIt && o.it === selIt) || inMulti(o) ? P.sel : col(o);
             ctx.lineWidth = Math.max(o.w * (net ? 1.5 : 1.2), (net ? 2.2 : 1.4) * px);
             this._dash(o.dash, px);
             this._path(o.p, false);
             ctx.stroke();
           } else if (o.c) {
             const net = onNet(o);
-            if (selIt && o.it === selIt) this._circle(o, Object.assign({}, P, { hl: P.sel }), px, true);
+            if ((selIt && o.it === selIt) || inMulti(o)) this._circle(o, Object.assign({}, P, { hl: P.sel }), px, true);
             else this._circle(o, P, px, net);
           }
           if (isPrev(o)) ctx.restore();
         }
         ctx.setLineDash([]);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        for (const o of later) if (o.runs) this._text(o, onNet(o) ? P.hl : selIt && o.it === selIt ? P.sel : col(o), true, isPrev(o) ? pv.d : null);
+        for (const o of later) if (o.runs) this._text(o, onNet(o) ? P.hl : (selIt && o.it === selIt) || inMulti(o) ? P.sel : col(o), true, isPrev(o) ? pv.d : null);
       }
       // annotation tags (wire numbers, cross-references) and check markers, in screen space
       if (an && an.tags && an.tags.length) {
@@ -976,6 +984,15 @@
         if (ov.pending && ov.pending.length > 1) {
           ctx.strokeStyle = P.hl; ctx.lineWidth = Math.max(0.2, 2 * px); ctx.setLineDash([6 * px, 4 * px]);
           ctx.beginPath(); ctx.moveTo(ov.pending[0][0], ov.pending[0][1]); for (const q of ov.pending.slice(1)) ctx.lineTo(q[0], q[1]); ctx.stroke(); ctx.setLineDash([]);
+        }
+        if (ov.segs && ov.segs.length) {
+          ctx.strokeStyle = P.hl; ctx.lineWidth = Math.max(0.25, 3 * px); ctx.setLineDash([]);
+          ctx.beginPath(); for (const [a, b] of ov.segs) { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); } ctx.stroke();
+        }
+        if (ov.box) {
+          const [a, b] = ov.box, x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]), w = Math.abs(a[0] - b[0]), hgt = Math.abs(a[1] - b[1]);
+          ctx.fillStyle = P.selFill; ctx.fillRect(x, y, w, hgt);
+          ctx.strokeStyle = P.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([6 * px, 4 * px]); ctx.strokeRect(x, y, w, hgt); ctx.setLineDash([]);
         }
         for (const q of ov.dots || []) { ctx.fillStyle = P.hl; ctx.beginPath(); ctx.arc(q[0], q[1], Math.max(0.35, 4 * px), 0, Math.PI * 2); ctx.fill(); }
         if (ov.ring) { ctx.strokeStyle = P.sel; ctx.lineWidth = 2.5 * px; ctx.beginPath(); ctx.arc(ov.ring[0], ov.ring[1], 12 * px, 0, Math.PI * 2); ctx.stroke(); }

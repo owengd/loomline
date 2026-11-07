@@ -287,6 +287,8 @@
         setXY(sp, xys[w.seg], w.a[0] + d[0], w.a[1] + d[1]);
         setXY(sp, xys[w.seg + 1], w.b[0] + d[0], w.b[1] + d[1]);
         moves.push({ from: w.a, to: [w.a[0] + d[0], w.a[1] + d[1]] }, { from: w.b, to: [w.b[0] + d[0], w.b[1] + d[1]] });
+      } else if (it.type === 'node') {
+        shiftCoords(sp, it.node, d);
       } else if (it.item) {
         const a = atNode(it.item.src);
         setXY(sp, a, it.item.p[0] + d[0], it.item.p[1] + d[1]);
@@ -390,7 +392,7 @@
     const prefix = m ? m[1] : ref.replace(/\?$/, '');
     let max = 0;
     for (const inst of project.instances) for (const r of inst.refs) {
-      if (r.ref.startsWith(prefix)) { const n = parseInt(r.ref.slice(prefix.length), 10); if (!isNaN(n) && String(n) === r.ref.slice(prefix.length) && n > max) max = n; }
+      if (r.ref.startsWith(prefix)) { const t = r.ref.slice(prefix.length); if (/^\d+$/.test(t)) { const n = parseInt(t, 10); if (n > max) max = n; } }
     }
     return { prefix, next: max + 1 };
   }
@@ -439,6 +441,11 @@
   function addWires(sheet, points) {
     const segs = [];
     for (let i = 0; i + 1 < points.length; i++) if (!same(points[i], points[i + 1])) segs.push([points[i], points[i + 1]]);
+    return addWireSegs(sheet, segs);
+  }
+  /** Add separate wire segments [[a, b], ...] (a stencil's arms), with the same splitting and junctions. */
+  function addWireSegs(sheet, segs) {
+    segs = segs.filter(([a, b]) => !same(a, b));
     if (!segs.length) throw new Error('Draw at least one segment.');
     const sp = new Splicer(sheet.text);
     const newLines = [];
@@ -502,6 +509,157 @@
     const sp = new Splicer(sheet.text);
     sp.insert(insertPoint(sheet), block(noConnectLines(p), '\t'));
     return { path: sheet.path, text: sp.apply() };
+  }
+  function addJunction(sheet, p) {
+    if (sheet.junctions.some((j) => same(j.p, p))) throw new Error('There is already a junction there.');
+    const sp = new Splicer(sheet.text);
+    sp.insert(insertPoint(sheet), block(junctionLines(p), '\t'));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Re-read a sheet from edited text, so the next step of a multi-step edit sees the change. */
+  function reparse(sheet, r) { return K.parseSchematic(r.text, sheet.path); }
+
+  /**
+   * Make things placed at pts connect to wires running through them: each wire with one of the
+   * points inside it is split there (KiCad joins wires only at their ends), and a junction is added
+   * where three or more wire ends and pins now meet.
+   */
+  function connectAt(sheet, pts) {
+    const sp = new Splicer(sheet.text);
+    const lines = [];
+    const cuts = new Map();
+    for (const p of pts) for (const w of sheet.wires) {
+      if (!interior(p, w)) continue;
+      const l = cuts.get(w) || []; if (!l.some((q) => same(q, p))) l.push(p); cuts.set(w, l);
+    }
+    for (const [w, list] of cuts) {
+      list.sort((p, q) => Math.hypot(p[0] - w.a[0], p[1] - w.a[1]) - Math.hypot(q[0] - w.a[0], q[1] - w.a[1]));
+      const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
+      setXY(sp, xys[w.seg + 1], list[0][0], list[0][1]);
+      for (let i = 0; i < list.length; i++) lines.push(wireLines(list[i], i + 1 < list.length ? list[i + 1] : w.b));
+    }
+    for (const p of pts) {
+      if (sheet.junctions.some((j) => same(j.p, p))) continue;
+      let n = 0;
+      for (const w of sheet.wires) { if (same(w.a, p) || same(w.b, p)) n++; else if (interior(p, w)) n += 2; }
+      for (const s of sheet.symbols) for (const pin of K.symbolPins(s)) if (same(pin.pos, p)) n++;
+      if (n >= 3 && !lines.some((l) => l[0] === '(junction' && l[1].includes(`${fnum(p[0])} ${fnum(p[1])}`))) lines.push(junctionLines(p));
+    }
+    if (!lines.length) return { path: sheet.path, text: sheet.text };
+    sp.insert(insertPoint(sheet), lines.map((l) => block(l, '\t')).join(''));
+    return { path: sheet.path, text: sp.apply() };
+  }
+
+  /** Cut the stretch of wire w between pa and pb (both on it), so a two-pin part dropped there sits in series. */
+  function insertInWire(sheet, w, pa, pb) {
+    const t = (p) => Math.hypot(p[0] - w.a[0], p[1] - w.a[1]);
+    const [p, q] = t(pa) <= t(pb) ? [pa, pb] : [pb, pa];
+    if (!K.onSegment(p, w.a, w.b) || !K.onSegment(q, w.a, w.b)) throw new Error('The part does not fit on that wire.');
+    const sp = new Splicer(sheet.text);
+    const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
+    const keepA = !same(w.a, p), keepB = !same(q, w.b);
+    const out = [];
+    if (keepA) { setXY(sp, xys[w.seg + 1], p[0], p[1]); if (keepB) out.push(wireLines(q, w.b)); }
+    else if (keepB) setXY(sp, xys[w.seg], q[0], q[1]);
+    else { const r = nodeRange(sheet.text, w.src); sp.replace(r[0], r[1], ''); }
+    if (out.length) sp.insert(insertPoint(sheet), out.map((l) => block(l, '\t')).join(''));
+    return { path: sheet.path, text: sp.apply() };
+  }
+
+  // ------------------------------------------------------------------ copy and paste
+  /**
+   * Copy items from a sheet: items are [{type:'symbol', sym, ref, unit} | {type:'wire'|'label'|'junction'|'nc'|'node', obj}].
+   * Returns a clipboard: the items' own text, the library symbols they use and their bounding origin.
+   */
+  function copyItems(sheet, items) {
+    const out = { version: sheet.version, items: [], libs: {}, origin: null };
+    let ox = Infinity, oy = Infinity;
+    const grow = (p) => { if (p) { ox = Math.min(ox, p[0]); oy = Math.min(oy, p[1]); } };
+    const ls = K.find(sheet.root, 'lib_symbols');
+    for (const it of items) {
+      const o = it.type === 'symbol' ? it.sym : it.obj;
+      if (!o || !o.src) continue;
+      const text = sheet.text.slice(o.src.s, o.src.e);
+      const entry = { type: it.type, text };
+      if (it.type === 'symbol') {
+        entry.ref = it.ref; entry.unit = o.unit || 1;
+        const lib = o.libName || o.libId;
+        const node = ls && K.findAll(ls, 'symbol').find((s) => s[1] === lib);
+        if (node && !out.libs[lib]) out.libs[lib] = sheet.text.slice(node.s, node.e);
+        grow(o.p);
+      } else if (it.type === 'wire') { grow(o.a); grow(o.b); }
+      else if (o.p) grow(o.p);
+      else {
+        const walk = (n) => { if (!Array.isArray(n)) return; if (COORD_KEYS.includes(n[0]) && n.length >= 3) grow([parseFloat(n[1]), parseFloat(n[2])]); else n.forEach(walk); };
+        walk(o.src);
+      }
+      out.items.push(entry);
+    }
+    out.origin = isFinite(ox) ? [snap(ox), snap(oy)] : [0, 0];
+    return out;
+  }
+
+  /** Paste a clipboard onto a sheet so its origin lands at p: new UUIDs, the next free references, library symbols added. */
+  function pasteItems(project, sheet, inst, clip, p) {
+    if (!clip || !clip.items.length) throw new Error('Nothing has been copied yet.');
+    const d = [p[0] - clip.origin[0], p[1] - clip.origin[1]];
+    const sp = new Splicer(sheet.text);
+    // library symbols the copy needs
+    const ls = K.find(sheet.root, 'lib_symbols');
+    const missing = Object.keys(clip.libs).filter((k) => !sheet.libSymbols[k]);
+    if (missing.length) {
+      const blockText = missing.map((k) => pretty(clip.libs[k], 2)).join('\n') + '\n';
+      if (ls && ls.length > 1) sp.insert(lineStart(sheet.text, ls.e - 1), blockText);
+      else if (ls) sp.replace(ls.s, ls.e, '(lib_symbols\n' + blockText + '\t)');
+      else sp.insert(insertPoint(sheet), '\t(lib_symbols\n' + blockText + '\t)\n');
+    }
+    // new references: one per copied reference (units of one part stay together), per placement of this sheet
+    const placements = project.instances.filter((i) => i.sheet === sheet);
+    const counters = new Map();
+    const nextFor = (old) => {
+      const power = old.startsWith('#');
+      const m = /^(.*?)(\d+)$/.exec(old.replace(/\?$/, ''));
+      const prefix = m ? m[1] : old.replace(/\?$/, '');
+      let n = counters.get(prefix);
+      if (n === undefined) n = nextReference(project, prefix + '0').next;
+      counters.set(prefix, n + 1);
+      return prefix + (power ? String(n).padStart(2, '0') : n);
+    };
+    const refMap = new Map();   // old ref -> Map(placement path -> new ref)
+    const newRefs = [];
+    const uuids = [];
+    const projName = projectNameFor(project, sheet);
+    const chunks = [];
+    for (const it of clip.items) {
+      const node = K.parseSexpr(it.text, true);
+      const isp = new Splicer(it.text);
+      const walk = (n, top) => {
+        if (!Array.isArray(n)) return;
+        if (n[0] === 'uuid' && n.t && n.length >= 2) { const id = uuid(); setTok(isp, n, 1, qstr(id)); if (top) uuids.push(id); return; }
+        if (n[0] === 'instances') return;
+        if (COORD_KEYS.includes(n[0]) && n.t && n.length >= 3) { setXY(isp, n, parseFloat(n[1]) + d[0], parseFloat(n[2]) + d[1]); return; }
+        for (const c of n) walk(c, false);
+      };
+      for (const c of node) walk(c, true);
+      if (it.type === 'symbol') {
+        let refs = refMap.get(it.ref);
+        if (!refs) { refs = new Map(); for (const pl of placements) refs.set(pl.path, nextFor(it.ref)); refMap.set(it.ref, refs); }
+        const mine = refs.get(inst.path) || refs.values().next().value || nextFor(it.ref);
+        if (!newRefs.includes(mine)) newRefs.push(mine);
+        for (const pr of K.findAll(node, 'property')) if (pr[1] === 'Reference') setTok(isp, pr, 2, qstr(mine));
+        const insts = K.find(node, 'instances');
+        if (insts) {
+          const ind = indentAt(it.text, insts.s);
+          const lines = ['(instances', `\t(project ${qstr(projName)}`];
+          for (const pl of placements) lines.push(`\t\t(path ${qstr(pl.path)}`, `\t\t\t(reference ${qstr(refs.get(pl.path))})`, `\t\t\t(unit ${it.unit || 1})`, '\t\t)');
+          lines.push('\t)', ')');
+          isp.replace(insts.s, insts.e, lines.map((l, i) => (i ? ind : '') + l).join('\n'));
+        }
+      }
+      chunks.push('\t' + isp.apply() + '\n');
+    }
+    sp.insert(insertPoint(sheet), chunks.join(''));
+    return { path: sheet.path, text: sp.apply(), refs: newRefs, uuids, d };
   }
 
 
@@ -705,13 +863,17 @@
   /** Move any graphic or text node by d (every coordinate list inside it shifts). */
   function moveNode(sheet, node, d) {
     const sp = new Splicer(sheet.text);
+    shiftCoords(sp, node, d);
+    return { path: sheet.path, text: sp.apply() };
+  }
+  const COORD_KEYS = ['at', 'xy', 'start', 'mid', 'end', 'center'];
+  function shiftCoords(sp, node, d) {
     const walk = (n) => {
       if (!Array.isArray(n)) return;
-      if (['at', 'xy', 'start', 'mid', 'end', 'center'].includes(n[0]) && n.t && n.length >= 3) { setXY(sp, n, parseFloat(n[1]) + d[0], parseFloat(n[2]) + d[1]); return; }
+      if (COORD_KEYS.includes(n[0]) && n.t && n.length >= 3) { setXY(sp, n, parseFloat(n[1]) + d[0], parseFloat(n[2]) + d[1]); return; }
       for (const c of n) walk(c);
     };
     walk(node);
-    return { path: sheet.path, text: sp.apply() };
   }
   function deleteNode(sheet, node) {
     const sp = new Splicer(sheet.text);
@@ -794,7 +956,8 @@
   root.KiEdit = {
     CABLE_FIELDS, addCableFlag, setCableFields, cableSideOf, cableTextAt,
     GRID, snap, same, fnum, qstr, uuid, connectionPoints,
-    setSymbolFields, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addLabel, addNoConnect, nextReference,
+    setSymbolFields, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addWireSegs, addLabel, addNoConnect, addJunction, nextReference,
+    reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KiEdit;
