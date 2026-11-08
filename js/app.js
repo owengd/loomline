@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.0.2';
+  const VERSION = '2.0.3';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -2146,7 +2146,8 @@
           const sc = !terms.length ? 3 : nm === q0 ? 0 : nm.startsWith(terms[0]) ? 1 : nm.includes(terms[0]) ? 2 : 3;
           scored.push([sc, r]);
         });
-        scored.sort((a, b) => a[0] - b[0] || K.naturalCmp(a[1][1], b[1][1]));
+        const own = (r) => (/^Loomline_/.test(idx.libs[r[0]].name) ? 0 : 1);
+        scored.sort((a, b) => a[0] - b[0] || own(a[1]) - own(b[1]) || K.naturalCmp(a[1][1], b[1][1]));
         $('pickCount').textContent = `${scored.length.toLocaleString()} match${scored.length === 1 ? '' : 'es'} in ${idx.rows.length.toLocaleString()} parts`;
         rows = scored.slice(0, 150).map((x) => x[1]);
         if (scored.length > 150) setTimeout(() => list.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: `${scored.length - 150} more; type more to narrow the list` }))), 0);
@@ -2420,6 +2421,7 @@
     { id: 'relay', title: 'Relays', parts: ['Relay:Relay_SPDT', 'Relay:Relay_DPDT', 'Relay:G5LE-1', 'Relay:FINDER-40.31', 'Relay:Relay_SPDT_Latching_1coil'] },
     { id: 'loads', title: 'Loads & indicators', parts: ['Device:LED', 'Device:Lamp', 'Device:Buzzer', 'Device:Heater', 'Device:Speaker', 'Motor:Motor_DC', 'Motor:Fan', 'Device:Battery'] },
     { id: 'conn', title: 'Connectors', parts: ['Connector_Generic:Conn_01x02', 'Connector_Generic:Conn_01x03', 'Connector_Generic:Conn_01x04', 'Connector_Generic:Conn_01x06', 'Connector_Generic:Conn_01x08', 'Connector:Screw_Terminal_01x02', 'Connector:Screw_Terminal_01x04', 'Connector:Conn_Coaxial', 'Connector:RJ45'] },
+    { id: 'ourconn', title: 'Our connectors (Deutsch, ASC, M8/M12)', lib: 'Loomline_Connectors' },
     { id: 'passive', title: 'Passives', parts: ['Device:R', 'Device:C', 'Device:C_Polarized', 'Device:L', 'Device:D_Schottky', 'Device:Thermistor_NTC', 'Device:Antenna'] },
     { id: 'beckhoff', title: 'Beckhoff I/O', lib: 'Loomline_Beckhoff' },
     { id: 'hyd', title: 'Hydraulic valves', lib: 'Loomline_Hydraulics' }
