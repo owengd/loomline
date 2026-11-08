@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.0.1';
+  const VERSION = '2.0.2';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -349,6 +349,7 @@
     $('sheetName').textContent = inst.parent ? inst.name : (inst.orphan ? inst.name : 'Root');
     $('btnSheets').title = inst.namePath + ' · ' + K.basename(inst.sheet.path);
     $('btnUp').disabled = !inst.parent;
+    renderRibbon();   // Up a sheet and other buttons follow the sheet
     writeHash();
     renderStatus();
     if (state.panelOpen && state.tab !== 'info') { state._keepScroll = true; renderPanel(); }
