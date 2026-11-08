@@ -194,6 +194,15 @@ its three pins are the coil's M8 plug (1 = +V, 3 = 0 V, 4 = not used), so the co
 and appears in the wire list like any other part. Reference letter Y. The coil (12 V DC holding,
 15 W), connector, ordering code and hydraulic ratings are in the part's fields (INFO).
 
+### Our connectors
+
+**Add a part → Connectors** lists the team's own connectors first (they are also in the stencil dock
+as **Our connectors**): Deutsch DT and DTM, Deutsch ASC in all four keyways, the Bosch 5-way Trapez
+pressure-sensor plug, Phoenix Contact M8 4-position and M12 4 and 5-position
+connectors (plus generic M12 8-pin and Ethernet), DE-9 CAN, BNC, RP-SMA and 2.1 mm
+DC power, each as a male and female pair. Pin names follow the standard colour codes or the data sheet; part number, contacts,
+wedgelock, mating half and data sheet link are in the part's fields (INFO).
+
 ### Beckhoff I/O
 
 **Add a part → Beckhoff I/O** has 59 Beckhoff parts: the C6017-0030 Industrial PC, the EK1100 coupler, power and
