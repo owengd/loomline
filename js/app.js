@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.0.3';
+  const VERSION = '2.1.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -67,7 +67,7 @@
       else view.zoomBy(2, x, y);
     },
     onView: () => { if (!state._scaleRaf) state._scaleRaf = requestAnimationFrame(() => { state._scaleRaf = 0; renderScale(); }); },
-    onHover: (wp) => hoverPreview(wp)
+    onHover: (wp) => { state.mouse = wp; keyMoveHover(wp); hoverPreview(wp); }
   });
 
   // ------------------------------------------------------------------ theme
@@ -384,7 +384,7 @@
     if (state.mode === 'draw') { drawTap(wp, type); return; }
     if (state.mode === 'box') { boxTap(wp, type); return; }
     if (state.mode === 'paste') { pasteAt(gridSnap(wp)); setMode('select'); return; }
-    if (state.mode === 'move') return;
+    if (state.mode === 'move') { if (state.keyMove) keyMoveDrop(wp); return; }
     const mk = view.markerAt(wp[0] * view.scale + view.ox, wp[1] * view.scale + view.oy, type === 'mouse' ? 12 : 20);
     if (mk && mk.issue) { pickIssue(mk.issue, false); return; }
     const hit = view.hitTest(wp, type === 'mouse' ? 8 : 16);
@@ -1167,6 +1167,7 @@
   // ---- modes
   function setMode(mode) {
     if ((state.mode === 'move' && mode !== 'move') || (state.mode === 'box' && mode !== 'box')) { view.dragHandler = null; view.preview = null; state.boxStart = null; }
+    if (mode !== 'move') state.keyMove = null;
     state.mode = mode;
     if (mode === 'box') view.dragHandler = boxDrag;
     if (mode === 'wire') setRibbonTab('wire', true);
@@ -1328,7 +1329,7 @@
   function closeMenu() { const m = $('menu'); if (m) m.remove(); }
 
   // ---- symbol fields
-  function fieldsDialog(inst, si) {
+  function fieldsDialog(inst, si, focus) {
     const sh = inst.sheet, sym = sh.symbols[si];
     const ref = inst.refs[si].ref;
     const inputs = [];
@@ -1363,6 +1364,11 @@
     openDialog('EDIT ' + ref, [...rows, h('label', { class: 'check' }, dnp, 'Do not populate (DNP)'), newRows,
       h('button', { class: 'btn small', type: 'button', onclick: addRow }, icon('i-plus'), 'ADD FIELD')],
       [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: save }]);
+    if (focus) {
+      const f = focus === 'Reference' ? refIn : (inputs.find(([n]) => n === focus) || [])[1];
+      if (f) setTimeout(() => { f.focus(); f.select(); }, 60);
+      else toast(ref + ' has no ' + focus + ' field.');
+    }
   }
 
   // ---- move tool (drag anywhere; snaps to the grid)
@@ -2076,7 +2082,7 @@
     const P1 = K.buildProject([{ path: 'preview.kicad_sch', text: r.text }]);
     return { scene: R.buildScene(P1, P1.root), units: r.units };
   }
-  function openPartPicker() {
+  function openPartPicker(initial) {
     closePicker();
     const recent = Store.pref('recentParts') || [];
     const q = h('input', { class: 'input', type: 'search', placeholder: 'Search 10,000 parts: relay, pushbutton, fuse, Conn_01x04…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
@@ -2130,16 +2136,16 @@
       const terms = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       list.replaceChildren();
       let rows = [];
-      if (!terms.length && cat === 'All' && recent.length) {
+      if (!terms.length && cat === 'All' && recent.length && !libOnly) {
         const byKey = new Map(idx.rows.map((r) => [idx.libs[r[0]].name + ':' + r[1], r]));
         rows = recent.map((k) => byKey.get(k)).filter(Boolean);
         if (rows.length) list.append(h('div', { class: 'row group' }, h('span', { class: 'main' }, h('span', { class: 'nm', text: 'Recently used' }))));
       }
-      if (!rows.length || terms.length || cat !== 'All') {
+      if (!rows.length || terms.length || cat !== 'All' || libOnly) {
         const scored = [];
         const q0 = terms.join(' ');
         idx.rows.forEach((r, i) => {
-          if (cat !== 'All' && idx.libs[r[0]].cat !== cat) return;
+          if (libOnly ? idx.libs[r[0]].name !== libOnly : cat !== 'All' && idx.libs[r[0]].cat !== cat) return;
           const hay = idx.hay[i];
           if (!terms.every((t) => hay.includes(t))) return;
           const nm = r[1].toLowerCase();
@@ -2161,6 +2167,9 @@
       if (!rows.length) list.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: 'No parts match. Try a shorter word, or another category.' })));
     };
     q.addEventListener('input', fill);
+    const libOnly = typeof initial === 'string' && initial.startsWith('lib:') ? initial.slice(4) : null;
+    if (typeof initial === 'string' && !libOnly) q.value = initial;
+    if (libOnly) q.placeholder = 'Search the ' + libOnly + ' symbols';
     loadLibIndex().then((idx) => {
       const names = ['All'].concat(Array.from(new Set(idx.libs.map((l) => l.cat))));
       for (const c of names) cats.append(h('button', { class: 'chip' + (c === cat ? ' on' : ''), onclick: (e) => { cat = c; state.pickCat = c; for (const b of cats.children) b.classList.toggle('on', b === e.currentTarget); fill(); } }, c));
@@ -2773,6 +2782,7 @@
       { title: 'Screen', tools: [
         { label: 'Properties', icon: 'i-props', on: propsFollow(), run: () => { propsFollowPref = !propsFollow(); Store.pref('propsFollow', propsFollowPref); toast(propsFollowPref ? 'The properties panel opens when you select a part.' : 'The properties panel stays closed until you open it.'); renderRibbon(); } },
         { label: immersive.on ? 'Exit full' : 'Full screen', icon: immersive.on ? 'i-shrink' : 'i-expand', run: () => { setImmersive(!immersive.on); renderRibbon(); } },
+        { label: 'Keys', icon: 'i-info', run: showHotkeys },
         { label: 'Theme', icon: 'i-theme', run: () => { const order = ['auto', 'light', 'dark']; const t = order[(order.indexOf(Store.pref('theme') || 'auto') + 1) % 3]; Store.pref('theme', t); applyTheme(); toast('Theme: ' + t); renderRibbon(); } }] }
     ];
     return [];
@@ -2789,7 +2799,7 @@
     if (!ribbonOpen) { $('rbTools').replaceChildren(); return; }
     const sc = $('rbTools').scrollLeft;
     $('rbTools').replaceChildren(...ribbonGroups(state.rtab).map((g) => h('div', { class: 'rg', role: 'group', 'aria-label': g.title },
-      h('div', { class: 'rg-tools' }, ...g.tools.map((t) => h('button', { class: 'rt' + (t.danger ? ' danger' : ''), type: 'button', disabled: !!t.disabled, 'aria-pressed': t.on === undefined ? null : String(!!t.on), title: t.label, onclick: (e) => t.run(e) }, t.svg || icon(t.icon), h('span', { text: t.label })))),
+      h('div', { class: 'rg-tools' }, ...g.tools.map((t) => h('button', { class: 'rt' + (t.danger ? ' danger' : ''), type: 'button', disabled: !!t.disabled, 'aria-pressed': t.on === undefined ? null : String(!!t.on), title: t.label + (RB_KEYS[t.label] ? '  (' + RB_KEYS[t.label] + ')' : ''), onclick: (e) => t.run(e) }, t.svg || icon(t.icon), h('span', { text: t.label })))),
       h('div', { class: 'rg-cap', text: g.title }))));
     $('rbTools').scrollLeft = sc;
   }
@@ -3462,28 +3472,217 @@
   $('wConnect').addEventListener('click', () => openDrawer('drawerProjects'));
   $('wOpen').addEventListener('click', () => $('fileInput').click());
   $('wSample').addEventListener('click', loadSample);
-  window.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT') return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
-    if (e.key === 'Escape' && state.mode !== 'select') { setMode('select'); return; }
-    if (state.project && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
-      const k = e.key.toLowerCase();
-      if (k === 'c' && canCopy()) { e.preventDefault(); copySel(); return; }
-      if (k === 'v' && state.clip) { e.preventDefault(); startPaste(); return; }
-      if (k === 'd' && canCopy()) { e.preventDefault(); duplicateSel(); return; }
-      if (k === 'a') { e.preventDefault(); if (state.mode !== 'box') setMode('box'); selectAll(); return; }
+  // ------------------------------------------------------------------ keyboard (KiCad 9 default hotkeys)
+  // Same keys as KiCad's schematic editor, so desktop users can work the way they already do. With
+  // nothing selected, a key acts on whatever is under the mouse pointer, like KiCad.
+  const HOTKEYS = [
+    ['Selection and editing', [
+      ['E', 'Properties (edit fields, rename a label, text)'], ['M', 'Move: follows the mouse, click to drop'], ['G', 'Drag (same as move here)'],
+      ['R', 'Rotate'], ['X', 'Mirror horizontally'], ['Y', 'Mirror vertically'], ['V', 'Edit value'], ['U', 'Edit reference designator'], ['F', 'Edit footprint'],
+      ['D', 'Show data sheet'], ['Del', 'Delete'], ['Ctrl+C', 'Copy'], ['Ctrl+X', 'Cut'], ['Ctrl+V', 'Paste'], ['Ctrl+D', 'Duplicate'],
+      ['Ctrl+A', 'Select all'], ['Ctrl+Shift+A', 'Unselect all'], ['Ctrl+Z', 'Undo'], ['Ctrl+Y / Ctrl+Shift+Z', 'Redo'], ['Esc', 'Cancel the tool / clear the selection']]],
+    ['Placing', [
+      ['A', 'Add a symbol'], ['P', 'Add a power symbol'], ['W', 'Draw wires (starts at the pointer)'], ['J', 'Junction'], ['Q', 'No-connect flag'],
+      ['L', 'Net label'], ['Ctrl+L', 'Global label (off-sheet)'], ['H', 'Hierarchical label (sheet port)'], ['T', 'Text'], ['I', 'Draw lines'],
+      ['Ins', 'Repeat the last item'], ['/', 'Switch wire posture (while drawing)'], ['Backspace', 'Undo the last wire segment (while drawing)'], ['End / Enter', 'Finish the wire or shape']]],
+    ['Nets', [['`', 'Highlight the net under the pointer'], ['~', 'Clear net highlighting']]],
+    ['View and sheets', [
+      ['Home', 'Zoom to fit the sheet'], ['Ctrl+Home', 'Zoom to the objects'], ['F1 / F2', 'Zoom in / out at the pointer'], ['+ / -', 'Zoom in / out'],
+      ['F4', 'Centre on the pointer'], ['Ctrl+F5', 'Zoom to the selection'], ['Arrows, Shift+Arrows', 'Pan'],
+      ['PgDn / PgUp', 'Next / previous sheet'], ['Alt+Backspace, Alt+Up', 'Leave sheet (up a sheet)'], ['Ctrl+H', 'Hierarchy (sheet list)']]],
+    ['Project', [['Ctrl+F, /', 'Find'], ['Ctrl+S', 'Save edits'], ['Ctrl+F1, ?', 'This list of keys']]]
+  ];
+  // Ribbon tooltips show the key
+  const RB_KEYS = { 'Copy': 'Ctrl+C', 'Paste': 'Ctrl+V', 'Duplicate': 'Ctrl+D', 'Select all': 'Ctrl+A', 'Delete': 'Del', 'Move': 'M', 'Rotate': 'R',
+    'Mirror ↔': 'X', 'Mirror ↕': 'Y', 'Edit': 'E', 'Find': 'Ctrl+F', 'Fit': 'Home', 'Zoom to': 'Ctrl+F5', 'Up a sheet': 'Alt+Backspace', 'Add part': 'A',
+    'Power': 'P', 'Draw wire': 'W', 'Line': 'I', 'Text': 'T', 'Net label': 'L', 'Off-sheet': 'Ctrl+L', 'Sheet port': 'H', 'Junction': 'J', 'No-connect': 'Q', 'Keys': 'Ctrl+F1' };
+  function showHotkeys() {
+    const body = HOTKEYS.map(([title, keys]) => h('div', { class: 'hk-group' }, h('h4', { text: title }),
+      h('table', { class: 'hk' }, ...keys.map(([k, d]) => h('tr', {}, h('td', {}, ...k.split(/(, | \/ )/).map((p) => /^(, | \/ )$/.test(p) ? p : h('kbd', { text: p }))), h('td', { text: d }))))));
+    openDialog('KEYBOARD SHORTCUTS', [h('p', { class: 'hint', text: 'The same keys as KiCad’s schematic editor. With nothing selected, a key acts on what is under the mouse pointer.' }), ...body],
+      [{ label: 'CLOSE', primary: true, run: closeDialog }]);
+  }
+  const overCanvas = () => !!state.mouse && state.mode !== 'paste';
+  // Nothing selected: select what is under the pointer (KiCad acts on the hovered item)
+  function hoverSelect() {
+    if (state.sel) return true;
+    if (!state.mouse || !state.inst || (state.mode !== 'select' && state.mode !== 'move')) return false;
+    const hit = view.hitTest(state.mouse, 8);
+    if (!hit) return false;
+    if (hit.type === 'net') { const net = state.project.nets[state.inst.netOf[hit.g]]; if (net) selectNet(net, itemFromTag(hit.it)); }
+    else if (hit.type === 'symbol') selectSymbol(state.inst, hit.si);
+    else if (hit.type === 'sheet') selectSheet(state.inst, hit.idx);
+    else if (hit.type === 'graphic') selectGraphic(state.inst, hit.it);
+    return !!state.sel;
+  }
+  function keyAction(re, what) {
+    if (!hoverSelect()) { toast('Point at something or select it first.'); return null; }
+    const a = selectionActions().find((x) => re.test(x.label));
+    if (!a) { toast(what + ' isn’t available for this item.'); return null; }
+    a.run();
+    return a;
+  }
+  function keyMoveStart() {
+    if (!keyAction(/^MOVE$/, 'Move')) return;
+    if (state.mode !== 'move') return;
+    if (state.mouse) { state.keyMove = { from: state.mouse.slice() }; toast('Move the mouse, click to drop. Esc cancels.'); }
+  }
+  function keyMoveHover(wp) {
+    if (state.mode !== 'move' || !state.keyMove || !view.dragHandler) return;
+    const f = state.keyMove.from; view.dragHandler.move([wp[0] - f[0], wp[1] - f[1]]);
+  }
+  function keyMoveDrop(wp) {
+    const f = state.keyMove.from; state.keyMove = null;
+    if (view.dragHandler) view.dragHandler.end([wp[0] - f[0], wp[1] - f[1]]);
+    if (state.mode === 'move') setMode('select');
+  }
+  function editField(name) {
+    if (!hoverSelect()) { toast('Point at a part or select it first.'); return; }
+    const s = state.sel;
+    if (s.type === 'symbol') fieldsDialog(s.inst, s.si, name);
+    else keyAction(/^(EDIT|RENAME|STYLE|CABLE)$/, 'Editing');
+  }
+  function showDatasheet() {
+    if (!hoverSelect() || state.sel.type !== 'symbol') { toast('Point at a part or select it first.'); return; }
+    const s = state.sel, sym = s.inst.sheet.symbols[s.si], p = sym.props.find((x) => x.name === 'Datasheet'), url = p && p.value.trim();
+    if (url && /^https?:\/\//i.test(url)) window.open(url, '_blank', 'noopener');
+    else toast('No data sheet link on ' + s.inst.refs[s.si].ref + '.');
+  }
+  function keyPlace(id) {
+    const st = stencilById(id); if (!st) return;
+    const mouse = state.mouse && state.mouse.slice();
+    armStencil(st);
+    if (!mouse) return;
+    const s = snapPoint(mouse, 'mouse');
+    const onConductor = s.on && s.on !== 'label';
+    if (st.kind === 'text' || ((st.kind === 'label' || st.kind === 'junction') && onConductor) || (st.kind === 'nc' && s.on === 'pin')) placeStencil(st, mouse, 'mouse');
+  }
+  function repeatLast() {
+    const k = (Store.pref('recentStencils') || [])[0], st = k && stencilFromKey(k);
+    if (!st) { toast('Nothing placed yet to repeat.'); return; }
+    if (state.mouse) dropStencil(st, state.mouse.slice()); else armStencil(st);
+  }
+  function stepSheet(d) {
+    const list = state.project.instances.slice().sort((a, b) => a.order - b.order), i = list.indexOf(state.inst), n = list[i + d];
+    if (n) { showInstance(n); toast(n.page + '/' + state.project.pageCount + ' · ' + n.name); }
+  }
+  function mouseScreen() { return state.mouse ? [state.mouse[0] * view.scale + view.ox, state.mouse[1] * view.scale + view.oy] : [$('canvas').clientWidth / 2, $('canvas').clientHeight / 2]; }
+  function panBy(dx, dy) { view.ox += dx; view.oy += dy; view.redraw(); }
+  function hotkey(e) {
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
+      if (e.key === 'Escape' && t.closest && t.closest('#pickerWrap')) closePicker();
+      else if (e.key === 'Escape' && t.closest && t.closest('#dialogWrap')) closeDialog();
+      return;
     }
-    if (state.project && e.key === 'Delete' && state.sel) { const a = selectionActions().find((x) => x.label === 'DELETE'); if (a) { e.preventDefault(); a.run(); return; } }
-    if (e.key === 'Escape' && $('dialogWrap')) { closeDialog(); return; }
-    if (e.key === 'Escape' && $('reportWrap')) { closeReport(); return; }
-    if (e.key === '/' || (e.key === 'f' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); openSearch(); }
-    else if (e.key === 'Escape') { if (!$('search').hidden) closeSearch(); else if (!$('scrim').hidden) closeDrawers(); else if (!state.sel && immersive.on) setImmersive(false); else clearSelection(); }
-    else if (e.key === 'Backspace' && state.inst && state.inst.parent) showInstance(state.inst.parent);
-    else if (e.key === '+' || e.key === '=') view.zoomBy(1.4);
-    else if (e.key === '-') view.zoomBy(1 / 1.4);
-    else if (e.key === '0') view.fit();
-  });
+    const ctrl = e.ctrlKey || e.metaKey, sh = e.shiftKey, alt = e.altKey, key = e.key, k = key.length === 1 ? key.toLowerCase() : key;
+    const done = () => { e.preventDefault(); e.stopPropagation(); };
+    const modal = $('dialogWrap') || $('pickerWrap') || $('reportWrap') || !$('search').hidden;
+    if (key === 'Escape') {
+      if ($('dialogWrap')) { closeDialog(); return; }
+      if ($('pickerWrap')) { closePicker(); return; }
+      if ($('reportWrap')) { closeReport(); return; }
+      if (!$('search').hidden) { closeSearch(); return; }
+      if (state.mode !== 'select') { setMode('select'); return; }
+      if (!$('scrim').hidden) closeDrawers(); else if (!state.sel && immersive.on) setImmersive(false); else clearSelection();
+      return;
+    }
+    if ((ctrl && key === 'F1') || (key === '?' && !ctrl)) { done(); if (!$('dialogWrap')) showHotkeys(); return; }
+    if (modal) return;
+    if (ctrl && (k === 'f' || k === 'g')) { done(); openSearch(); return; }
+    if (!ctrl && !alt && key === '/' && state.mode !== 'wire') { done(); openSearch(); return; }
+    if (!state.project) return;
+    const P = state.project;
+    // ---- with Ctrl / Cmd
+    if (ctrl && !alt) {
+      if (k === 'z') { done(); if (sh) redo(); else undo(); return; }
+      if (k === 'y') { done(); redo(); return; }
+      if (k === 's') { done(); const c = $('chipEdits'); if (c && !c.hidden) c.click(); else toast('No unsaved edits.'); return; }
+      if (k === 'a' && sh) { done(); clearSelection(); return; }
+      if (k === 'a') { done(); if (state.mode !== 'box') setMode('box'); selectAll(); return; }
+      if (k === 'c' && !sh) { if (!hoverSelect() || !canCopy()) return; done(); copySel(); return; }
+      if (k === 'x') { if (!hoverSelect() || !canCopy()) return; done(); copySel(); const a = selectionActions().find((x) => x.label === 'DELETE'); if (a) a.run(); return; }
+      if (k === 'v') { if (!state.clip) return; done(); startPaste(); return; }
+      if (k === 'd') { done(); if (hoverSelect() && canCopy()) duplicateSel(); else keyAction(/^DUPLICATE$/, 'Duplicate'); return; }
+      if (k === 'l') { done(); keyPlace('l-glob'); return; }
+      if (k === 'h') { done(); $('btnSheets').click(); return; }
+      if (key === 'Home') { done(); view.fit(); return; }
+      if (key === 'F5') { done(); if (state.sel) zoomToSelection(); return; }
+      return;
+    }
+    // ---- with Alt
+    if (alt) {
+      if ((key === 'Backspace' || key === 'ArrowUp') && state.inst.parent) { done(); showInstance(state.inst.parent); }
+      return;
+    }
+    // ---- while drawing a wire or a shape
+    if (state.mode === 'wire') {
+      if (key === '/' || (key === ' ' && sh)) { done(); wireFlip(); return; }
+      if (key === 'Backspace') { done(); wireBack(); return; }
+      if (key === 'End' || key === 'Enter') { done(); finishWire(); return; }
+    }
+    if (state.mode === 'draw' && state.draw) {
+      if ((key === 'End' || key === 'Enter') && state.draw.tool === 'line' && state.draw.pts.length > 1) { done(); finishLine(); return; }
+      if (key === 'Backspace' && state.draw.pts.length) { done(); state.draw.pts.pop(); drawOverlay(); renderStatus(); return; }
+    }
+    if (state.mode === 'move' && state.keyMove && (key === 'Enter' || key === 'End') && state.mouse) { done(); keyMoveDrop(state.mouse); return; }
+    // ---- plain keys
+    switch (key) {
+      case 'Delete': done(); keyAction(/^DELETE$/, 'Delete'); return;
+      case 'Backspace': if (state.inst.parent) { done(); showInstance(state.inst.parent); } return;
+      case 'Insert': done(); repeatLast(); return;
+      case 'Home': done(); if (view.scene) view.fit(view.scene.page, 12); return;
+      case 'F1': { done(); const m = mouseScreen(); view.zoomBy(1.4, m[0], m[1]); return; }
+      case 'F2': { done(); const m = mouseScreen(); view.zoomBy(1 / 1.4, m[0], m[1]); return; }
+      case 'F4': { done(); const m = mouseScreen(); panBy($('canvas').clientWidth / 2 - m[0], $('canvas').clientHeight / 2 - m[1]); return; }
+      case 'PageDown': done(); stepSheet(1); return;
+      case 'PageUp': done(); stepSheet(-1); return;
+      case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown': {
+        done(); const st = (sh ? 0.5 : 0.15) * Math.min($('canvas').clientWidth, $('canvas').clientHeight);
+        panBy(key === 'ArrowLeft' ? st : key === 'ArrowRight' ? -st : 0, key === 'ArrowUp' ? st : key === 'ArrowDown' ? -st : 0); return;
+      }
+      case '+': case '=': done(); view.zoomBy(1.4); return;
+      case '-': done(); view.zoomBy(1 / 1.4); return;
+      case '0': done(); view.fit(); return;
+      case '`': {
+        done(); const hit = state.mouse && view.hitTest(state.mouse, 8);
+        if (hit && hit.type === 'net') { const net = P.nets[state.inst.netOf[hit.g]]; if (net) selectNet(net, itemFromTag(hit.it)); }
+        else toast('Point at a wire, label or pin to highlight its net.');
+        return;
+      }
+      case '~': done(); if (state.sel && state.sel.type === 'net') clearSelection(); return;
+    }
+    if (key.length !== 1) return;
+    switch (k) {
+      case 'e': done(); keyAction(/^(EDIT|RENAME|STYLE|CABLE|ENTER)$/, 'Properties'); return;
+      case 'm': case 'g': done(); keyMoveStart(); return;
+      case 'r': done(); keyAction(/^ROTATE$/, 'Rotate'); return;
+      case 'x': done(); keyAction(/^MIRROR ↔$/, 'Mirror'); return;
+      case 'y': done(); keyAction(/^MIRROR ↕$/, 'Mirror'); return;
+      case 'v': done(); editField('Value'); return;
+      case 'u': done(); editField('Reference'); return;
+      case 'f': done(); editField('Footprint'); return;
+      case 'd': done(); showDatasheet(); return;
+      case 'a': done(); openPartPicker(); return;
+      case 'p': done(); openPartPicker('lib:power'); return;
+      case 'w': {
+        done(); const m = state.mouse && state.mouse.slice();
+        if (state.sel) { state.sel = null; applyHighlight(); renderSelectionUI(); }
+        setMode('wire'); if (m) wireTap(m, 'mouse'); return;
+      }
+      case 'j': done(); keyPlace('w-j'); return;
+      case 'q': done(); keyPlace('w-nc'); return;
+      case 'l': done(); keyPlace('l-net'); return;
+      case 'h': done(); keyPlace('l-hier'); return;
+      case 't': done(); keyPlace('l-text'); return;
+      case 'i': done(); if (state.sel) { state.sel = null; applyHighlight(); renderSelectionUI(); } state.draw = { tool: 'line', pts: [] }; setMode('draw'); setDrawTool('line'); return;
+      case 'b': case 'z': done(); toast('Buses aren’t supported in Loomline yet.'); return;
+      case 's': if (!sh) { done(); toast('Adding hierarchical sheets isn’t supported yet; edit those in KiCad.'); } return;
+    }
+  }
+  window.addEventListener('keydown', hotkey);
+  $('canvas').addEventListener('pointerleave', () => { state.mouse = null; });
+
   // ------------------------------------------------------------------ screen fitting
   // Dialogs and menus size to the visible area, so the on-screen keyboard never hides the field
   // being typed in; the field is scrolled into the middle of what's left.
