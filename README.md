@@ -315,22 +315,54 @@ KiCad. Press **Ctrl+F1** or **?** (or **View → Keys**) for the full list. Ribb
 | Keys | Does |
 |---|---|
 | E, V, U, F, D | Properties; edit value, reference, footprint; open the data sheet |
-| M (or G), R, X, Y, Del | Move (follows the mouse, click to drop), rotate, mirror, delete |
+| M, G, R, X, Y, Del | Move (wires stay put) or drag (wires follow), rotate, mirror, delete |
+| O, Alt+S | Autoplace a part's fields; swap two selected parts or labels |
 | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+D | Copy, cut, paste, duplicate |
 | Ctrl+A, Ctrl+Shift+A, Ctrl+Z, Ctrl+Y | Select all, unselect all, undo, redo |
 | A, P | Add a symbol, add a power symbol |
 | W, J, Q, I, T | Wire (starts at the pointer), junction, no-connect, lines, text |
 | L, Ctrl+L, H | Net label, global label, hierarchical label |
-| Ins | Repeat the last item |
-| / , Backspace, End | While drawing a wire: switch posture, undo a segment, finish |
+| Ins | Repeat the last item; label numbers count on (IN1, IN2, IN3…) |
+| B, Z, C | Draw a bus, add a bus entry (R turns it), unfold a member from the bus |
+| S, Shift+B | New hierarchical sheet, design blocks |
+| / , Shift+Space, Backspace, End | While drawing a wire: flip the corner, 90° / 45° / any angle, undo a segment, finish |
 | \`, ~ | Highlight the net under the pointer, clear it |
 | Home, Ctrl+Home, F1, F2, F4 | Fit the sheet, fit the objects, zoom in/out at the pointer, centre on the pointer |
 | Arrows, Shift+Arrows | Pan |
 | PgDn, PgUp, Alt+Backspace | Next sheet, previous sheet, up a sheet |
-| Ctrl+F, Ctrl+S, Ctrl+H | Find, save edits, sheet list |
+| Alt+Left, Alt+Right, N, Shift+N | Back / forward through sheets, next / previous snap grid |
+| Ctrl+F, Ctrl+Alt+F, Ctrl+Shift+M | Find, find and replace, measure |
+| Ctrl+S, Ctrl+H | Save edits, sheet list |
 
-On a Mac, Cmd works in place of Ctrl. Buses (B), wire-to-bus entries (Z) and new hierarchical sheets (S)
-aren't supported yet, so those keys say so. A browser keeps a few Ctrl keys for itself (Ctrl+N, Ctrl+T, Ctrl+W).
+On a Mac, Cmd works in place of Ctrl. A browser keeps a few Ctrl keys for itself (Ctrl+N, Ctrl+T, Ctrl+W).
+
+## 11. KiCad tools
+
+Most of these are on the ribbon too, so they work by touch.
+
+- **Annotate** (Analyse → Tools): renumbers references across the project, page by page, left to right.
+  Either fix only new (R?) and duplicate references, or renumber everything; numbering can run 1, 2, 3… or
+  start each page at page × 100 (201, 301…). Units of one part keep one reference. Shows the changes first.
+- **Find and replace** (Ctrl+Alt+F): in labels, text and part fields, across every sheet, with a preview.
+  Renaming a label renames its net.
+- **Symbol fields table** (Analyse → Tools → Fields table): every part's fields in one grid, like KiCad's
+  Symbol Fields Table. Edit cells, add a field column (MPN, Manufacturer…), group identical parts so one
+  edit sets them all, paste a block from Excel or Sheets, sort, export CSV. APPLY is one undo step.
+- **Measure** (Ctrl+Shift+M), **Swap** (Alt+S), **Autoplace fields** (O), **Snap grid** (N), **Wire angle**
+  (Shift+Space: 90°, 45° or any).
+- **Buses**: draw with **Draw bus** (B), name with a label such as `D[0..7]` or `{SDA SCL}`, add entries (Z),
+  or tap a bus → **UNFOLD** (C) to bring a member out with its entry, wire and label in one step.
+- **New sheets** (Insert → New sheet, or S): tap two corners, name it; a new sheet file is created and is
+  committed with your next save. Select a sheet for **ADD PIN** (adds the pin and the matching sheet port
+  inside), **IMPORT PINS** (pins for every sheet port the sub-sheet already has) or **DELETE**.
+- **My parts** (Insert → My parts): a simple symbol editor. Type the pins one per line (number, name, then
+  optional type and side) and the fields; see it live, then SAVE & PLACE. Start from a selected part to copy
+  its pins. Parts are kept on this device under **My parts** in Add part and the stencil dock, and can be
+  downloaded as a `.kicad_sym` for KiCad. Every placed part carries its own copy inside the sheet, so
+  drawings open in KiCad and on other devices.
+- **Design blocks** (Insert → Blocks, or Shift+B): save a selection (say a standard M12 sensor drop) by
+  name and place it on any sheet of any project; parts get fresh references. Export the blocks to a file to
+  share them with the team, and import them on another device.
 
 ## Limits
 
@@ -369,6 +401,7 @@ test/library-test.js  node test: places library parts and draws shapes, then re-
 test/loom-test.js     node test: wire numbers, wire list, checks and self-compare on every demo project
 test/stencil-test.js  node test: stencils on wires, parts dropped in series, copy and paste, group move
 test/trace-test.js    node test: step-by-step tracing
+test/tools-test.js    node test: annotate, find and replace, autoplace, sheets, buses, box symbols
 fonts/                IBM Plex (SIL Open Font License, see OFL-LICENSE.txt)
 ```
 
