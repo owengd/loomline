@@ -767,3 +767,36 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; font: 500 12px 
   #fieldsWrap .report-head > :not(.titles):not(.ib), #symEditor .report-head > :not(.titles):not(.ib) { order: 2; }
   #fieldsWrap .ft-filter { flex: 1 1 100%; max-width: none; }
 }
+
+/* ---- compact header (2.3): the ribbon tabs sit in the title bar, tools are slimmer */
+.topbar { min-height: 44px; gap: 4px; padding-top: env(safe-area-inset-top, 0px); padding-bottom: 0; }
+.topbar .ib { width: 38px; height: 38px; }
+.topbar .ib svg { width: 21px; height: 21px; }
+.app-mark { width: 24px; height: 24px; margin: 0 2px; }
+.title-btn { max-width: 220px; padding: 0 6px; }
+.ptitle { font-size: 14px; } .prev { font-size: 11px; }
+.chips-bar { justify-content: flex-end; gap: 6px; }
+.chip-btn { height: 32px; padding: 0 10px; gap: 6px; font-size: 12.5px; }
+.chip-btn svg { width: 16px; height: 16px; }
+.topbar .rb-tabs { background: transparent; align-self: flex-end; height: 36px; padding: 0 0 0 6px; gap: 0; flex: 0 1 auto; min-width: 0; }
+.topbar .rb-tab { min-height: 36px; padding: 0 12px; font-size: 13px; }
+.topbar .rb-spacer { display: none; }
+.topbar .rb-toggle { width: 34px; }
+.rb-tools { padding: 3px 6px 3px; }
+.rg { padding: 0 4px; }
+.rg-cap { display: none; }
+.rt { min-height: 44px; min-width: 50px; padding: 2px 5px; gap: 2px; font-size: 10.5px; }
+.rt svg { width: 20px; height: 20px; }
+body.rb-icons .rt > span { display: none; }
+body.rb-icons .rt { min-height: 36px; min-width: 38px; padding: 2px 4px; }
+/* not enough room for the tabs beside the title: they take a slim second row */
+@media (max-width: 1180px) {
+  .topbar { flex-wrap: wrap; row-gap: 0; }
+  .topbar .rb-tabs { order: 10; flex: 1 0 100%; height: 32px; padding-left: 0; margin: 0 -4px; }
+  .topbar .rb-tab { min-height: 32px; }
+  .topbar .rb-spacer { display: block; flex: 1; }
+}
+@media (max-width: 760px) {
+  .topbar .ib { width: 40px; height: 40px; }
+  .rt { min-width: 48px; }
+}
