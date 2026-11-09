@@ -800,3 +800,8 @@ body.rb-icons .rt { min-height: 36px; min-width: 38px; padding: 2px 4px; }
   .topbar .ib { width: 40px; height: 40px; }
   .rt { min-width: 48px; }
 }
+/* ---- install list: the selection on the drawing */
+.ilist .row.selhead { background: var(--blue-soft); color: var(--blue); }
+.ilist .row.selhead .nm { font-weight: 600; }
+.ilist .irow.sel { background: color-mix(in srgb, var(--blue) 9%, transparent); box-shadow: inset 3px 0 0 var(--blue); }
+.ilist .irow.all .iw { font-weight: 600; font-size: 13px; color: var(--fg-dim); cursor: default; }
