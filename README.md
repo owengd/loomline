@@ -306,6 +306,32 @@ relay with separate coil and contacts), select it and tap **ADD UNIT** to place 
 The part library is downloaded once and then works offline. See `library/README.md` for where
 it comes from and its licence.
 
+## 10. Keyboard (KiCad hotkeys)
+
+On a computer the app takes the same keys as KiCad 9's schematic editor, so people who know KiCad can
+work the same way. With nothing selected, a key acts on whatever is under the mouse pointer, as in
+KiCad. Press **Ctrl+F1** or **?** (or **View → Keys**) for the full list. Ribbon tooltips show each tool's key.
+
+| Keys | Does |
+|---|---|
+| E, V, U, F, D | Properties; edit value, reference, footprint; open the data sheet |
+| M (or G), R, X, Y, Del | Move (follows the mouse, click to drop), rotate, mirror, delete |
+| Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+D | Copy, cut, paste, duplicate |
+| Ctrl+A, Ctrl+Shift+A, Ctrl+Z, Ctrl+Y | Select all, unselect all, undo, redo |
+| A, P | Add a symbol, add a power symbol |
+| W, J, Q, I, T | Wire (starts at the pointer), junction, no-connect, lines, text |
+| L, Ctrl+L, H | Net label, global label, hierarchical label |
+| Ins | Repeat the last item |
+| / , Backspace, End | While drawing a wire: switch posture, undo a segment, finish |
+| \`, ~ | Highlight the net under the pointer, clear it |
+| Home, Ctrl+Home, F1, F2, F4 | Fit the sheet, fit the objects, zoom in/out at the pointer, centre on the pointer |
+| Arrows, Shift+Arrows | Pan |
+| PgDn, PgUp, Alt+Backspace | Next sheet, previous sheet, up a sheet |
+| Ctrl+F, Ctrl+S, Ctrl+H | Find, save edits, sheet list |
+
+On a Mac, Cmd works in place of Ctrl. Buses (B), wire-to-bus entries (Z) and new hierarchical sheets (S)
+aren't supported yet, so those keys say so. A browser keeps a few Ctrl keys for itself (Ctrl+N, Ctrl+T, Ctrl+W).
+
 ## Limits
 
 - KiCad 5 `.sch` files aren't supported. Open and save them once in KiCad 6 or newer.
