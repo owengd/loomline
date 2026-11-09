@@ -731,3 +731,39 @@ table.hk { width: 100%; border-collapse: collapse; font-size: 14px; table-layout
 table.hk td { padding: 5px 6px; border-top: 1px solid var(--line); vertical-align: top; }
 table.hk td:first-child { width: 40%; padding-right: 14px; } table.hk kbd { white-space: nowrap; margin: 1px 0; }
 kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; font: 500 12px var(--mono); text-align: center; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--chrome-2); }
+/* ---- annotate / find and replace previews */
+.ann-list { max-height: 34vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 13px; background: var(--surface); }
+.ann-list > div { padding: 3px 0; border-bottom: 1px solid var(--line); }
+.ann-list > div:last-child { border-bottom: 0; }
+.ann-list small { color: var(--fg-dim); }
+.checks { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 6px 0 10px; }
+.mono { font-family: var(--mono); }
+/* ---- symbol fields table */
+.ft-filter { max-width: 240px; height: 36px; }
+.ft-body { padding-top: 6px; }
+.rtable.ft th { cursor: pointer; white-space: nowrap; user-select: none; }
+.rtable.ft th.sorted { color: var(--accent, #1f6fd1); }
+.rtable.ft td { padding: 0; }
+.rtable.ft td.ref { padding: 5px 8px; white-space: nowrap; font-weight: 600; }
+.rtable.ft input.cell { width: 100%; min-width: 120px; border: 0; background: transparent; color: inherit; font: inherit; padding: 6px 8px; outline: none; }
+.rtable.ft input.cell:focus { background: var(--chrome-2); box-shadow: inset 0 0 0 2px var(--accent, #1f6fd1); }
+.rtable.ft input.cell.changed { background: color-mix(in srgb, #f2c200 22%, transparent); }
+@media (max-width: 760px) { .ft-filter { max-width: 120px; } }
+/* ---- my parts editor */
+.se-body { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+.se-form .field { margin-bottom: 10px; }
+.se-row { display: grid; grid-template-columns: 1fr 110px; gap: 10px; }
+.se-row + .field, .field + .se-row { margin-top: 0; }
+.se-pins { width: 100%; min-height: 200px; font-size: 13px; line-height: 1.5; resize: vertical; }
+.se-prev { position: sticky; top: 0; }
+.se-prev .pprev { height: min(56vh, 460px); border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.se-prev .pcanvas { width: 100%; height: 100%; display: block; }
+.chips.unfold { display: flex; flex-wrap: wrap; gap: 6px; max-height: 50vh; overflow: auto; }
+@media (max-width: 760px) { .se-body { grid-template-columns: 1fr; } .se-prev { position: static; } .se-prev .pprev { height: 260px; } }
+@media (max-width: 760px) {
+  #fieldsWrap .report-head, #symEditor .report-head { flex-wrap: wrap; row-gap: 8px; padding-bottom: 10px; }
+  #fieldsWrap .report-head .titles, #symEditor .report-head .titles { flex: 1 1 calc(100% - 64px); order: 0; }
+  #fieldsWrap .report-head > .ib, #symEditor .report-head > .ib { order: 1; }
+  #fieldsWrap .report-head > :not(.titles):not(.ib), #symEditor .report-head > :not(.titles):not(.ib) { order: 2; }
+  #fieldsWrap .ft-filter { flex: 1 1 100%; max-width: none; }
+}
