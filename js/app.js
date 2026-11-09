@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.3.0';
+  const VERSION = '2.3.1';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -3386,10 +3386,35 @@
     const toggles = (key) => { const x = ist(key); return [
       h('button', { class: 'tg f' + (x.fitted ? ' on' : ''), 'aria-pressed': String(x.fitted), title: x.it && x.it.fitted ? whenText(x.it.fitted) : 'Mark fitted', onclick: () => setInstall([key], 'fitted', !x.fitted) }, 'FIT'),
       h('button', { class: 'tg t' + (x.tested ? ' on' : ''), 'aria-pressed': String(x.tested), title: x.it && x.it.tested ? whenText(x.it.tested) : 'Mark tested', onclick: () => setInstall([key], 'tested', !x.tested) }, 'TEST')]; };
+    // What is selected on the drawing: its wires (a net, cable or wire) or its part
+    const selKeys = new Set();
+    const sel = state.sel;
+    if (sel && sel.type === 'net' && sel.net) for (const w of wires) { if (w.net === sel.net || (w.net && w.net.id === sel.net.id)) selKeys.add(w.key); }
+    else if (sel && sel.type === 'symbol') { const r = sel.inst.refs[sel.si] && sel.inst.refs[sel.si].ref; if (r) selKeys.add('P:' + r); }
+    else if (sel && sel.type === 'multi') { const r = multiResolve(sel.m); for (const it of r.items) if (it.type === 'symbol') { const i = state.inst.sheet.symbols.indexOf(it.sym); const ref = i >= 0 && state.inst.refs[i] ? state.inst.refs[i].ref : null; if (ref) selKeys.add('P:' + ref); } }
+    const wireRow = (w) => h('div', { class: 'irow' + (selKeys.has(w.key) ? ' sel' : '') },
+      h('button', { class: 'iw', onclick: () => { selectNet(w.net); goToPin(w.a); afterPick(); } },
+        h('span', { class: 'wno', text: w.no || '–' }), h('span', { class: 'ends', text: `${pinText(w.a)} → ${pinText(w.b)}` })),
+      ...toggles(w.key));
+    const partRow = (e) => h('div', { class: 'irow' + (selKeys.has('P:' + e.ref) ? ' sel' : '') },
+      h('button', { class: 'iw', onclick: () => { selectSymbol(e.units[0].inst, e.units[0].si, true); afterPick(); } }, h('span', { class: 'wno', text: e.ref }), h('span', { class: 'ends', text: K.unescape((e.sym.props.find((p) => p.name === 'Value') || {}).value || '') })),
+      ...toggles('P:' + e.ref));
     const fill = () => {
       V.q = q.value;
       const terms = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       list.replaceChildren();
+      // The selection is always listed first, whatever the filter, so its fitted / tested state is in view.
+      if (selKeys.size) {
+        const sw = wires.filter((w) => selKeys.has(w.key)), sp = parts.filter((e) => selKeys.has('P:' + e.ref));
+        const c = cnt(Array.from(selKeys));
+        const name = sw.length ? (K.plainText(sw[0].net.name) || 'Selected wire') : sp.map((e) => e.ref).join(', ');
+        list.append(h('div', { class: 'row group selhead' }, h('span', { class: 'main' }, h('span', { class: 'nm', text: 'Selected · ' + name })), h('span', { class: 'meta', text: `${c.f}/${c.n} fitted · ${c.t} tested` })));
+        if (sw.length > 1) list.append(h('div', { class: 'irow sel all' }, h('span', { class: 'iw', text: `All ${sw.length} wires` }),
+          h('button', { class: 'tg f' + (c.f === c.n ? ' on' : ''), 'aria-pressed': String(c.f === c.n), onclick: () => setInstall(sw.map((w) => w.key), 'fitted', c.f !== c.n) }, 'FIT'),
+          h('button', { class: 'tg t' + (c.t === c.n ? ' on' : ''), 'aria-pressed': String(c.t === c.n), onclick: () => setInstall(sw.map((w) => w.key), 'tested', c.t !== c.n) }, 'TEST')));
+        for (const w of sw) list.append(wireRow(w));
+        for (const e of sp) list.append(partRow(e));
+      }
       let shown = 0, total = 0;
       if (V.what === 'wires') {
         const groups = new Map();
@@ -3409,10 +3434,7 @@
           list.append(h('div', { class: 'row group' }, h('span', { class: 'main' }, h('span', { class: 'nm', text: gk })), h('span', { class: 'meta', text: `${c.f}/${c.n} fitted · ${c.t} tested` })));
           for (const w of ws) {
             if (shown++ >= V.limit) break;
-            list.append(h('div', { class: 'irow' },
-              h('button', { class: 'iw', onclick: () => { selectNet(w.net); goToPin(w.a); afterPick(); } },
-                h('span', { class: 'wno', text: w.no || '–' }), h('span', { class: 'ends', text: `${pinText(w.a)} → ${pinText(w.b)}` })),
-              ...toggles(w.key)));
+            list.append(wireRow(w));
           }
         }
       } else {
@@ -3423,9 +3445,7 @@
           if (!terms.every((t) => (e.ref + ' ' + val).toLowerCase().includes(t))) continue;
           total++;
           if (shown++ >= V.limit) continue;
-          list.append(h('div', { class: 'irow' },
-            h('button', { class: 'iw', onclick: () => { selectSymbol(e.units[0].inst, e.units[0].si, true); afterPick(); } }, h('span', { class: 'wno', text: e.ref }), h('span', { class: 'ends', text: val })),
-            ...toggles(key)));
+          list.append(partRow(e));
         }
       }
       if (total > V.limit) list.append(h('button', { class: 'row', onclick: () => { V.limit += 500; fill(); } }, h('span', { class: 'meta', text: `Show more (${total - V.limit} hidden)` })));
@@ -3434,6 +3454,10 @@
     q.addEventListener('input', fill);
     fill();
     body.append(list);
+    // Bring the selection into view when it changes (not on every tick of a toggle)
+    const selSig = Array.from(selKeys).join('|');
+    if (selKeys.size && V.lastSel !== selSig) { V.lastSel = selSig; requestAnimationFrame(() => { const el = list.querySelector('.selhead'); if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' }); }); }
+    if (!selKeys.size) V.lastSel = '';
     body.append(h('p', { class: 'hint', text: 'Ticks are saved on this device straight away and shared through the ' + INSTALL_BRANCH + ' branch of the repository, which holds only the install log, so the whole team sees the same progress. Tap a wire to find it on the drawing; with a wire or part selected, FITTED and TESTED are also in the bottom bar.' }));
   }
 
