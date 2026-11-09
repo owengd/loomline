@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.2.0';
+  const VERSION = '2.3.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -84,6 +84,7 @@
   mq.addEventListener && mq.addEventListener('change', applyTheme);
   view.dimOthers = Store.pref('dim') === true;
   view.showGrid = Store.pref('grid') !== false;
+  if (Store.pref('rbIcons')) document.body.classList.add('rb-icons');
   applyTheme();
   if (document.fonts && document.fonts.load) {
     Promise.all([document.fonts.load('16px "Plex Condensed"'), document.fonts.load('600 16px "Plex Condensed"')]).then(() => {
@@ -2849,6 +2850,7 @@
       { title: 'Screen', tools: [
         { label: 'Properties', icon: 'i-props', on: propsFollow(), run: () => { propsFollowPref = !propsFollow(); Store.pref('propsFollow', propsFollowPref); toast(propsFollowPref ? 'The properties panel opens when you select a part.' : 'The properties panel stays closed until you open it.'); renderRibbon(); } },
         { label: immersive.on ? 'Exit full' : 'Full screen', icon: immersive.on ? 'i-shrink' : 'i-expand', run: () => { setImmersive(!immersive.on); renderRibbon(); } },
+        { label: 'Tool labels', icon: 'i-text', on: !document.body.classList.contains('rb-icons'), run: () => { const on = document.body.classList.toggle('rb-icons'); Store.pref('rbIcons', on); renderRibbon(); requestAnimationFrame(() => view.resize()); } },
         { label: 'Keys', icon: 'i-info', run: showHotkeys },
         { label: 'Theme', icon: 'i-theme', run: () => { const order = ['auto', 'light', 'dark']; const t = order[(order.indexOf(Store.pref('theme') || 'auto') + 1) % 3]; Store.pref('theme', t); applyTheme(); toast('Theme: ' + t); renderRibbon(); } }] }
     ];
