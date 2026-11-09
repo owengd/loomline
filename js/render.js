@@ -184,7 +184,7 @@
 
     // ---- wires, buses, entries, junctions, no-connects
     sh.wires.forEach((w, i) => stroke([w.a, w.b], w.st.w, 'wire', { it: 'W' + i, g: w.group, color: colorCss(w.st.color), dash: w.st.type !== 'default' && w.st.type !== 'solid' ? w.st.type : null, kind: 'wire' }));
-    for (const b of sh.buses) stroke([b.a, b.b], b.st.w, 'bus', { g: b.group, color: colorCss(b.st.color), kind: 'bus' });
+    sh.buses.forEach((b, i) => stroke([b.a, b.b], b.st.w, 'bus', { it: 'U' + i, g: b.group, color: colorCss(b.st.color), kind: 'bus' }));
     sh.entries.forEach((e, i) => stroke([e.a, e.b], e.st.w, 'wire', { it: 'E' + i, g: e.group, kind: 'wire' }));
     sh.junctions.forEach((j, i) => { const r = (j.d > 0 ? j.d : 0.9144) / 2; circle(j.p, r, 0, j.bus ? 'bus' : 'junction', { it: 'J' + i, fill: j.bus ? 'bus' : 'junction', g: j.group, kind: 'junction' }); });
     sh.noConnects.forEach((nc, ncI) => { curIt = 'N' + ncI;

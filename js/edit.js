@@ -22,7 +22,10 @@
     const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
   }
-  const snap = (v) => Math.round(v / GRID) * GRID;
+  let SNAP = GRID;   // the editing grid; KiCad's N / Shift+N switch it
+  const snap = (v) => Math.round(v / SNAP) * SNAP;
+  function setSnapGrid(g) { SNAP = g > 0 ? g : GRID; }
+  function snapGrid() { return SNAP; }
   const same = (a, b) => Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3;
 
   // ------------------------------------------------------------------ splicing
@@ -381,6 +384,7 @@
       let n = 0;
       for (const w of sheet.wires) { if (gone.has(w)) continue; if (same(w.a, j.p) || same(w.b, j.p)) n++; else if (interior(j.p, w)) n += 2; }
       for (const s of sheet.symbols) { if (goneSyms.has(s)) continue; for (const p of K.symbolPins(s)) if (same(p.pos, j.p)) n++; }
+      for (const w of sheet.buses.concat(sheet.entries)) { if (removed.has(w.src)) continue; if (same(w.a, j.p) || same(w.b, j.p)) n++; else if (interior(j.p, w)) n += 2; }
       if (n < 3) { removed.add(j.src); nodes.push(j.src); }
     }
     for (const n of nodes) { const r = nodeRange(sheet.text, n); sp.replace(r[0], r[1], ''); }
@@ -953,12 +957,307 @@
     return { path: sheet.path, text: sp.apply() };
   }
 
+
+
+  // ------------------------------------------------------------------ buses and hierarchical sheets
+  function busLines(a, b) {
+    return ['(bus', '\t(pts', `\t\t(xy ${fnum(a[0])} ${fnum(a[1])}) (xy ${fnum(b[0])} ${fnum(b[1])})`, '\t)', '\t(stroke', '\t\t(width 0)', '\t\t(type default)', '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
+  }
+  function busEntryLines(p, size) {
+    return ['(bus_entry', `\t(at ${fnum(p[0])} ${fnum(p[1])})`, `\t(size ${fnum(size[0])} ${fnum(size[1])})`, '\t(stroke', '\t\t(width 0)', '\t\t(type default)', '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
+  }
+  /** Draw bus segments; existing buses are split where a new end lands on them, with a junction. */
+  function addBusSegs(sheet, segs) {
+    segs = segs.filter(([a, b]) => !same(a, b));
+    if (!segs.length) throw new Error('Draw at least one bus segment.');
+    const sp = new Splicer(sheet.text);
+    const out = segs.map(([a, b]) => busLines(a, b));
+    const ends = [];
+    for (const [a, b] of segs) for (const p of [a, b]) if (!ends.some((q) => same(q, p))) ends.push(p);
+    const split = new Set();
+    for (const p of ends) for (const w of sheet.buses) {
+      if (split.has(w) || !interior(p, w)) continue;
+      split.add(w);
+      const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
+      setXY(sp, xys[w.seg + 1], p[0], p[1]);
+      out.push(busLines(p, w.b));
+    }
+    for (const p of ends) {
+      if (sheet.junctions.some((j) => same(j.p, p))) continue;
+      let n = 0;
+      for (const [a, b] of segs) { if (same(a, p)) n++; if (same(b, p)) n++; }
+      for (const w of sheet.buses) { if (same(w.a, p) || same(w.b, p)) n++; else if (interior(p, w)) n += 2; }
+      if (n >= 3) out.push(junctionLines(p));
+    }
+    sp.insert(insertPoint(sheet), out.map((l) => block(l, '\t')).join(''));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  function addBusEntry(sheet, p, size) {
+    const sp = new Splicer(sheet.text);
+    sp.insert(insertPoint(sheet), block(busEntryLines(p, size), '\t'));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** KiCad's "Unfold from bus": an entry off the bus at p, a short wire and a label with the member's name. */
+  function unfoldFromBus(sheet, p, member, vertical) {
+    const e = [2.54, 2.54];
+    const b = [p[0] + e[0], p[1] + e[1]];
+    const end = vertical ? [b[0] + 5.08, b[1]] : [b[0], b[1] + 5.08];
+    const sp = new Splicer(sheet.text);
+    const lines = [busEntryLines(p, e), wireLines(b, end), labelLines('local', member, end, vertical ? 'right' : 'bottom')];
+    sp.insert(insertPoint(sheet), lines.map((l) => block(l, '\t')).join(''));
+    return { path: sheet.path, text: sp.apply() };
+  }
+
+  const NEW_SHEET_VERSION = 20231120;
+  function newSheetText(paper) {
+    return ['(kicad_sch', `\t(version ${NEW_SHEET_VERSION})`, '\t(generator "eeschema")', '\t(generator_version "8.0")', `\t(uuid ${qstr(uuid())})`, `\t(paper ${qstr(paper || 'A4')})`, '\t(lib_symbols)', ')'].join('\n') + '\n';
+  }
+  function sheetPinLines(name, shape, p, side) {
+    const ang = { right: 0, top: 90, left: 180, bottom: 270 }[side] || 180;
+    const just = side === 'right' || side === 'bottom' ? 'right' : 'left';
+    return [`(pin ${qstr(name)} ${shape || 'input'}`, `\t(at ${fnum(p[0])} ${fnum(p[1])} ${ang})`, '\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', `\t\t(justify ${just})`, '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
+  }
+  /**
+   * Add a hierarchical sheet to parent at o.p (top-left) with o.size, named o.name, using file o.file
+   * (relative to the parent). The file is created when the project doesn't have it. Returns results.
+   */
+  function addSheet(project, parent, o) {
+    const insts = project.instances.filter((i) => i.sheet === parent);
+    if (!insts.length) throw new Error('This sheet is not part of the project hierarchy.');
+    const pages = project.instances.map((i) => parseInt(i.page, 10)).filter((n) => isFinite(n));
+    let next = (pages.length ? Math.max.apply(null, pages) : 1) + 1;
+    const proj = projectNameFor(project, parent);
+    const sid = uuid();
+    const named = parent.sheets.length && parent.sheets[0].props.some((p) => p.name === 'Sheet name') ? ['Sheet name', 'Sheet file'] : ['Sheetname', 'Sheetfile'];
+    const [x, y] = o.p, [w, hgt] = o.size;
+    const prop = (n, v, at, just) => [`(property ${qstr(n)} ${qstr(v)}`, `\t(at ${fnum(at[0])} ${fnum(at[1])} 0)`, '\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', `\t\t(justify ${just})`, '\t)', ')'];
+    const lines = ['(sheet', `\t(at ${fnum(x)} ${fnum(y)})`, `\t(size ${fnum(w)} ${fnum(hgt)})`, '\t(fields_autoplaced yes)', '\t(stroke', '\t\t(width 0.1524)', '\t\t(type solid)', '\t)', '\t(fill', '\t\t(color 0 0 0 0.0000)', '\t)', `\t(uuid ${qstr(sid)})`]
+      .concat(prop(named[0], o.name, [x, y - 0.7116], 'left bottom').map((l) => '\t' + l))
+      .concat(prop(named[1], o.file, [x, y + hgt + 0.5884], 'left top').map((l) => '\t' + l))
+      .concat(['\t(instances', `\t\t(project ${qstr(proj)}`])
+      .concat(insts.map((i) => [`\t\t\t(path ${qstr(i.path)}`, `\t\t\t\t(page ${qstr(String(next++))})`, '\t\t\t)'].join('\n')))
+      .concat(['\t\t)', '\t)', ')']);
+    const sp = new Splicer(parent.text);
+    sp.insert(insertPoint(parent), block(lines, '\t'));
+    const results = [{ path: parent.path, text: sp.apply() }];
+    const childPath = K.joinPath(K.dirname(parent.path), o.file);
+    if (!project.instances.some((i) => i.sheet.path === childPath) && !(o.existing && o.existing(childPath))) { const pz = K.find(parent.root, 'paper'); results.push({ path: childPath, text: newSheetText(pz ? pz[1] : 'A4') }); }
+    return { results, uuid: sid, childPath };
+  }
+  /** Add pins to a sheet symbol. pins: [{ name, shape, p, side }] */
+  function addSheetPins(parent, sheetObj, pins) {
+    const sp = new Splicer(parent.text);
+    const ind = indentAt(parent.text, sheetObj.src.s) + '\t';
+    const anchor = K.find(sheetObj.src, 'instances') || null;
+    const txt = pins.map((pn) => block(sheetPinLines(pn.name, pn.shape, pn.p, pn.side), ind)).join('');
+    if (anchor) sp.insert(lineStart(parent.text, anchor.s), txt);
+    else sp.insert(lineStart(parent.text, sheetObj.src.e - 1), txt);
+    return { path: parent.path, text: sp.apply() };
+  }
+  /** Free spots for new pins down one side of a sheet symbol, 2.54 mm apart, avoiding pins already there. */
+  function sheetPinSpots(sheetObj, side, n) {
+    const [x, y] = sheetObj.p, [w, hh] = sheetObj.size;
+    const taken = sheetObj.pins.map((p) => p.p);
+    const out = [];
+    for (let k = 1; out.length < n; k++) {
+      const yy = snap(y + k * 2.54);
+      if (yy > y + hh - 1.27) break;
+      const p = [side === 'right' ? x + w : x, yy];
+      if (!taken.some((q) => same(q, p)) && !out.some((q) => same(q, p))) out.push(p);
+    }
+    return out;
+  }
+
+
+  // ------------------------------------------------------------------ simple symbol editor: box parts
+  const PIN_TYPES = ['passive', 'input', 'output', 'bidirectional', 'tri_state', 'power_in', 'power_out', 'open_collector', 'open_emitter', 'unspecified', 'no_connect', 'free'];
+  /** Parse pin lines "number name [type] [L|R]" (tabs or spaces). */
+  function parsePinLines(text) {
+    const alias = { in: 'input', out: 'output', bidir: 'bidirectional', io: 'bidirectional', tri: 'tri_state', pwr: 'power_in', power: 'power_in', 'power-in': 'power_in', 'power-out': 'power_out', oc: 'open_collector', nc: 'no_connect', pas: 'passive' };
+    const pins = [];
+    for (const raw of String(text).split(/\r?\n/)) {
+      const line = raw.trim(); if (!line) continue;
+      const tok = line.split(/\t|\s+/);
+      const num = tok.shift();
+      let side = 'L', type = 'passive';
+      for (let k = 0; k < 2 && tok.length > (k === 0 ? 0 : 0); k++) {
+        const last = tok[tok.length - 1]; if (last === undefined) break;
+        const lw = last.toLowerCase();
+        if (/^[lr]$/.test(lw)) { side = lw.toUpperCase(); tok.pop(); continue; }
+        if (PIN_TYPES.includes(lw) || alias[lw]) { type = PIN_TYPES.includes(lw) ? lw : alias[lw]; tok.pop(); continue; }
+        break;
+      }
+      pins.push({ num, name: tok.join(' ') || '~', type, side });
+    }
+    return pins;
+  }
+  /** A KiCad library symbol: a box with pins down the left and right. def: { name, ref, value, pins, fields: {Footprint, Datasheet, Description, ...}, keywords } */
+  function boxSymbol(def) {
+    const P = 2.54, q = qstr, f = fnum;
+    const L = def.pins.filter((p) => p.side !== 'R'), R = def.pins.filter((p) => p.side === 'R');
+    const n = Math.max(L.length, R.length, 1);
+    const longL = Math.max(0, ...L.map((p) => p.name === '~' ? 0 : p.name.length)), longR = Math.max(0, ...R.map((p) => p.name === '~' ? 0 : p.name.length));
+    const inner = Math.max(2.54 * 2, (longL + longR) * 0.85 + (L.length && R.length ? 2.54 : 1.27));
+    const tipR = Math.ceil((-1.27 + inner + 3.81) / P) * P, right = tipR - 3.81;
+    const ys = (k) => Array.from({ length: k }, (_, i) => (Math.floor((n - 1) / 2) - i) * P);
+    const yL = ys(L.length), yR = ys(R.length);
+    const top = Math.floor((n - 1) / 2) * P + P, bottom = (Math.floor((n - 1) / 2) - (n - 1)) * P - P;
+    const font = (x) => `(effects (font (size 1.27 1.27))${x || ''})`;
+    const prop = (k, v, x, y, extra) => `(property ${q(k)} ${q(v)} (at ${f(x)} ${f(y)} 0) ${font(extra)})`;
+    const pin = (p, x, y, ang) => `(pin ${p.type || 'passive'} line (at ${f(x)} ${f(y)} ${ang}) (length 3.81) (name ${q(p.name || '~')} ${font()}) (number ${q(p.num)} ${font()}))`;
+    const fields = [prop('Reference', def.ref || 'U', -1.27, top + 1.27, ' (justify left)'), prop('Value', def.value || def.name, -1.27, bottom - 1.27, ' (justify left)')];
+    const hide = Object.entries(Object.assign({ Footprint: '', Datasheet: '~' }, def.fields || {}));
+    hide.forEach(([k, v], i) => fields.push(prop(k, v === '' && k === 'Datasheet' ? '~' : v, 0, bottom - 2.54 - i * 1.27, ' (hide yes)')));
+    if (def.keywords) fields.push(prop('ki_keywords', def.keywords, 0, 0, ' (hide yes)'));
+    const body = `(rectangle (start -1.27 ${f(top)}) (end ${f(right)} ${f(bottom)}) (stroke (width 0.254) (type default)) (fill (type background)))`;
+    const pins = L.map((p, i) => pin(p, -5.08, yL[i], 0)).concat(R.map((p, i) => pin(p, tipR, yR[i], 180)));
+    return `(symbol ${q(def.name)} (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes) ${fields.join(' ')} ` +
+      `(symbol ${q(def.name + '_0_1')} ${body}) (symbol ${q(def.name + '_1_1')} ${pins.join(' ')}))`;
+  }
+  function symbolLibText(symbols) {
+    return pretty('(kicad_symbol_lib (version 20231120) (generator "loomline") (generator_version "1") ' + symbols.join(' ') + ')') + '\n';
+  }
+
+  // ------------------------------------------------------------------ KiCad tools: annotate, find & replace, autoplace
+  /** Set references on several symbols in one file. list: [{ sym, path (instance path), ref, prop (true: also the Reference field) }] */
+  function setReferences(sheet, list) {
+    const sp = new Splicer(sheet.text);
+    const propDone = new Set();
+    for (const c of list) {
+      if (c.prop && !propDone.has(c.sym)) {
+        propDone.add(c.sym);
+        const rp = c.sym.props.find((p) => p.name === 'Reference');
+        if (rp) setTok(sp, rp.src, 2, qstr(c.ref));
+      }
+      const insts = K.find(c.sym.src, 'instances');
+      if (insts) for (const pr of K.findAll(insts, 'project')) for (const pa of K.findAll(pr, 'path')) {
+        if (pa[1] !== c.path) continue;
+        const r = K.find(pa, 'reference');
+        if (r) setTok(sp, r, 1, qstr(c.ref));
+      }
+    }
+    return { path: sheet.path, text: sp.apply() };
+  }
+
+  /** Plan an annotation of the whole project. opts: { all: renumber everything, sheetBase: start each sheet at page × 100 }.
+   *  Returns { changes: [{ inst, si, from, to }], results: [{path, text}] }. Units of one part keep one reference. */
+  function annotate(project, opts) {
+    opts = opts || {};
+    const insts = project.instances.slice().sort((a, b) => a.order - b.order);
+    const items = [];
+    insts.forEach((inst, ii) => inst.sheet.symbols.forEach((sym, si) => {
+      const ref = (inst.refs[si] && inst.refs[si].ref) || '';
+      const m = /^(#?[A-Za-z_]*[A-Za-z_])(\d+|\?)?$/.exec(ref) || /^(.*?)(\d+|\?)?$/.exec(ref);
+      items.push({ inst, ii, si, sym, ref, prefix: m[1] || 'U', num: m[2] && m[2] !== '?' ? +m[2] : null, unit: sym.unit || 1, x: sym.p[0], y: sym.p[1] });
+    }));
+    // Keep: valid refs, with each (ref, unit) only once. Units sharing a ref stay one part.
+    const used = new Map();   // prefix -> Set(numbers)
+    const seenUnit = new Set();
+    const keep = new Set();
+    const useNum = (pre, n) => { if (!used.has(pre)) used.set(pre, new Set()); used.get(pre).add(n); };
+    if (!opts.all) for (const it of items) {
+      if (it.num === null) continue;
+      const key = it.ref + '#' + it.unit;
+      if (seenUnit.has(key)) continue;
+      seenUnit.add(key); keep.add(it); useNum(it.prefix, it.num);
+    }
+    // Groups to number, in page order then left to right, top to bottom (KiCad's "sort by X").
+    const todo = items.filter((it) => !keep.has(it)).sort((a, b) => a.ii - b.ii || a.x - b.x || a.y - b.y);
+    const groups = [];
+    const byOld = new Map();
+    for (const it of todo) {
+      // In "renumber all", the units of one old part stay together (if their units differ).
+      const k = opts.all && it.num !== null ? it.prefix + '|' + it.ref : null;
+      let g = k && byOld.get(k);
+      if (g && g.items.some((x) => x.unit === it.unit)) g = null;
+      if (!g) { g = { prefix: it.prefix, items: [], page: it.inst.page }; groups.push(g); if (k) byOld.set(k, g); }
+      g.items.push(it);
+    }
+    const changes = [];
+    for (const g of groups) {
+      const set = used.get(g.prefix) || new Set();
+      let n = opts.sheetBase ? (parseInt(g.page, 10) || 1) * 100 + 1 : 1;
+      while (set.has(n)) n++;
+      useNum(g.prefix, n);
+      const to = g.prefix + n;
+      for (const it of g.items) if (it.ref !== to) changes.push({ inst: it.inst, si: it.si, sym: it.sym, from: it.ref, to });
+    }
+    const byFile = new Map();
+    for (const c of changes) {
+      const sh = c.inst.sheet;
+      if (!byFile.has(sh)) byFile.set(sh, []);
+      byFile.get(sh).push({ sym: c.sym, path: c.inst.path, ref: c.to, prop: true });
+    }
+    const results = Array.from(byFile, ([sh, list]) => setReferences(sh, list));
+    return { changes, results };
+  }
+
+  /** Find text in labels, text items and symbol fields. opts: { find, replace, labels, texts, fields, refs, matchCase, whole }.
+   *  Returns { hits: [{ kind, where, before, after }], result: {path, text} | null } for one sheet. */
+  function replaceInSheet(sheet, opts) {
+    const esc = opts.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(opts.whole ? '\\b' + esc + '\\b' : esc, opts.matchCase ? 'g' : 'gi');
+    const sp = new Splicer(sheet.text);
+    const hits = [];
+    const visit = (kind, where, node, idx, value) => {
+      if (value === undefined || value === null) return;
+      re.lastIndex = 0;
+      if (!re.test(value)) return;
+      re.lastIndex = 0;
+      const after = value.replace(re, () => opts.replace);
+      hits.push({ kind, where, before: value, after });
+      if (opts.replace !== undefined && opts.replace !== null && after !== value) setTok(sp, node, idx, qstr(after));
+    };
+    if (opts.labels) for (const l of sheet.labels) visit('label', l.kind + ' label', l.src, 1, l.text);
+    if (opts.texts) { for (const t of sheet.texts) visit('text', 'text', t.src, 1, t.s); for (const t of sheet.textBoxes) if (t.src) visit('text', 'text box', t.src, 1, t.s); }
+    if (opts.fields) for (const sym of sheet.symbols) for (const p of sym.props) {
+      if (p.name.startsWith('ki_')) continue;
+      if (p.name === 'Reference' && !opts.refs) continue;
+      if (p.name === 'Reference') {
+        // References live in the instance data as well; leave those to Annotate unless asked.
+        continue;
+      }
+      visit('field', p.name, p.src, 2, p.value);
+    }
+    const changed = opts.replace !== undefined && opts.replace !== null && hits.some((x) => x.after !== x.before);
+    return { hits, result: changed ? { path: sheet.path, text: sp.apply() } : null };
+  }
+
+  /** Put a symbol's visible fields in tidy places. place: { [fieldName]: { p: [x, y], justify: 'left'|'right'|'center' } } */
+  function placeFields(sheet, sym, place) {
+    const sp = new Splicer(sheet.text);
+    const text = sheet.text;
+    for (const p of sym.props) {
+      const want = place[p.name];
+      if (!want) continue;
+      const a = atNode(p.src);
+      if (a) { setXY(sp, a, want.p[0], want.p[1]); if (a.t[3]) setTok(sp, a, 3, '0'); }
+      const eff = K.find(p.src, 'effects');
+      if (!eff) continue;
+      const j = K.find(eff, 'justify');
+      const others = j ? j.slice(1).filter((t) => t !== 'left' && t !== 'right') : [];
+      const toks = (want.justify && want.justify !== 'center' ? [want.justify] : []).concat(others);
+      if (j) {
+        if (toks.length) sp.replace(j.s, j.e, '(justify ' + toks.join(' ') + ')');
+        else { const r = nodeRange(text, j); sp.replace(r[0], r[1], ''); }
+      } else if (toks.length) {
+        const font = K.find(eff, 'font');
+        const at = font ? font.e : eff.e - 1;
+        sp.insert(at, (font && text.slice(font.e, eff.e).includes('\n') ? '\n' + indentAt(text, font.s) : ' ') + '(justify ' + toks.join(' ') + ')');
+      }
+    }
+    return { path: sheet.path, text: sp.apply() };
+  }
+
   root.KiEdit = {
     CABLE_FIELDS, addCableFlag, setCableFields, cableSideOf, cableTextAt,
     GRID, snap, same, fnum, qstr, uuid, connectionPoints,
     setSymbolFields, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addWireSegs, addLabel, addNoConnect, addJunction, nextReference,
     reparse, connectAt, insertInWire, copyItems, pasteItems,
-    flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty
+    flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
+    setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,
+    addBusSegs, addBusEntry, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
+    PIN_TYPES, parsePinLines, boxSymbol, symbolLibText
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KiEdit;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

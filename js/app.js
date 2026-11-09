@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.1.0';
+  const VERSION = '2.2.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -67,7 +67,7 @@
       else view.zoomBy(2, x, y);
     },
     onView: () => { if (!state._scaleRaf) state._scaleRaf = requestAnimationFrame(() => { state._scaleRaf = 0; renderScale(); }); },
-    onHover: (wp) => { state.mouse = wp; keyMoveHover(wp); hoverPreview(wp); }
+    onHover: (wp) => { state.mouse = wp; keyMoveHover(wp); hoverPreview(wp); hoverWire(wp); if (state.mode === 'measure' && state.measure && state.measure.a && !state.measure.b) measureDraw(snapPoint(wp, 'mouse').p); }
   });
 
   // ------------------------------------------------------------------ theme
@@ -337,6 +337,7 @@
   }
   function showInstance(inst, keepView) {
     if (!inst) return;
+    if (state.inst && inst !== state.inst && !state._navSkip && state.navBack && state.project && state.project.instances.includes(state.inst)) { state.navBack.push(state.inst.namePath); if (state.navBack.length > 50) state.navBack.shift(); state.navFwd = []; }
     if (state.inst && state.inst !== inst) state.views.set(state.inst.idx, { scale: view.scale, ox: view.ox, oy: view.oy });
     const same = state.inst === inst;
     state.inst = inst;
@@ -383,13 +384,15 @@
     if (state.mode === 'label') { labelTap(wp, type); return; }
     if (state.mode === 'draw') { drawTap(wp, type); return; }
     if (state.mode === 'box') { boxTap(wp, type); return; }
+    if (state.mode === 'measure') { measureTap(wp, type); return; }
     if (state.mode === 'paste') { pasteAt(gridSnap(wp)); setMode('select'); return; }
     if (state.mode === 'move') { if (state.keyMove) keyMoveDrop(wp); return; }
     const mk = view.markerAt(wp[0] * view.scale + view.ox, wp[1] * view.scale + view.oy, type === 'mouse' ? 12 : 20);
     if (mk && mk.issue) { pickIssue(mk.issue, false); return; }
     const hit = view.hitTest(wp, type === 'mouse' ? 8 : 16);
     if (!hit) { clearSelection(); return; }
-    if (hit.type === 'net') {
+    if (hit.type === 'net' && hit.it && /^[UE]\d/.test(hit.it)) selectGraphic(state.inst, hit.it);
+    else if (hit.type === 'net') {
       const net = state.project.nets[state.inst.netOf[hit.g]];
       if (net) selectNet(net, itemFromTag(hit.it));
     } else if (hit.type === 'symbol') selectSymbol(state.inst, hit.si);
@@ -1011,7 +1014,12 @@
   state.mode = 'select';
   state.wire = { anchors: [], flips: [] };
   const fileText = (path) => { const f = state.files.find((x) => x.path === path); return f ? f.text : null; };
-  const setFileText = (path, text) => { const f = state.files.find((x) => x.path === path); if (f) f.text = text; };
+  // A null text removes the file (undoing the creation of a new sheet file); an unknown path adds one.
+  const setFileText = (path, text) => {
+    const i = state.files.findIndex((x) => x.path === path);
+    if (i >= 0) { if (text === null || text === undefined) state.files.splice(i, 1); else state.files[i].text = text; }
+    else if (text !== null && text !== undefined) state.files.push({ path, text });
+  };
   function pendingFiles() { return state.files ? state.files.filter((f) => state.base.get(f.path) !== f.text) : []; }
   function itemFromTag(it) {
     if (!it) return null;
@@ -1052,7 +1060,7 @@
     const sh = state.inst.sheet, P = state.project;
     if (a.type === 'symbol') { const si = sh.symbols.findIndex((x) => x.uuid === a.uuid); if (si >= 0) state.sel = { type: 'symbol', inst: state.inst, si }; }
     else if (a.type === 'sheet') { const idx = sh.sheets.findIndex((x) => x.uuid === a.uuid); if (idx >= 0) state.sel = { type: 'sheet', inst: state.inst, idx }; }
-    else if (a.type === 'graphic' && a.uuid) { const list = a.kind === 'T' ? sh.texts : a.kind === 'B' ? sh.textBoxes : sh.graphics; const idx = list.findIndex((o) => uuidOf(o) === a.uuid); if (idx >= 0) state.sel = { type: 'graphic', inst: state.inst, it: a.kind + idx }; }
+    else if (a.type === 'graphic' && a.uuid) { const list = a.kind === 'T' ? sh.texts : a.kind === 'B' ? sh.textBoxes : a.kind === 'U' ? sh.buses : a.kind === 'E' ? sh.entries : sh.graphics; const idx = list.findIndex((o) => uuidOf(o) === a.uuid); if (idx >= 0) state.sel = { type: 'graphic', inst: state.inst, it: a.kind + idx }; }
     else if (a.type === 'netname') { const n = P.nets.find((x) => x.name === a.name); if (n) state.sel = { type: 'net', net: n, item: null }; }
     else if (a.type === 'multi') { if (multiCount(a.m)) state.sel = { type: 'multi', inst: state.inst, m: a.m }; }
     else if (a.type === 'net') {
@@ -1156,7 +1164,7 @@
     const saved = await Store.get('edits:' + state.source.key);
     if (!saved || !saved.files || !saved.files.length) return;
     const sameBase = !state.source.head || saved.base === state.source.head.sha;
-    const files = saved.files.filter((f) => state.base.has(f.path));
+    const files = saved.files.filter((f) => state.base.has(f.path) || /\.kicad_sch$/i.test(f.path));
     if (!files.length) return;
     banner('old', `You have unsaved edits to ${files.length} sheet file${files.length === 1 ? '' : 's'} from ${new Date(saved.at).toLocaleString()}${sameBase ? '' : ' (made on an older revision)'}.`, [
       { label: 'RESTORE', primary: true, run: () => { banner(null); commitEdit(files.map((f) => ({ path: f.path, text: f.text })), 'Restore unsaved edits', { anchor: null }); } },
@@ -1168,12 +1176,14 @@
   function setMode(mode) {
     if ((state.mode === 'move' && mode !== 'move') || (state.mode === 'box' && mode !== 'box')) { view.dragHandler = null; view.preview = null; state.boxStart = null; }
     if (mode !== 'move') state.keyMove = null;
+    if (mode !== 'measure') state.measure = null;
+    if (mode === 'measure') view.overlay = { pts: [], dots: [] };
     state.mode = mode;
     if (mode === 'box') view.dragHandler = boxDrag;
     if (mode === 'wire') setRibbonTab('wire', true);
     if (mode === 'draw' && state.draw && ['line', 'rect', 'circle', 'arc', 'text'].includes(state.draw.tool)) setRibbonTab('draw', true);
     for (const b of document.querySelectorAll('.rail-btn.mode')) b.setAttribute('aria-pressed', String(b.dataset.mode === mode || (mode === 'move' && b.dataset.mode === 'select')));
-    if (mode !== 'wire') { state.wire = { anchors: [], flips: [] }; view.overlay = null; }
+    if (mode !== 'wire') { state.wire = { anchors: [], flips: [] }; view.overlay = null; state.wireKind = 'wire'; }
     if (mode === 'wire' || mode === 'label' || mode === 'draw') { view.overlay = { pts: [], dots: [] }; }
     if (mode === 'draw') state.draw = { tool: (state.draw && state.draw.tool) || 'part', pts: [], part: state.draw && state.draw.part, stencil: state.draw && state.draw.stencil };
     if (mode !== 'draw') markArmed(null);
@@ -1195,8 +1205,9 @@
     const tol = (type === 'mouse' ? 10 : 22) / view.scale;
     let best = null, bd = tol;
     for (const c of E.connectionPoints(sh)) { const d = Math.hypot(c.p[0] - wp[0], c.p[1] - wp[1]); if (d < bd) { bd = d; best = { p: c.p.slice(), on: c.kind }; } }
+    for (const b of sh.buses) for (const q of [b.a, b.b]) { const d = Math.hypot(q[0] - wp[0], q[1] - wp[1]); if (d < bd) { bd = d; best = { p: q.slice(), on: 'bus' }; } }
     if (best) return best;
-    for (const w of sh.wires) {
+    for (const w of sh.wires.concat(sh.buses)) {
       const dx = w.b[0] - w.a[0], dy = w.b[1] - w.a[1], l2 = dx * dx + dy * dy; if (!l2) continue;
       let t = ((wp[0] - w.a[0]) * dx + (wp[1] - w.a[1]) * dy) / l2; t = Math.max(0, Math.min(1, t));
       const q = [w.a[0] + t * dx, w.a[1] + t * dy];
@@ -1217,7 +1228,14 @@
     const pts = anchors.length ? [anchors[0]] : [];
     for (let i = 1; i < anchors.length; i++) {
       const a = anchors[i - 1], b = anchors[i];
-      if (Math.abs(a[0] - b[0]) > 1e-6 && Math.abs(a[1] - b[1]) > 1e-6) pts.push(flips[i] ? [a[0], b[1]] : [b[0], a[1]]);
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      if (Math.abs(dx) > 1e-6 && Math.abs(dy) > 1e-6 && state.wirePosture !== 'free') {
+        if (state.wirePosture === '45') {
+          const d = Math.min(Math.abs(dx), Math.abs(dy)), diag = [a[0] + Math.sign(dx) * d, a[1] + Math.sign(dy) * d];
+          const c = flips[i] ? [b[0] - Math.sign(dx) * d, b[1] - Math.sign(dy) * d] : diag;
+          if (!E.same(c, a) && !E.same(c, b)) pts.push(c);
+        } else pts.push(flips[i] ? [a[0], b[1]] : [b[0], a[1]]);
+      }
       pts.push(b);
     }
     return pts;
@@ -1227,6 +1245,13 @@
     view.overlay = { pts: wirePolyline(w.anchors, w.flips), dots: w.anchors.slice(), ring: ring || null };
     view.redraw();
     renderStatus();
+  }
+  // Mouse users see the wire follow the pointer (KiCad style)
+  function hoverWire(wp) {
+    if (state.mode !== 'wire' || !state.wire.anchors.length) return;
+    const w = state.wire, s = snapPoint(wp, 'mouse');
+    view.overlay = { pts: wirePolyline(w.anchors.concat([s.p]), w.flips.concat([w.flips[w.flips.length - 1] || false])), dots: w.anchors.slice(), ring: s.on ? s.p : null };
+    view.redraw();
   }
   function wireTap(wp, type) {
     const s = snapPoint(wp, type);
@@ -1243,7 +1268,8 @@
     if (pts.length < 2) { toast('Tap at least two points to draw a wire.'); return; }
     const sh = state.inst.sheet;
     state.wire = { anchors: [], flips: [] };
-    run('Draw wire', () => E.addWires(sh, pts), { anchor: null });
+    if (state.wireKind === 'bus') { const segs = []; for (let i = 1; i < pts.length; i++) segs.push([pts[i - 1], pts[i]]); run('Draw bus', () => E.addBusSegs(sh, segs), { anchor: null }); }
+    else run('Draw wire', () => E.addWires(sh, pts), { anchor: null });
     updateWireOverlay();
   }
   function wireBack() { const w = state.wire; w.anchors.pop(); w.flips.pop(); updateWireOverlay(); }
@@ -1292,7 +1318,7 @@
       if (o.rename) run('Rename label', () => E.renameLabel(sh, o.rename, v));
       else {
         Store.pref('labelKind', kind.get()); Store.pref('labelShape', shape.value);
-        run('Add label ' + v, () => E.addLabel(sh, kind.get(), v, o.p, dir.get(), shape.value), { anchor: null });
+        if (run('Add label ' + v, () => E.addLabel(sh, kind.get(), v, o.p, dir.get(), shape.value), { anchor: null })) state.lastPlaced = { type: 'label', kind: kind.get(), text: v, p: o.p.slice(), spin: dir.get(), shape: shape.value, sheet: sh.path };
       }
       if (state.mode === 'label') { view.overlay = { pts: [], dots: [] }; view.redraw(); }
     };
@@ -1395,7 +1421,7 @@
         if (t.type === 'multi') {
           if (!state.sel || state.sel.type !== 'multi') { setMode('select'); return; }
           const r = multiResolve(state.sel.m);
-          run('Move ' + t.name, () => E.moveItems(sh, r.items, sd), { checkMerges: true });
+          run('Move ' + t.name, () => E.moveItems(sh, r.items, sd, { keepWires: t.keepWires !== false }), { checkMerges: true });
           return;
         }
         if (t.type === 'graphic') {
@@ -1410,7 +1436,7 @@
         else if (t.type === 'label') item = { type: 'label', label: sh.labels.find((x) => uuidOf(x) === t.uuid) };
         else item = { type: 'wire', wire: sh.wires.find((x) => uuidOf(x) === t.uuid) };
         if (!item.sym && !item.label && !item.wire) { setMode('select'); return; }
-        run('Move ' + t.name, () => E.moveItems(sh, [item], sd), { checkMerges: true });
+        run('Move ' + t.name, () => E.moveItems(sh, [item], sd, { keepWires: t.keepWires !== false }), { checkMerges: true });
       }
     };
     renderStatus();
@@ -1466,6 +1492,8 @@
       const sheet = sh.sheets[s.idx];
       const child = s.inst.children.find((c) => c.sheetSym === sheet);
       A.push({ label: 'ENTER', icon: 'i-open', run: () => child && showInstance(child) });
+      if (child) A.push({ label: 'ADD PIN', icon: 'i-plus', run: () => addSheetPinDialog(s.inst, s.idx) }, { label: 'IMPORT PINS', icon: 'i-hlabel', run: () => importSheetPins(s.inst, s.idx) });
+      A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete sheet ' + sheet.name, () => E.deleteItems(sh, [{ type: 'sheet', sheet }]), { anchor: null }) });
     } else if (s.type === 'multi') {
       const r = multiResolve(s.m), n = r.items.length;
       A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'multi', name: n + ' items' }) });
@@ -1477,11 +1505,12 @@
       const o = graphicObj(s.it, sh);
       if (o) {
         const name = graphicName(s.it, o);
+        if (s.it[0] === 'U') A.push({ label: 'UNFOLD', icon: 'i-tee', run: () => unfoldDialog(o) });
         if (s.it[0] === 'T') A.push({ label: 'EDIT', icon: 'i-edit', run: () => textDialog({ edit: o }) });
         else if (s.it[0] === 'G') A.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(o) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'graphic', kind: s.it[0], uuid: uuidOf(o), name: name.toLowerCase() }) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + name.toLowerCase(), () => E.deleteNode(sh, o.src), { anchor: null }) });
-        if (!uuidOf(o)) A.splice(A.findIndex((x) => x.label === 'MOVE'), 1);
+        if (!uuidOf(o) || /^[UE]/.test(s.it)) { const mi = A.findIndex((x) => x.label === 'MOVE'); if (mi >= 0) A.splice(mi, 1); }
       }
     }
     return A;
@@ -1519,6 +1548,7 @@
     const discard = { label: 'DISCARD EDITS', run: () => {
       if (!discard.armed) { discard.armed = true; toast('Tap DISCARD EDITS again to throw away all unsaved edits.'); return; }
       closeDialog();
+      state.files = state.files.filter((f) => state.base.has(f.path));
       for (const f of state.files) f.text = state.base.get(f.path);
       state.undo = []; state.redo = [];
       rebuild(null); persistEdits(); toast('Edits discarded');
@@ -1620,7 +1650,8 @@
     if (state.mode === 'wire') {
       const n = state.wire.anchors.length;
       setIco('i-wire');
-      t1.textContent = n ? 'Drawing wire' : 'Wire';
+      const what = state.wireKind === 'bus' ? 'bus' : 'wire';
+      t1.textContent = n ? 'Drawing ' + what : what[0].toUpperCase() + what.slice(1);
       t2.textContent = n ? 'Tap corners · tap a pin or wire to finish' : 'Tap a pin, wire end or empty grid to start';
       const L = [];
       if (n > 1) L.push({ label: 'FINISH', icon: 'i-check', primary: true, run: finishWire });
@@ -1649,6 +1680,14 @@
       if (n) L.push({ label: 'NONE', icon: 'i-close', run: () => { clearSelection(); renderStatus(); } });
       if (!n) L.push({ label: 'CANCEL', icon: 'i-close', run: () => setMode('select') });
       putActions(acts, L);
+      return;
+    }
+    if (state.mode === 'measure') {
+      const m = state.measure;
+      setIco('i-line');
+      t1.textContent = 'Measure';
+      t2.textContent = m && m.a && m.b ? measureText(m.a, m.b) : m && m.a ? 'Tap the second point' : 'Tap the first point';
+      putActions(acts, [{ label: 'DONE', icon: 'i-close', run: () => setMode('select') }]);
       return;
     }
     if (state.mode === 'paste') {
@@ -1703,7 +1742,7 @@
       const o = graphicObj(s.it, s.inst.sheet);
       setIco(s.it[0] === 'G' ? 'i-draw' : 'i-text'); ico.classList.add('part');
       t1.textContent = graphicName(s.it, o);
-      t2.textContent = s.it[0] === 'G' && o ? `Drawing · line ${o.st && o.st.w ? o.st.w + ' mm' : 'default'}${o.st && o.st.type && o.st.type !== 'default' && o.st.type !== 'solid' ? ' · ' + o.st.type.replace('_', '-') : ''}` : 'Text on the drawing';
+      t2.textContent = s.it[0] === 'U' ? 'Bus · ' + (busMembers(o).length ? busMembers(o).length + ' members · UNFOLD takes one out' : 'name it with a label like D[0..7]') : s.it[0] === 'E' ? 'Bus entry: joins a wire to a bus' : s.it[0] === 'G' && o ? `Drawing · line ${o.st && o.st.w ? o.st.w + ' mm' : 'default'}${o.st && o.st.type && o.st.type !== 'default' && o.st.type !== 'solid' ? ' · ' + o.st.type.replace('_', '-') : ''}` : 'Text on the drawing';
     } else if (s.type === 'multi') {
       const r = multiResolve(s.m);
       setIco('i-box'); ico.classList.add('part');
@@ -1743,7 +1782,7 @@
     const step = view.gridStep || 1.27;
     const px = Math.max(8, Math.min(140, step * view.scale));
     $('scaleRuler').style.width = px.toFixed(0) + 'px';
-    $('scaleText').textContent = view.showGrid ? `dots ${step < 10 ? step.toFixed(2) : step.toFixed(1)} mm` : `${step < 10 ? step.toFixed(2) : step.toFixed(1)} mm · grid off`;
+    $('scaleText').textContent = (view.showGrid ? `dots ${step < 10 ? step.toFixed(2) : step.toFixed(1)} mm` : `${step < 10 ? step.toFixed(2) : step.toFixed(1)} mm · grid off`) + (E.snapGrid() !== 1.27 ? ` · snap ${E.snapGrid()}` : '');
   }
   $('scaleChip').addEventListener('click', () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); });
 
@@ -1886,12 +1925,14 @@
   function graphicObj(it, sh) {
     sh = sh || state.inst.sheet;
     const i = +it.slice(1);
-    return it[0] === 'G' ? sh.graphics[i] : it[0] === 'T' ? sh.texts[i] : it[0] === 'B' ? sh.textBoxes[i] : null;
+    return it[0] === 'G' ? sh.graphics[i] : it[0] === 'T' ? sh.texts[i] : it[0] === 'B' ? sh.textBoxes[i] : it[0] === 'U' ? sh.buses[i] : it[0] === 'E' ? sh.entries[i] : null;
   }
   function graphicName(it, o) {
     if (!o) return 'Drawing';
     if (it[0] === 'T') return 'Text “' + plain(o.s).slice(0, 40) + '”';
     if (it[0] === 'B') return 'Text box';
+    if (it[0] === 'U') return 'Bus' + (busName(o) ? ' ' + busName(o) : '');
+    if (it[0] === 'E') return 'Bus entry';
     return { polyline: 'Line', rectangle: 'Rectangle', circle: 'Circle', arc: 'Arc', bezier: 'Curve' }[o.kind] || 'Drawing';
   }
   function selectGraphic(inst, it) {
@@ -1911,7 +1952,7 @@
     const d = state.draw, pts = d.pts.slice();
     const ov = { pts: [], dots: pts.slice(), shapes: [] };
     if (d.tool === 'line') ov.pts = pts.concat(extra ? [extra] : []);
-    else if (d.tool === 'rect' && pts.length) { const a = pts[0], b = extra || a; ov.pts = [a, [b[0], a[1]], b, [a[0], b[1]], a]; }
+    else if ((d.tool === 'rect' || d.tool === 'sheet') && pts.length) { const a = pts[0], b = extra || a; ov.pts = [a, [b[0], a[1]], b, [a[0], b[1]], a]; }
     else if (d.tool === 'circle' && pts.length) { const c = pts[0], q = extra || c, r = Math.hypot(q[0] - c[0], q[1] - c[1]); ov.pts = Array.from({ length: 49 }, (_, i) => [c[0] + r * Math.cos(i * Math.PI / 24), c[1] + r * Math.sin(i * Math.PI / 24)]); }
     else if (d.tool === 'arc') ov.pts = pts.concat(extra ? [extra] : []);
     if (extra) ov.ring = extra;
@@ -1929,7 +1970,13 @@
     }
     if (d.tool === 'stencil') { if (d.stencil) placeStencil(d.stencil, wp, type); return; }
     if (d.tool === 'text') { textDialog({ p }); return; }
+    if (d.tool === 'entry') {
+      if (!sh.buses.some((b) => K.onSegment(p, b.a, b.b))) { toast('Tap on a bus. R turns the entry.'); return; }
+      run('Add bus entry', () => E.addBusEntry(sh, p, ENTRY_DIRS[d.dir || 0]), { anchor: null });
+      return;
+    }
     d.pts.push(p);
+    if (d.tool === 'sheet' && d.pts.length === 2) { const [a, b] = d.pts; d.pts = []; if (Math.abs(a[0] - b[0]) < 5 || Math.abs(a[1] - b[1]) < 5) { toast('Drag out a bigger box: tap two opposite corners.'); drawOverlay(); return; } drawOverlay(); sheetDialog(a, b); return; }
     if (d.tool === 'rect' && d.pts.length === 2) { const [a, b] = d.pts; d.pts = []; if (a[0] === b[0] || a[1] === b[1]) { toast('Tap two opposite corners.'); drawOverlay(); return; } run('Add rectangle', () => E.addGraphic(sh, 'rect', { a, b }, st), { anchor: null }); }
     else if (d.tool === 'circle' && d.pts.length === 2) { const [c, q] = d.pts; d.pts = []; run('Add circle', () => E.addGraphic(sh, 'circle', { c, r: Math.hypot(q[0] - c[0], q[1] - c[1]) }, st), { anchor: null }); }
     else if (d.tool === 'arc' && d.pts.length === 3) { const [a, m, b] = d.pts; d.pts = []; const cross = (m[0] - a[0]) * (b[1] - a[1]) - (m[1] - a[1]) * (b[0] - a[0]); if (Math.abs(cross) < 1e-6) { toast('The three points are in a line; tap a middle point off the line.'); drawOverlay(); return; } run('Add arc', () => E.addGraphic(sh, 'arc', { a, m, b }, st), { anchor: null }); }
@@ -1954,9 +2001,11 @@
       circle: n ? 'Tap a point on the edge' : 'Tap the centre',
       arc: ['Tap where the arc starts', 'Tap a point the arc passes through', 'Tap where the arc ends'][n] || '',
       text: 'Tap where the text goes',
+      entry: 'Tap on a bus to add an entry · R turns it',
+      sheet: n ? 'Tap the opposite corner' : 'Tap one corner of the new sheet',
       stencil: d.stencil ? `Tap where the ${d.stencil.name.toLowerCase()} goes${d.stencil.kind === 'wire' ? ' · on a wire to join it' : ''}` : 'Pick a stencil'
     };
-    t1.textContent = d.tool === 'stencil' && d.stencil ? 'Place · ' + d.stencil.name : d.tool === 'part' && d.part ? 'Place · ' + d.part.name : 'Draw · ' + tool[1].toLowerCase();
+    t1.textContent = d.tool === 'entry' ? 'Bus entry' : d.tool === 'sheet' ? 'New sheet' : d.tool === 'stencil' && d.stencil ? 'Place · ' + d.stencil.name : d.tool === 'part' && d.part ? 'Place · ' + d.part.name : 'Draw · ' + tool[1].toLowerCase();
     t2.textContent = hints[d.tool];
     const L = [];
     if (d.tool === 'line' && n > 1) L.push({ label: 'FINISH', icon: 'i-check', primary: true, run: finishLine });
@@ -1964,7 +2013,8 @@
     if (d.tool === 'part') L.push({ label: d.part ? 'CHANGE' : 'CHOOSE', icon: 'i-part', primary: !d.part, run: openPartPicker });
     const last = d.tool === 'part' && d.last && state.inst.sheet.symbols.find((x) => x.uuid === d.last.uuid);
     if (last) L.push({ label: 'ROTATE', icon: 'i-rotate', run: () => { run('Rotate ' + d.last.ref, () => E.transformSymbol(state.inst.sheet, last, 'rotate'), { anchor: null }); const i = state.inst.sheet.symbols.findIndex((x) => x.uuid === d.last.uuid); view.setHighlight(null, i, -1); } });
-    if (d.tool !== 'part' && d.tool !== 'stencil') L.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(null) });
+    if (d.tool === 'entry') L.push({ label: 'TURN', icon: 'i-rotate', run: () => { d.dir = ((d.dir || 0) + 1) % 4; if (state.mouse) hoverPreview(state.mouse); } });
+    if (d.tool !== 'part' && d.tool !== 'stencil' && d.tool !== 'entry' && d.tool !== 'sheet') L.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(null) });
     if (d.tool === 'stencil' || d.tool === 'part') L.push({ label: 'STENCILS', icon: 'i-stencil', run: () => setDock(true) });
     L.push({ label: 'DONE', icon: 'i-close', run: () => setMode('select') });
     putActions(acts, L);
@@ -2042,6 +2092,7 @@
       if (!idx) idx = await Store.get('lib:index');
       if (!idx) throw new Error('The part library could not be loaded. Connect to the internet once to download it.');
       idx.hay = idx.rows.map((r) => (r[1] + ' ' + r[2] + ' ' + r[3] + ' ' + idx.libs[r[0]].name).toLowerCase());
+      try { const mp = await Store.get('myParts'); if (mp && mp.meta && Object.keys(mp.meta).length) mergeMyParts(idx, mp); } catch (e) { /* none */ }
       libState.index = idx;
       return idx;
     })();
@@ -2049,6 +2100,7 @@
   }
   async function loadLibFile(lib) {
     if (libState.files.has(lib)) return libState.files.get(lib);
+    if (lib === 'My_Parts') { const mp = await Store.get('myParts'); const f = { symbols: (mp && mp.symbols) || {} }; libState.files.set(lib, f); return f; }
     const idx = await loadLibIndex();
     const meta = idx.libs.find((l) => l.name === lib);
     if (!meta) throw new Error(`${lib} isn't in the part library.`);
@@ -2152,7 +2204,7 @@
           const sc = !terms.length ? 3 : nm === q0 ? 0 : nm.startsWith(terms[0]) ? 1 : nm.includes(terms[0]) ? 2 : 3;
           scored.push([sc, r]);
         });
-        const own = (r) => (/^Loomline_/.test(idx.libs[r[0]].name) ? 0 : 1);
+        const own = (r) => (/^(Loomline_|My_Parts)/.test(idx.libs[r[0]].name) ? 0 : 1);
         scored.sort((a, b) => a[0] - b[0] || own(a[1]) - own(b[1]) || K.naturalCmp(a[1][1], b[1][1]));
         $('pickCount').textContent = `${scored.length.toLocaleString()} match${scored.length === 1 ? '' : 'es'} in ${idx.rows.length.toLocaleString()} parts`;
         rows = scored.slice(0, 150).map((x) => x[1]);
@@ -2182,6 +2234,7 @@
     const r = run('Add ' + entry.name, () => smartPlace(entry, wp, type), { anchor: null, checkMerges: true });
     if (!r) return;
     rememberStencil({ kind: 'part', lib: entry.lib, name: entry.name });
+    if (r.uuid) state.lastPlaced = { type: 'symbol', uuid: r.uuid, sheet: state.inst.sheet.path };
     const ni = state.inst.sheet.symbols.findIndex((x) => x.uuid === r.uuid);
     if (ni >= 0) {
       if (state.draw) state.draw.last = { uuid: r.uuid, ref: r.ref };
@@ -2430,6 +2483,7 @@
     { id: 'relay', title: 'Relays', parts: ['Relay:Relay_SPDT', 'Relay:Relay_DPDT', 'Relay:G5LE-1', 'Relay:FINDER-40.31', 'Relay:Relay_SPDT_Latching_1coil'] },
     { id: 'loads', title: 'Loads & indicators', parts: ['Device:LED', 'Device:Lamp', 'Device:Buzzer', 'Device:Heater', 'Device:Speaker', 'Motor:Motor_DC', 'Motor:Fan', 'Device:Battery'] },
     { id: 'conn', title: 'Connectors', parts: ['Connector_Generic:Conn_01x02', 'Connector_Generic:Conn_01x03', 'Connector_Generic:Conn_01x04', 'Connector_Generic:Conn_01x06', 'Connector_Generic:Conn_01x08', 'Connector:Screw_Terminal_01x02', 'Connector:Screw_Terminal_01x04', 'Connector:Conn_Coaxial', 'Connector:RJ45'] },
+    { id: 'mine', title: 'My parts', lib: 'My_Parts' },
     { id: 'ourconn', title: 'Our connectors (Deutsch, ASC, M8/M12)', lib: 'Loomline_Connectors' },
     { id: 'passive', title: 'Passives', parts: ['Device:R', 'Device:C', 'Device:C_Polarized', 'Device:L', 'Device:D_Schottky', 'Device:Thermistor_NTC', 'Device:Antenna'] },
     { id: 'beckhoff', title: 'Beckhoff I/O', lib: 'Loomline_Beckhoff' },
@@ -2645,6 +2699,10 @@
   }
   // Mouse hover while a wiring stencil is armed: show where it would go
   function hoverPreview(wp) {
+    if (state.project && state.mode === 'draw' && state.draw && state.draw.tool === 'entry') {
+      const p = gridSnap(wp), e = ENTRY_DIRS[state.draw.dir || 0], on = state.inst.sheet.buses.some((b) => K.onSegment(p, b.a, b.b));
+      view.overlay = { pts: [], dots: [], segs: [[p, [p[0] + e[0], p[1] + e[1]]]], ring: on ? p : null }; view.redraw(); return;
+    }
     if (!state.project || state.mode !== 'draw' || !state.draw || state.draw.tool !== 'stencil' || !state.draw.stencil) return;
     const st = state.draw.stencil, s = snapPoint(wp, 'mouse');
     view.overlay = { pts: [], dots: [], segs: st.kind === 'wire' ? st.segs.map(([a, b]) => [[s.p[0] + a[0], s.p[1] + a[1]], [s.p[0] + b[0], s.p[1] + b[1]]]) : [], ring: s.on ? s.p : null };
@@ -2749,6 +2807,8 @@
       { title: 'Library', tools: [
         { label: 'Stencils', icon: 'i-stencil', on: dockOpen, run: () => setDock(!dockOpen) },
         { label: 'Add part', icon: 'i-part', disabled: !P, run: openPartPicker }] },
+      { title: 'Hierarchy', tools: [{ label: 'New sheet', icon: 'i-hier', disabled: !P, on: state.mode === 'draw' && state.draw && state.draw.tool === 'sheet', run: startSheetTool }] },
+      { title: 'Make', tools: [{ label: 'My parts', icon: 'i-chip', disabled: !P, run: (e) => myPartsMenu(e.currentTarget) }, { label: 'Blocks', icon: 'i-box', disabled: !P, run: (e) => blocksMenu(e.currentTarget) }] },
       { title: 'Connect', tools: [stencilBtn('l-net'), stencilBtn('l-glob'), stencilBtn('l-hier'),
         { label: 'Power', icon: 'i-power', disabled: !P, run: (e) => openMenu(e.currentTarget, PART_GROUPS[0].parts.map((k) => { const n = k.split(':')[1]; return { label: n, icon: 'i-power', run: () => armStencil({ kind: 'part', lib: 'power', name: n }) }; })) }] },
       { title: 'Annotate', tools: [stencilBtn('l-text'), stencilBtn('l-cable', 'Cable tag')] }
@@ -2756,7 +2816,9 @@
     if (tab === 'wire') return [
       { title: 'Wire', tools: [
         { label: 'Draw wire', icon: 'i-wire', on: state.mode === 'wire', run: () => { if (!P) return; if (state.sel) { state.sel = null; applyHighlight(); } setMode('wire'); } },
-        stencilBtn('w-h', 'Straight →'), stencilBtn('w-v', 'Straight ↓')] },
+        stencilBtn('w-h', 'Straight →'), stencilBtn('w-v', 'Straight ↓'),
+        { label: 'Draw bus', icon: 'i-wire', on: state.mode === 'wire' && state.wireKind === 'bus', run: startBus }, { label: 'Bus entry', icon: 'i-tee', on: state.mode === 'draw' && state.draw && state.draw.tool === 'entry', run: startEntry },
+        { label: ({ 90: 'Angle 90°', 45: 'Angle 45°', free: 'Any angle' })[state.wirePosture] || 'Angle 90°', icon: 'i-line', run: () => { cyclePosture(); renderRibbon(); } }] },
       { title: 'Connections', tools: [stencilBtn('w-rd', 'Corner'), stencilBtn('w-td', 'Tee'), stencilBtn('w-x', 'Cross'), stencilBtn('w-jump', 'Crossover'), stencilBtn('w-j'), stencilBtn('w-nc')] },
       { title: 'More', tools: [{ label: 'All shapes', icon: 'i-stencil', on: dockOpen, run: () => { dockSections.add('wires'); Store.pref('dockSections', Array.from(dockSections)); setDock(true); } }, stencilBtn('l-cable', 'Cable tag')] }
     ];
@@ -2769,6 +2831,11 @@
       const tabBtn = (t, label, ic) => ({ label, icon: ic, disabled: !P, on: state.panelOpen && state.tab === t, run: () => { if (state.panelOpen && state.tab === t) setPanel(false); else showTab(t, true); } });
       return [
         { title: 'Browse', tools: [tabBtn('sheets', 'Sheets', 'i-hier'), tabBtn('nets', 'Nets', 'i-net'), tabBtn('parts', 'Parts', 'i-chip'), tabBtn('info', 'Properties', 'i-props')] },
+        { title: 'Tools', tools: [{ label: 'Annotate', icon: 'i-number', disabled: !P, run: annotateDialog }, { label: 'Find & replace', icon: 'i-search', disabled: !P, run: replaceDialog },
+          { label: 'Fields table', icon: 'i-report', disabled: !P, run: fieldsTable },
+          { label: 'Measure', icon: 'i-line', disabled: !P, on: state.mode === 'measure', run: () => state.mode === 'measure' ? setMode('select') : startMeasure() },
+          { label: 'Swap', icon: 'i-sync', disabled: !(s && s.type === 'multi'), run: swapSel }, { label: 'Autoplace', icon: 'i-text', disabled: !(s && s.type === 'symbol'), run: autoplaceSel },
+          { label: 'Snap ' + E.snapGrid() + ' mm', icon: 'i-more', disabled: !P, run: () => { const i = GRIDS.indexOf(E.snapGrid()); stepGrid(i === GRIDS.length - 1 ? -i : 1); renderRibbon(); } }] },
         { title: 'Check & report', tools: [tabBtn('check', 'Design check', 'i-alert'), tabBtn('reports', 'Reports', 'i-report'), tabBtn('install', 'Install log', 'i-install'), tabBtn('compare', 'Compare', 'i-compare')] }
       ];
     }
@@ -3472,30 +3539,646 @@
   $('wConnect').addEventListener('click', () => openDrawer('drawerProjects'));
   $('wOpen').addEventListener('click', () => $('fileInput').click());
   $('wSample').addEventListener('click', loadSample);
+  // ------------------------------------------------------------------ KiCad tools: annotate, find & replace, measure, swap, autoplace, repeat
+  const isTyping = () => { const a = document.activeElement; return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT'); };
+  function uniqueSheets() { const seen = new Set(), out = []; for (const i of state.project.instances) if (!seen.has(i.sheet.path)) { seen.add(i.sheet.path); out.push(i); } return out; }
+
+  // ---- Annotate (KiCad: Tools → Annotate Schematic)
+  function annotateDialog() {
+    if (!state.project) return;
+    let plan = null, ready = false;
+    const scope = seg('Which references', [['fix', 'NEW & DUPLICATES'], ['all', 'RENUMBER ALL']], Store.pref('annScope') || 'fix', () => { if (ready) preview(); });
+    const base = seg('Numbering', [['seq', '1, 2, 3 …'], ['sheet', 'SHEET × 100']], Store.pref('annBase') || 'seq', () => { if (ready) preview(); });
+    const out = h('div', { class: 'ann-preview' });
+    ready = true;
+    function preview() {
+      plan = E.annotate(state.project, { all: scope.get() === 'all', sheetBase: base.get() === 'sheet' });
+      const c = plan.changes;
+      out.replaceChildren(h('p', { class: 'hint', text: c.length ? `${c.length} reference${c.length === 1 ? '' : 's'} will change:` : 'Every reference is already unique. Nothing to change.' }),
+        ...(c.length ? [h('div', { class: 'ann-list' }, ...c.slice(0, 200).map((x) => h('div', {}, h('span', { class: 'mono', text: x.from || '(blank)' }), ' → ', h('b', { class: 'mono', text: x.to }), h('small', { text: '  page ' + x.inst.page }))))] : []));
+    }
+    preview();
+    openDialog('ANNOTATE', [
+      h('div', { class: 'field' }, h('label', { text: 'Which references' }), scope.el),
+      h('div', { class: 'field' }, h('label', { text: 'Numbering' }), base.el),
+      h('p', { class: 'hint', text: 'Like KiCad’s Annotate Schematic: parts numbered page by page, left to right. Units of one part keep the same reference. Sheet × 100 starts page 2 at 201, page 3 at 301.' }), out],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'ANNOTATE', primary: true, run: () => {
+        Store.pref('annScope', scope.get()); Store.pref('annBase', base.get());
+        closeDialog();
+        if (!plan || !plan.changes.length) { toast('Nothing to change.'); return; }
+        if (run('Annotate ' + plan.changes.length + ' parts', () => plan.results, { anchor: null })) toast(`Annotated ${plan.changes.length} part${plan.changes.length === 1 ? '' : 's'}.`);
+      } }]);
+  }
+
+  // ---- Find and replace (KiCad: Ctrl+Alt+F)
+  function replaceDialog() {
+    if (!state.project) return;
+    const pre = state.sel && state.sel.type === 'net' && state.sel.item && state.sel.item.type === 'label' ? (itemObj(state.sel.item) || {}).text || '' : '';
+    const find = h('input', { class: 'input', id: 'frFind', value: pre, autocomplete: 'off', spellcheck: 'false', placeholder: 'Text to find' });
+    const repl = h('input', { class: 'input', id: 'frRepl', autocomplete: 'off', spellcheck: 'false', placeholder: 'Replace with (blank to remove)' });
+    const box = (k, label, def) => { const c = h('input', { type: 'checkbox', checked: Store.pref('fr_' + k) !== undefined ? !!Store.pref('fr_' + k) : def, onchange: () => { Store.pref('fr_' + k, c.checked); preview(); } }); return [c, h('label', { class: 'check' }, c, label)]; };
+    const [cLab, lLab] = box('labels', 'Labels', true), [cTxt, lTxt] = box('texts', 'Text', true), [cFld, lFld] = box('fields', 'Part fields (value, footprint, MPN…)', false);
+    const [cCase, lCase] = box('case', 'Match case', false), [cWord, lWord] = box('word', 'Whole words', false);
+    const out = h('div', { class: 'ann-preview' });
+    let found = [];
+    const opts = (rep) => ({ find: find.value, replace: rep, labels: cLab.checked, texts: cTxt.checked, fields: cFld.checked, matchCase: cCase.checked, whole: cWord.checked });
+    function preview() {
+      found = [];
+      if (!find.value) { out.replaceChildren(h('p', { class: 'hint', text: 'Type something to find.' })); return; }
+      for (const inst of uniqueSheets()) { const r = E.replaceInSheet(inst.sheet, opts(repl.value)); for (const x of r.hits) found.push({ inst, ...x }); }
+      out.replaceChildren(h('p', { class: 'hint', text: found.length ? `${found.length} match${found.length === 1 ? '' : 'es'}:` : 'No matches.' }),
+        ...(found.length ? [h('div', { class: 'ann-list' }, ...found.slice(0, 200).map((x) => h('div', {}, h('small', { text: x.where + ' · ' + x.inst.name + '  ' }), h('span', { class: 'mono', text: x.before }), ' → ', h('b', { class: 'mono', text: x.after }))))] : []));
+    }
+    find.addEventListener('input', preview); repl.addEventListener('input', preview);
+    preview();
+    openDialog('FIND AND REPLACE', [h('div', { class: 'field' }, h('label', { for: 'frFind', text: 'Find' }), find), h('div', { class: 'field' }, h('label', { for: 'frRepl', text: 'Replace with' }), repl),
+      h('div', { class: 'checks' }, lLab, lTxt, lFld, lCase, lWord), out,
+      h('p', { class: 'hint', text: 'Searches every sheet. Renaming a label renames its net. References are changed with Annotate or by editing the part.' })],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'REPLACE ALL', primary: true, run: () => {
+        if (!find.value || !found.length) { toast('Nothing to replace.'); return; }
+        const results = uniqueSheets().map((i) => E.replaceInSheet(i.sheet, opts(repl.value)).result).filter(Boolean);
+        const n = found.length; closeDialog();
+        if (run(`Replace “${find.value}” (${n})`, () => results, { anchor: null })) toast(`Replaced ${n} match${n === 1 ? '' : 'es'}.`);
+      } }]);
+    setTimeout(() => { find.focus(); find.select(); }, 50);
+  }
+
+  // ---- Symbol fields table (KiCad: Tools → Edit Symbol Fields): every part's fields in one grid
+  function fieldsTable() {
+    if (!state.project) return;
+    const P = state.project;
+    // One row per part; units of a part (and repeats of a reused sheet) share the row.
+    const parts = new Map();
+    for (const inst of P.instances) inst.sheet.symbols.forEach((sym, si) => {
+      const ref = inst.refs[si] && inst.refs[si].ref;
+      if (!ref || ref.startsWith('#') || (sym.lib && sym.lib.power)) return;
+      if (!parts.has(ref)) parts.set(ref, { ref, members: [], fields: {} });
+      const row = parts.get(ref);
+      row.members.push({ inst, si, sym });
+      for (const p of sym.props) if (p.name !== 'Reference' && !p.name.startsWith('ki_') && !(p.name in row.fields)) row.fields[p.name] = p.value;
+    });
+    let rows = Array.from(parts.values()).sort((a, b) => K.naturalCmp(a.ref, b.ref));
+    const freq = new Map();
+    for (const r of rows) for (const k of Object.keys(r.fields)) freq.set(k, (freq.get(k) || 0) + 1);
+    const fixed = ['Value', 'Footprint', 'Datasheet'];
+    let cols = fixed.concat(Array.from(freq.keys()).filter((k) => !fixed.includes(k) && k !== 'Description').sort((a, b) => freq.get(b) - freq.get(a) || a.localeCompare(b)));
+    if (freq.has('Description')) cols.push('Description');
+    const edits = new Map();   // ref -> {field: value}
+    let group = !!Store.pref('ftGroup'), filter = '', sortCol = null, sortDir = 1;
+    const valOf = (r, c) => { const e = edits.get(r.ref); return e && c in e ? e[c] : (r.fields[c] !== undefined ? r.fields[c] : ''); };
+    const groupKey = (r) => valOf(r, 'Value') + '\u0000' + valOf(r, 'Footprint') + '\u0000' + r.ref.replace(/\d+$/, '');
+    const count = () => { let n = 0; for (const e of edits.values()) n += Object.keys(e).length; return n; };
+    const head = h('div', { class: 'report-head' });
+    const body = h('div', { class: 'report-body ft-body' });
+    const wrap = h('div', { class: 'report-wrap', id: 'fieldsWrap', role: 'dialog', 'aria-label': 'Symbol fields' }, head, body);
+    const applyBtn = h('button', { class: 'btn small primary', disabled: true, onclick: apply }, icon('i-check'), 'APPLY');
+    const q = h('input', { class: 'input ft-filter', type: 'search', placeholder: 'Filter: R1, 10k, connector…', oninput: () => { filter = q.value.trim().toLowerCase(); render(); } });
+    const grp = h('input', { type: 'checkbox', checked: group, onchange: () => { group = grp.checked; Store.pref('ftGroup', group); render(); } });
+    head.append(h('div', { class: 'titles' }, h('b', { text: 'SYMBOL FIELDS' }), h('small', { id: 'ftCount', text: '' })), q,
+      h('label', { class: 'check' }, grp, 'Group'),
+      h('button', { class: 'btn small', onclick: addField }, icon('i-plus'), 'FIELD'),
+      h('button', { class: 'btn small', onclick: csv }, icon('i-download'), 'CSV'),
+      applyBtn,
+      h('button', { class: 'ib', 'aria-label': 'Close', onclick: close }, icon('i-close')));
+    function close() {
+      if (count() && !close.armed) { close.armed = true; toast('Unapplied changes. Close again to throw them away, or tap APPLY.'); return; }
+      wrap.remove();
+    }
+    function setVal(rs, c, v) {
+      for (const r of rs) {
+        const orig = r.fields[c] !== undefined ? r.fields[c] : '';
+        const e = edits.get(r.ref) || {};
+        if (v === orig) delete e[c]; else e[c] = v;
+        if (Object.keys(e).length) edits.set(r.ref, e); else edits.delete(r.ref);
+      }
+      applyBtn.disabled = !count();
+      applyBtn.lastChild.textContent = count() ? `APPLY ${count()}` : 'APPLY';
+      close.armed = false;
+    }
+    function visibleRows() {
+      let list = rows.filter((r) => !filter || r.ref.toLowerCase().includes(filter) || cols.some((c) => String(valOf(r, c)).toLowerCase().includes(filter)));
+      if (sortCol) list = list.slice().sort((a, b) => sortDir * K.naturalCmp(sortCol === 'Reference' ? a.ref : valOf(a, sortCol), sortCol === 'Reference' ? b.ref : valOf(b, sortCol)) || K.naturalCmp(a.ref, b.ref));
+      if (!group) return list.map((r) => ({ refs: r.ref, rs: [r] }));
+      const m = new Map();
+      for (const r of list) { const k = groupKey(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+      return Array.from(m.values()).map((rs) => ({ refs: refRange(rs.map((r) => r.ref)), rs }));
+    }
+    function refRange(refs) {
+      refs.sort(K.naturalCmp);
+      const out = []; let i = 0;
+      while (i < refs.length) {
+        const m0 = /^(.*?)(\d+)$/.exec(refs[i]); let j = i;
+        if (m0) while (j + 1 < refs.length) { const m1 = /^(.*?)(\d+)$/.exec(refs[j + 1]); if (!m1 || m1[1] !== m0[1] || +m1[2] !== +m0[2] + (j + 1 - i)) break; j++; }
+        out.push(j - i >= 2 ? refs[i] + '–' + refs[j] : refs.slice(i, j + 1).join(', ')); i = j + 1;
+      }
+      return out.join(', ');
+    }
+    function render() {
+      const vr = visibleRows();
+      $('ftCount').textContent = `${rows.length} parts · ${vr.length} row${vr.length === 1 ? '' : 's'}${group ? ' (grouped)' : ''}`;
+      const th = (c) => h('th', { class: sortCol === c ? 'sorted' : '', onclick: () => { if (sortCol === c) sortDir = -sortDir; else { sortCol = c; sortDir = 1; } render(); } }, c, sortCol === c ? (sortDir > 0 ? ' ▲' : ' ▼') : '');
+      const table = h('table', { class: 'rtable ft' }, h('thead', null, h('tr', null, th('Reference'), group ? h('th', { text: 'Qty' }) : null, ...cols.map(th))));
+      const tb = h('tbody');
+      vr.slice(0, 3000).forEach((row, ri) => {
+        const tr = h('tr', null, h('td', { class: 'ref mono', text: row.refs }), group ? h('td', { text: String(row.rs.length) }) : null);
+        cols.forEach((c, ci) => {
+          const vals = new Set(row.rs.map((r) => valOf(r, c)));
+          const mixed = vals.size > 1;
+          const inp = h('input', { class: 'cell' + (row.rs.some((r) => edits.has(r.ref) && c in edits.get(r.ref)) ? ' changed' : ''), value: mixed ? '' : Array.from(vals)[0], placeholder: mixed ? '(several)' : '', spellcheck: 'false', 'data-r': ri, 'data-c': ci });
+          inp.addEventListener('input', () => { setVal(row.rs, c, inp.value); inp.classList.add('changed'); });
+          inp.addEventListener('keydown', (e) => {
+            const go = (dr, dc) => { const n = tb.querySelector(`input[data-r="${ri + dr}"][data-c="${ci + dc}"]`); if (n) { e.preventDefault(); n.focus(); n.select(); } };
+            if (e.key === 'ArrowDown' || e.key === 'Enter') go(1, 0); else if (e.key === 'ArrowUp') go(-1, 0);
+          });
+          inp.addEventListener('paste', (e) => {
+            const t = (e.clipboardData || window.clipboardData).getData('text');
+            if (!/[\t\n]/.test(t.replace(/\r?\n$/, ''))) return;
+            e.preventDefault();
+            t.replace(/\r/g, '').replace(/\n$/, '').split('\n').forEach((line, dr) => line.split('\t').forEach((v, dc) => {
+              const n = tb.querySelector(`input[data-r="${ri + dr}"][data-c="${ci + dc}"]`);
+              if (!n) return; n.value = v; n.dispatchEvent(new Event('input'));
+            }));
+          });
+          tr.append(h('td', null, inp));
+        });
+        tb.append(tr);
+      });
+      table.append(tb);
+      body.replaceChildren(h('p', { class: 'hint', text: 'Edit any cell; nothing changes until APPLY (one undo step). Group puts parts with the same value and footprint on one row, so one edit sets them all. Paste a block from Excel or Sheets into a cell to fill several. Tap a heading to sort.' }), table);
+    }
+    function addField() {
+      const n = h('input', { class: 'input', placeholder: 'e.g. MPN, Manufacturer, Supplier', autocomplete: 'off' });
+      openDialog('ADD A FIELD COLUMN', [h('div', { class: 'field' }, h('label', { text: 'Field name' }), n)], [{ label: 'CANCEL', run: closeDialog }, { label: 'ADD', primary: true, run: () => {
+        const v = n.value.trim(); if (!v || v === 'Reference' || cols.includes(v)) { closeDialog(); return; }
+        cols.push(v); closeDialog(); render();
+      } }]);
+      setTimeout(() => n.focus(), 50);
+    }
+    function csv() {
+      const vr = visibleRows();
+      const head = ['Reference'].concat(group ? ['Qty'] : [], cols);
+      const data = vr.map((row) => [row.refs].concat(group ? [row.rs.length] : [], cols.map((c) => { const vals = new Set(row.rs.map((r) => valOf(r, c))); return vals.size > 1 ? '' : Array.from(vals)[0]; })));
+      download(P.name + ' symbol fields.csv', '﻿' + Loom.csv(head, data), 'text/csv;charset=utf-8');
+    }
+    function apply() {
+      // Group the changes by file; a reused sheet's symbol is one symbol, so it is set once.
+      const bySheet = new Map();
+      for (const [ref, e] of edits) {
+        const r = parts.get(ref); if (!r) continue;
+        for (const m of r.members) {
+          const sh = m.inst.sheet;
+          if (!bySheet.has(sh)) bySheet.set(sh, new Map());
+          const per = bySheet.get(sh), key = m.sym.uuid;
+          if (!per.has(key)) per.set(key, { m, e: {} });
+          Object.assign(per.get(key).e, e);
+        }
+      }
+      const results = [];
+      for (const [sh0, per] of bySheet) {
+        let sh = sh0, r = null;
+        for (const { m, e } of per.values()) {
+          const sym = sh.symbols.find((x) => x.uuid === m.sym.uuid); if (!sym) continue;
+          const fields = {}, add = [];
+          for (const [k, v] of Object.entries(e)) { if (sym.props.some((p) => p.name === k)) fields[k] = v; else if (v !== '') add.push({ name: k, value: v }); }
+          r = E.setSymbolFields(sh, sym, m.inst, { fields, add });
+          sh = E.reparse(sh, r);
+        }
+        if (r) results.push(r);
+      }
+      const n = count();
+      if (!results.length) return;
+      if (run(`Edit ${n} field${n === 1 ? '' : 's'}`, () => results, { anchor: null })) { toast(`Applied ${n} change${n === 1 ? '' : 's'}.`); wrap.remove(); }
+    }
+    closeReport(); const old = $('fieldsWrap'); if (old) old.remove();
+    document.body.append(wrap);
+    render();
+  }
+
+  // ---- Buses (KiCad: B draws a bus, Z a bus entry, C unfolds a member)
+  function busName(o) {
+    const sh = state.inst.sheet, P = state.project;
+    if (!o || o.group === undefined) return '';
+    const l = sh.labels.find((x) => x.group === o.group && (K.isBusName(x.text) || (P.aliases && P.aliases[x.text])));
+    if (l) return l.text;
+    for (const s of sh.sheets) for (const pn of s.pins) if (sh.buses.some((b) => b.group === o.group && K.onSegment(pn.p, b.a, b.b)) && K.isBusName(pn.name)) return pn.name;
+    return '';
+  }
+  function busMembers(o) { const n = busName(o); return n ? K.expandBus(n, state.project.aliases || {}) : []; }
+  function startBus() {
+    if (!state.project) return;
+    if (state.sel) { state.sel = null; applyHighlight(); renderSelectionUI(); }
+    const m = state.mouse && state.mouse.slice();
+    setMode('wire'); state.wireKind = 'bus'; renderStatus();
+    if (m) wireTap(m, 'mouse');
+  }
+  function unfoldDialog(o) {
+    const members = busMembers(o);
+    if (!members.length) { toast('Name the bus first with a label like D[0..7] or {SDA SCL}.'); return; }
+    const sh = state.inst.sheet, vertical = Math.abs(o.a[0] - o.b[0]) < 1e-3;
+    let p = state.mouse && K.onSegment(gridSnap(state.mouse), o.a, o.b) ? gridSnap(state.mouse) : gridSnap([(o.a[0] + o.b[0]) / 2, (o.a[1] + o.b[1]) / 2]);
+    const used = new Set(sh.labels.map((l) => l.text));
+    const list = h('div', { class: 'chips unfold' }, ...members.map((m) => h('button', { class: 'chip' + (used.has(m) ? ' on' : ''), onclick: () => {
+      closeDialog();
+      run('Unfold ' + m, () => E.unfoldFromBus(sh, p, m, vertical), { anchor: null });
+    } }, m)));
+    openDialog('UNFOLD FROM BUS', [h('p', { class: 'hint', text: `Pick the member to bring out of ${busName(o)}. You get a bus entry, a short wire and the net label${state.mouse ? ', at the pointer' : ', at the middle of the bus'}. Highlighted ones are already labelled on this sheet.` }), list],
+      [{ label: 'CANCEL', run: closeDialog }]);
+  }
+  var ENTRY_DIRS = [[2.54, 2.54], [2.54, -2.54], [-2.54, -2.54], [-2.54, 2.54]];
+  function startEntry() {
+    if (!state.project) return;
+    if (state.sel) { state.sel = null; applyHighlight(); renderSelectionUI(); }
+    state.draw = { tool: 'entry', pts: [], dir: (state.draw && state.draw.dir) || 0 };
+    setMode('draw'); renderStatus();
+  }
+
+  // ---- Hierarchical sheets (KiCad: S draws a sheet; pins come from the sheet's ports)
+  function startSheetTool() {
+    if (!state.project) return;
+    if (state.sel) { state.sel = null; applyHighlight(); renderSelectionUI(); }
+    state.draw = { tool: 'sheet', pts: [] };
+    setMode('draw'); renderStatus();
+  }
+  function sheetDialog(a, b) {
+    const name = h('input', { class: 'input', id: 'shName', placeholder: 'e.g. Pumps', autocomplete: 'off', spellcheck: 'false' });
+    const file = h('input', { class: 'input', id: 'shFile', placeholder: 'pumps.kicad_sch', autocomplete: 'off', spellcheck: 'false' });
+    let typed = false;
+    name.addEventListener('input', () => { if (!typed) file.value = name.value.trim() ? name.value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') + '.kicad_sch' : ''; });
+    file.addEventListener('input', () => { typed = true; });
+    const go = () => {
+      const n = name.value.trim(); let f = file.value.trim();
+      if (!n) { name.focus(); return; }
+      if (!f) f = n.toLowerCase().replace(/[^a-z0-9_-]+/g, '_') + '.kicad_sch';
+      if (!/\.kicad_sch$/i.test(f)) f += '.kicad_sch';
+      if (state.inst.sheet.sheets.some((s) => s.name === n)) { banner('err', 'This sheet already has a sub-sheet called ' + n + '.'); return; }
+      closeDialog();
+      const p = [Math.min(a[0], b[0]), Math.min(a[1], b[1])], size = [Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])];
+      const reuse = state.project.instances.some((i) => i.sheet.path === K.joinPath(K.dirname(state.inst.sheet.path), f));
+      const r = run('Add sheet ' + n, () => E.addSheet(state.project, state.inst.sheet, { name: n, file: f, p, size }).results, { anchor: null });
+      if (r) toast(reuse ? `Added ${n}, reusing ${f}.` : `Added ${n} with a new file ${f}. Double-tap it to open, then add sheet ports (H).`);
+      setMode('select');
+    };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    openDialog('NEW SHEET', [h('div', { class: 'field' }, h('label', { for: 'shName', text: 'Sheet name' }), name), h('div', { class: 'field' }, h('label', { for: 'shFile', text: 'File' }), file),
+      h('p', { class: 'hint', text: 'A new file is created and saved with your next commit. Type the name of an existing sheet file to use it again (like KiCad’s reused sheets).' })],
+      [{ label: 'CANCEL', run: () => { closeDialog(); drawOverlay(); } }, { label: 'ADD SHEET', primary: true, run: go }]);
+    setTimeout(() => name.focus(), 50);
+  }
+  function childOf(inst, idx) { const sheet = inst.sheet.sheets[idx]; return inst.children.find((c) => c.sheetSym === sheet); }
+  // Pins for every sheet port (hierarchical label) in the sub-sheet that has no pin yet: inputs left, the rest right.
+  function importSheetPins(inst, idx) {
+    const sheet = inst.sheet.sheets[idx], child = childOf(inst, idx);
+    if (!child) { toast('That sheet’s file is not in this project.'); return; }
+    const have = new Set(sheet.pins.map((p) => p.name));
+    const want = [];
+    for (const l of child.sheet.labels) if (l.kind === 'hier' && !have.has(l.text) && !want.some((w) => w.name === l.text)) want.push({ name: l.text, shape: l.shape || 'input' });
+    if (!want.length) { toast('Every sheet port already has a pin.'); return; }
+    const left = want.filter((w) => w.shape === 'input'), right = want.filter((w) => w.shape !== 'input');
+    const ls = E.sheetPinSpots(sheet, 'left', left.length), rs = E.sheetPinSpots(sheet, 'right', right.length);
+    if (ls.length < left.length || rs.length < right.length) { banner('err', 'The sheet is too short for all its pins. Make it taller in KiCad, or add the pins one at a time.'); return; }
+    const pins = left.map((w, i) => ({ name: w.name, shape: w.shape, p: ls[i], side: 'left' })).concat(right.map((w, i) => ({ name: w.name, shape: w.shape, p: rs[i], side: 'right' })));
+    if (run(`Import ${pins.length} sheet pin${pins.length === 1 ? '' : 's'}`, () => E.addSheetPins(inst.sheet, sheet, pins))) toast(`Added ${pins.length} pin${pins.length === 1 ? '' : 's'}: ${pins.map((p) => p.name).join(', ')}`);
+  }
+  // A new pin on the sheet and the matching sheet port inside it, in one step.
+  function addSheetPinDialog(inst, idx) {
+    const sheet = inst.sheet.sheets[idx], child = childOf(inst, idx);
+    if (!child) { toast('That sheet’s file is not in this project.'); return; }
+    const name = h('input', { class: 'input', id: 'spName', placeholder: 'e.g. PUMP_ON', autocapitalize: 'characters', autocomplete: 'off', spellcheck: 'false' });
+    const shape = seg('Direction', [['input', 'INPUT'], ['output', 'OUTPUT'], ['bidirectional', 'BIDIR'], ['passive', 'PASSIVE']], 'input');
+    const side = seg('Side', [['left', 'LEFT'], ['right', 'RIGHT']], 'left');
+    const go = () => {
+      const n = name.value.trim(); if (!n) { name.focus(); return; }
+      if (sheet.pins.some((p) => p.name === n)) { banner('err', n + ' already has a pin on this sheet.'); return; }
+      const spot = E.sheetPinSpots(sheet, side.get(), 1)[0];
+      if (!spot) { banner('err', 'No room left on that side of the sheet.'); return; }
+      closeDialog();
+      const results = [E.addSheetPins(inst.sheet, sheet, [{ name: n, shape: shape.get(), p: spot, side: side.get() }])];
+      if (!child.sheet.labels.some((l) => l.kind === 'hier' && l.text === n)) {
+        const cs = child.sheet, taken = (p) => cs.labels.some((l) => E.same(l.p, p));
+        let p = [25.4, 25.4]; while (taken(p)) p = [p[0], p[1] + 2.54];
+        results.push(E.addLabel(cs, 'hier', n, p, 'right', shape.get()));
+      }
+      run('Add sheet pin ' + n, () => results);
+    };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    openDialog('ADD SHEET PIN', [h('div', { class: 'field' }, h('label', { for: 'spName', text: 'Signal name' }), name), h('div', { class: 'field' }, h('label', { text: 'Direction' }), shape.el), h('div', { class: 'field' }, h('label', { text: 'Side' }), side.el),
+      h('p', { class: 'hint', text: 'Adds the pin to the sheet and a matching sheet port (hierarchical label) inside it, so the net carries straight through.' })],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'ADD PIN', primary: true, run: go }]);
+    setTimeout(() => name.focus(), 50);
+  }
+
+  // ---- My parts: a simple symbol editor (box parts) kept on this device, in the part library as "My parts"
+  const MY_LIB = 'My_Parts';
+  async function myParts() { try { return (await Store.get('myParts')) || { symbols: {}, meta: {} }; } catch (e) { return { symbols: {}, meta: {} }; } }
+  function mergeMyParts(idx, mp) {
+    let li = idx.libs.findIndex((l) => l.name === MY_LIB);
+    if (li < 0) { idx.libs.push({ name: MY_LIB, cat: 'My parts', n: 0, user: true }); li = idx.libs.length - 1; }
+    idx.rows = idx.rows.filter((r) => r[0] !== li);
+    for (const [name, m] of Object.entries(mp.meta)) idx.rows.unshift([li, name, m.desc || '', m.kw || '', m.ref || 'U', 1, m.pins || 0, 0]);
+    idx.libs[li].n = Object.keys(mp.meta).length;
+    idx.hay = idx.rows.map((r) => (r[1] + ' ' + r[2] + ' ' + r[3] + ' ' + idx.libs[r[0]].name).toLowerCase());
+    libState.files.set(MY_LIB, { symbols: Object.assign({}, mp.symbols) });
+  }
+  function symbolEditor(start) {
+    if (!state.project) return;
+    // Start from the selected part (its pins and fields), or blank
+    let pre = start || null;
+    if (!pre && state.sel && state.sel.type === 'symbol') {
+      const s = state.sel, sym = s.inst.sheet.symbols[s.si], pins = K.symbolPins(sym);
+      const cx = pins.length ? pins.reduce((a, p) => a + p.pos[0], 0) / pins.length : sym.p[0];
+      pre = { name: (sym.libName || sym.libId.split(':').pop()) + '_copy', ref: (s.inst.refs[s.si].ref.match(/^[A-Za-z#]+/) || ['U'])[0],
+        pins: pins.map((p) => `${p.number} ${p.name && p.name !== '~' ? p.name : '~'} ${p.type || 'passive'} ${p.pos[0] > cx + 0.01 ? 'R' : 'L'}`).join('\n'),
+        fields: Object.fromEntries(sym.props.filter((p) => !['Reference', 'Value'].includes(p.name) && !p.name.startsWith('ki_')).map((p) => [p.name, p.value])) };
+    }
+    pre = pre || { name: '', ref: 'U', pins: '1 +24V power_in L\n2 0V power_in L\n3 IN input L\n4 OUT output R', fields: {} };
+    const inp = (id, ph, v) => h('input', { class: 'input', id, placeholder: ph, value: v || '', autocomplete: 'off', spellcheck: 'false' });
+    const name = inp('seName', 'e.g. VALVE_DRIVER_4CH', pre.name), ref = inp('seRef', 'U', pre.ref);
+    const fp = inp('seFp', 'Footprint (optional)', pre.fields.Footprint), ds = inp('seDs', 'https://… data sheet', pre.fields.Datasheet && pre.fields.Datasheet !== '~' ? pre.fields.Datasheet : '');
+    const mfr = inp('seMfr', 'Manufacturer', pre.fields.Manufacturer), mpn = inp('seMpn', 'Part number (MPN)', pre.fields.MPN), desc = inp('seDesc', 'What it is, for the parts list', pre.fields.Description);
+    const pinsTa = h('textarea', { class: 'input mono se-pins', id: 'sePins', rows: 10, spellcheck: 'false' }); pinsTa.value = pre.pins;
+    const canvas = h('canvas', { class: 'pcanvas' });
+    const msg = h('p', { class: 'hint' });
+    let pv = null, current = null;
+    const build = () => {
+      const pins = E.parsePinLines(pinsTa.value);
+      const nm = (name.value.trim() || 'NEW_PART').replace(/[\s:"]+/g, '_');
+      const fields = { Footprint: fp.value.trim(), Datasheet: ds.value.trim() || '~' };
+      if (desc.value.trim()) fields.Description = desc.value.trim();
+      if (mfr.value.trim()) fields.Manufacturer = mfr.value.trim();
+      if (mpn.value.trim()) fields.MPN = mpn.value.trim();
+      for (const [k, v] of Object.entries(pre.fields || {})) if (!(k in fields) && !['Footprint', 'Datasheet', 'Description', 'Manufacturer', 'MPN'].includes(k) && v) fields[k] = v;
+      const dupes = pins.map((p) => p.num).filter((n, i, a) => a.indexOf(n) !== i);
+      msg.textContent = `${pins.length} pin${pins.length === 1 ? '' : 's'} · ${pins.filter((p) => p.side !== 'R').length} left, ${pins.filter((p) => p.side === 'R').length} right` + (dupes.length ? ` · pin number ${dupes[0]} is used twice` : '');
+      msg.classList.toggle('err-text', !!dupes.length);
+      current = { name: nm, ref: (ref.value.trim() || 'U').replace(/[^A-Za-z#_]/g, '') || 'U', pins, fields, desc: fields.Description || desc.value.trim(), dupes };
+      current.text = E.boxSymbol({ name: nm, ref: current.ref, value: nm, pins, fields, keywords: [mfr.value, mpn.value, desc.value].join(' ').trim() });
+      try {
+        const { scene } = previewScene({ lib: MY_LIB, name: nm, text: current.text, parentText: null });
+        if (!pv) pv = new R.SchematicView(canvas, {});
+        pv.setTheme(view.dark); pv.showGrid = false; pv.setScene(scene, true);
+        const sy = scene.syms[0]; requestAnimationFrame(() => { pv.resize(); pv.fit(sy ? sy.bb : scene.page, 16); });
+      } catch (e) { msg.textContent = e.message; }
+    };
+    for (const el of [name, ref, fp, ds, mfr, mpn, desc, pinsTa]) el.addEventListener('input', build);
+    const save = async (place) => {
+      build();
+      if (!name.value.trim()) { name.focus(); toast('Give the part a name.'); return; }
+      if (!current.pins.length) { pinsTa.focus(); toast('Add at least one pin.'); return; }
+      if (current.dupes.length) { toast('Two pins have the number ' + current.dupes[0] + '.'); return; }
+      const mp = await myParts();
+      mp.symbols[current.name] = current.text;
+      mp.meta[current.name] = { desc: current.desc, kw: [mfr.value, mpn.value].join(' '), ref: current.ref, pins: current.pins.length, at: Date.now() };
+      await Store.set('myParts', mp);
+      const idx = await loadLibIndex(); mergeMyParts(idx, mp);
+      wrap.remove();
+      toast(`Saved ${current.name} to My parts.`);
+      renderDock && renderDock();
+      if (place) armStencil({ kind: 'part', lib: MY_LIB, name: current.name });
+    };
+    const download = () => { build(); downloadText(current.name + '.kicad_sym', E.symbolLibText([current.text])); };
+    const field = (label, el) => h('div', { class: 'field' }, h('label', { for: el.id, text: label }), el);
+    const wrap = h('div', { class: 'report-wrap', id: 'symEditor', role: 'dialog', 'aria-label': 'New part' },
+      h('div', { class: 'report-head' }, h('div', { class: 'titles' }, h('b', { text: pre.name ? 'EDIT PART' : 'NEW PART' }), h('small', { text: 'Saved on this device under My parts' })),
+        h('button', { class: 'btn small', onclick: download }, icon('i-download'), '.KICAD_SYM'),
+        h('button', { class: 'btn small', onclick: () => save(false) }, icon('i-save'), 'SAVE'),
+        h('button', { class: 'btn small primary', onclick: () => save(true) }, icon('i-part'), 'SAVE & PLACE'),
+        h('button', { class: 'ib', 'aria-label': 'Close', onclick: () => wrap.remove() }, icon('i-close'))),
+      h('div', { class: 'report-body se-body' },
+        h('div', { class: 'se-form' },
+          h('div', { class: 'se-row' }, field('Part name', name), field('Ref', ref)),
+          field('Pins: one per line — number, name, then optional type and side (L or R)', pinsTa),
+          h('p', { class: 'hint', text: 'Types: passive, input, output, bidir, power_in, power_out, oc, nc. Example: “3 CAN_H bidir R”. Paste a pin table from a data sheet: number and name columns work as they are.' }),
+          field('Description', desc), h('div', { class: 'se-row' }, field('Manufacturer', mfr), field('MPN', mpn)), field('Footprint', fp), field('Data sheet link', ds)),
+        h('div', { class: 'se-prev' }, h('div', { class: 'pprev' }, canvas), msg)));
+    document.body.append(wrap);
+    build();
+    setTimeout(() => name.focus(), 60);
+  }
+  async function myPartsMenu(anchor) {
+    const mp = await myParts(), names = Object.keys(mp.meta).sort(K.naturalCmp);
+    const items = [{ label: 'New part…', icon: 'i-plus', run: () => symbolEditor() }];
+    if (state.sel && state.sel.type === 'symbol') items.push({ label: 'New part from the selected one…', icon: 'i-copy', run: () => symbolEditor() });
+    if (names.length) {
+      items.push({ sep: true });
+      for (const n of names.slice(0, 30)) items.push({ label: 'Place ' + n, icon: 'i-part', run: () => armStencil({ kind: 'part', lib: MY_LIB, name: n }) });
+      items.push({ sep: true });
+      items.push({ label: 'Edit a part…', icon: 'i-edit', run: () => pickName('EDIT WHICH PART?', names, async (n) => { const m = (await myParts()); symbolEditor(partToPre(n, m)); }) });
+      items.push({ label: 'Delete a part…', icon: 'i-trash', run: () => pickName('DELETE WHICH PART?', names, async (n) => { const m = await myParts(); delete m.symbols[n]; delete m.meta[n]; await Store.set('myParts', m); const idx = await loadLibIndex(); mergeMyParts(idx, m); toast('Deleted ' + n + ' from My parts. Sheets that use it keep their copy.'); }) });
+      items.push({ label: 'Download all as .kicad_sym', icon: 'i-download', run: () => downloadText('My_Parts.kicad_sym', E.symbolLibText(names.map((n) => mp.symbols[n]))) });
+    }
+    openMenu(anchor, items);
+  }
+  function partToPre(n, m) {
+    const tree = K.parseSexpr(m.symbols[n]), props = {};
+    for (const p of K.findAll(tree, 'property')) props[p[1]] = p[2];
+    const pins = [];
+    const walk = (node) => { for (const c of node) if (Array.isArray(c)) { if (c[0] === 'pin') { const at = K.find(c, 'at'); pins.push(`${(K.find(c, 'number') || [])[1]} ${(K.find(c, 'name') || [])[1] || '~'} ${c[1]} ${+at[3] === 180 ? 'R' : 'L'}`); } else walk(c); } };
+    walk(tree);
+    const fields = {}; for (const [k, v] of Object.entries(props)) if (!['Reference', 'Value', 'ki_keywords'].includes(k)) fields[k] = v;
+    return { name: n, ref: props.Reference || 'U', pins: pins.join('\n'), fields };
+  }
+  function pickName(title, names, fn) {
+    openDialog(title, [h('div', { class: 'chips unfold' }, ...names.map((n) => h('button', { class: 'chip', onclick: () => { closeDialog(); fn(n); } }, n)))], [{ label: 'CANCEL', run: closeDialog }]);
+  }
+  function downloadText(name, text) { download(name, text, 'text/plain;charset=utf-8'); toast('Downloaded ' + name); }
+
+  // ---- Design blocks (KiCad 9: Shift+B): named, reusable copies of a selection, kept on this device
+  async function blocks() { try { return (await Store.get('designBlocks')) || {}; } catch (e) { return {}; } }
+  function saveBlockDialog() {
+    const items = copyItemsOfSel();
+    if (!items || !items.length) { toast('Select what to save first (box-select a group of parts and wires).'); return; }
+    const clip = E.copyItems(state.inst.sheet, items);
+    const name = h('input', { class: 'input', id: 'blkName', placeholder: 'e.g. M12 sensor drop', autocomplete: 'off' });
+    const go = async () => {
+      const n = name.value.trim(); if (!n) { name.focus(); return; }
+      const b = await blocks(); b[n] = { clip, at: Date.now(), from: state.project.name };
+      await Store.set('designBlocks', b); closeDialog(); toast(`Saved design block “${n}”.`);
+    };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    openDialog('SAVE DESIGN BLOCK', [h('div', { class: 'field' }, h('label', { for: 'blkName', text: 'Block name' }), name), h('p', { class: 'hint', text: `${clipTextOf(clip)} will be saved on this device. Place it on any sheet of any project with Shift+B or Insert → Blocks; parts get fresh references.` })],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: go }]);
+    setTimeout(() => name.focus(), 50);
+  }
+  function clipTextOf(c) { const n = c && c.items ? c.items.length : 0; return n + ' item' + (n === 1 ? '' : 's'); }
+  async function placeBlock(n) {
+    const b = await blocks(); if (!b[n]) return;
+    state.clip = b[n].clip; renderRibbon(); startPaste();
+    toast(`Tap where “${n}” goes.`);
+  }
+  async function blocksMenu(anchor) {
+    const b = await blocks(), names = Object.keys(b).sort(K.naturalCmp);
+    const items = [{ label: 'Save selection as a block…', icon: 'i-save', run: saveBlockDialog }];
+    if (names.length) {
+      items.push({ sep: true });
+      for (const n of names.slice(0, 30)) items.push({ label: n, icon: 'i-box', run: () => placeBlock(n) });
+      items.push({ sep: true });
+      items.push({ label: 'Delete a block…', icon: 'i-trash', run: () => pickName('DELETE WHICH BLOCK?', names, async (n) => { const x = await blocks(); delete x[n]; await Store.set('designBlocks', x); toast('Deleted ' + n); }) });
+      items.push({ label: 'Export blocks (to share)', icon: 'i-download', run: () => downloadText('loomline-design-blocks.json', JSON.stringify({ loomlineBlocks: 1, blocks: b }, null, 1)) });
+    }
+    items.push({ label: 'Import blocks…', icon: 'i-open', run: importBlocks });
+    openMenu(anchor, items);
+  }
+  function importBlocks() {
+    const f = h('input', { type: 'file', accept: '.json,application/json' });
+    f.addEventListener('change', async () => {
+      try {
+        const data = JSON.parse(await f.files[0].text());
+        if (!data || !data.blocks) throw new Error('That isn’t a Loomline blocks file.');
+        const b = await blocks(); let n = 0;
+        for (const [k, v] of Object.entries(data.blocks)) if (v && v.clip && v.clip.items) { b[k] = v; n++; }
+        await Store.set('designBlocks', b); toast(`Imported ${n} block${n === 1 ? '' : 's'}.`);
+      } catch (e) { banner('err', e.message); }
+    });
+    f.click();
+  }
+
+  // ---- Measure (KiCad: Ctrl+Shift+M)
+  const fmtMm = (v) => (Math.round(v * 100) / 100).toFixed(2) + ' mm';
+  function measureText(a, b) { const dx = b[0] - a[0], dy = b[1] - a[1]; return `${fmtMm(Math.hypot(dx, dy))}  ·  dx ${fmtMm(Math.abs(dx))}  dy ${fmtMm(Math.abs(dy))}`; }
+  function startMeasure() { if (!state.project) return; if (state.sel) clearSelection(); state.measure = { a: null, b: null }; setMode('measure'); }
+  function measureTap(wp, type) {
+    const p = snapPoint(wp, type).p, m = state.measure || (state.measure = { a: null, b: null });
+    if (!m.a || m.b) { m.a = p; m.b = null; } else m.b = p;
+    measureDraw(m.b || p);
+  }
+  function measureDraw(to) {
+    const m = state.measure; if (!m || !m.a) { view.overlay = { pts: [], dots: [] }; view.redraw(); renderStatus(); return; }
+    const b = m.b || to;
+    view.overlay = { pts: b ? [m.a, b] : [], dots: [m.a].concat(m.b ? [m.b] : []), ring: b || null };
+    view.redraw();
+    $('st2').textContent = b ? measureText(m.a, b) : 'Tap the second point';
+  }
+
+  // ---- Swap (KiCad: Alt+S) two parts or two labels
+  function swapSel() {
+    const s = state.sel;
+    if (!s || s.type !== 'multi') { toast('Box-select two parts (or two labels) to swap them.'); return; }
+    const r = multiResolve(s.m), its = r.items.filter((x) => x.type === 'symbol' || x.type === 'label');
+    if (its.length !== 2 || its[0].type !== its[1].type) { toast('Select exactly two parts, or two labels, to swap.'); return; }
+    const pos = (x) => (x.sym || x.label).p, a = pos(its[0]), b = pos(its[1]), d = [b[0] - a[0], b[1] - a[1]];
+    const uid = (x) => x.type === 'symbol' ? x.sym.uuid : uuidOf(x.label);
+    const u2 = uid(its[1]);
+    run('Swap', () => {
+      const sh = state.inst.sheet;
+      const r1 = E.moveItems(sh, [its[0]], d, { keepWires: false });
+      const sh2 = E.reparse(sh, r1);
+      const second = its[1].type === 'symbol' ? { type: 'symbol', sym: sh2.symbols.find((x) => x.uuid === u2) } : { type: 'label', label: sh2.labels.find((x) => uuidOf(x) === u2) };
+      return E.moveItems(sh2, [second], [-d[0], -d[1]], { keepWires: false });
+    }, { checkMerges: true });
+  }
+
+  // ---- Autoplace fields (KiCad: O)
+  function autoplaceSel() {
+    if (!hoverSelect() || state.sel.type !== 'symbol') { toast('Point at a part or select it first.'); return; }
+    const s = state.sel, sh = s.inst.sheet, sym = sh.symbols[s.si];
+    const sc = sceneFor(s.inst).syms.find((q) => q.si === s.si);
+    const body = sc && (sc.body && (sc.body[2] - sc.body[0]) * (sc.body[3] - sc.body[1]) > 0.5 ? sc.body : sc.bb);
+    if (!body) return;
+    const pins = K.symbolPins(sym).map((p) => p.pos);
+    const all = pins.reduce((b, p) => [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])], body.slice());
+    const shown = sym.props.filter((p) => !p.name.startsWith('ki_') && p.value !== '' && !(p.fx && p.fx.hide));
+    const order = ['Reference', 'Value'];
+    shown.sort((a, b) => (order.indexOf(a.name) + 1 || 9) - (order.indexOf(b.name) + 1 || 9));
+    if (!shown.length) { toast('No visible fields to place.'); return; }
+    const pitch = 2.54, cx = (body[0] + body[2]) / 2, cy = (body[1] + body[3]) / 2;
+    const right = pins.some((p) => p[0] > body[2] + 0.1), top = pins.some((p) => p[1] < body[1] - 0.1), bottom = pins.some((p) => p[1] > body[3] + 0.1);
+    const place = {};
+    const r = (v) => Math.round(v / 0.635) * 0.635;
+    if (!right) {
+      const x = r(body[2] + 1.27), y0 = cy - (shown.length - 1) * pitch / 2;
+      shown.forEach((p, i) => { place[p.name] = { p: [x, r(y0 + i * pitch)], justify: 'left' }; });
+    } else if (!top && !bottom) {
+      place[shown[0].name] = { p: [r(cx), r(body[1] - 1.905)], justify: 'center' };
+      shown.slice(1).forEach((p, i) => { place[p.name] = { p: [r(cx), r(body[3] + 1.905 + i * pitch)], justify: 'center' }; });
+    } else {
+      const x = r(all[2] + 1.27), y0 = cy - (shown.length - 1) * pitch / 2;
+      shown.forEach((p, i) => { place[p.name] = { p: [x, r(y0 + i * pitch)], justify: 'left' }; });
+    }
+    run('Autoplace fields of ' + s.inst.refs[s.si].ref, () => E.placeFields(sh, sym, place));
+  }
+
+  // ---- Repeat the last item with the label number counted on (KiCad: Insert)
+  var REPEAT_STEP = [0, 2.54];
+  function incrementName(t) { const m = /^(.*?)(\d+)(\D*)$/.exec(t); if (!m) return t; const n = String(+m[2] + 1).padStart(m[2].length, '0'); return m[1] + n + m[3]; }
+  function repeatLast() {
+    const L = state.lastPlaced;
+    if (L && L.type === 'label' && L.sheet === state.inst.sheet.path) {
+      const p = [L.p[0] + REPEAT_STEP[0], L.p[1] + REPEAT_STEP[1]], text = incrementName(L.text);
+      if (run('Add label ' + text, () => E.addLabel(state.inst.sheet, L.kind, text, p, L.spin, L.shape), { anchor: null })) state.lastPlaced = Object.assign({}, L, { p, text });
+      return;
+    }
+    if (L && L.type === 'symbol' && L.sheet === state.inst.sheet.path) {
+      const sym = state.inst.sheet.symbols.find((x) => x.uuid === L.uuid);
+      if (sym) {
+        const before = new Set(state.inst.sheet.symbols.map((x) => x.uuid));
+        if (run('Repeat ' + (sym.libName || sym.libId), () => E.copySymbol(state.project, state.inst.sheet, state.inst, sym, REPEAT_STEP), { anchor: null })) {
+          const n = state.inst.sheet.symbols.find((x) => !before.has(x.uuid));
+          if (n) state.lastPlaced = { type: 'symbol', uuid: n.uuid, sheet: state.inst.sheet.path };
+        }
+        return;
+      }
+    }
+    const k = (Store.pref('recentStencils') || [])[0], st = k && stencilFromKey(k);
+    if (!st) { toast('Nothing placed yet to repeat.'); return; }
+    if (state.mouse) dropStencil(st, state.mouse.slice()); else armStencil(st);
+  }
+
+  // ---- Snap grid (KiCad: N / Shift+N)
+  var GRIDS = [0.635, 1.27, 2.54, 5.08];
+  E.setSnapGrid(GRIDS.includes(Store.pref('snapGrid')) ? Store.pref('snapGrid') : 1.27);
+  function stepGrid(d) {
+    const i = GRIDS.indexOf(E.snapGrid()), g = GRIDS[Math.max(0, Math.min(GRIDS.length - 1, (i < 0 ? 1 : i) + d))];
+    E.setSnapGrid(g); Store.pref('snapGrid', g); renderScale();
+    toast(`Snap grid ${g} mm (${Math.round(g / 0.0254)} mil)` + (g < 1.27 ? ' · pins sit on 1.27 mm, so wires may miss them' : ''));
+  }
+
+  // ---- Back / forward between sheets (KiCad: Alt+Left / Alt+Right)
+  state.navBack = []; state.navFwd = [];
+  function navGo(fromList, toList) {
+    while (fromList.length) {
+      const np = fromList.pop(), inst = state.project.instances.find((i) => i.namePath === np);
+      if (!inst || inst === state.inst) continue;
+      toList.push(state.inst.namePath);
+      state._navSkip = true; showInstance(inst); state._navSkip = false;
+      return;
+    }
+    toast('No more sheets that way.');
+  }
+
+  // ---- Wire angle (KiCad: Shift+Space cycles 90°, 45° and free angle)
+  var POSTURES = ['90', '45', 'free'];
+  state.wirePosture = POSTURES.includes(Store.pref('wirePosture')) ? Store.pref('wirePosture') : '90';
+  function cyclePosture() {
+    state.wirePosture = POSTURES[(POSTURES.indexOf(state.wirePosture) + 1) % POSTURES.length];
+    Store.pref('wirePosture', state.wirePosture);
+    toast('Wires: ' + ({ 90: 'right angles', 45: '45° corners', free: 'any angle' })[state.wirePosture]);
+    if (state.mode === 'wire') updateWireOverlay();
+  }
+
   // ------------------------------------------------------------------ keyboard (KiCad 9 default hotkeys)
   // Same keys as KiCad's schematic editor, so desktop users can work the way they already do. With
   // nothing selected, a key acts on whatever is under the mouse pointer, like KiCad.
   const HOTKEYS = [
     ['Selection and editing', [
-      ['E', 'Properties (edit fields, rename a label, text)'], ['M', 'Move: follows the mouse, click to drop'], ['G', 'Drag (same as move here)'],
+      ['E', 'Properties (edit fields, rename a label, text)'], ['M', 'Move: follows the mouse, click to drop (wires stay put)'], ['G', 'Drag: like move, wires stretch to follow'],
       ['R', 'Rotate'], ['X', 'Mirror horizontally'], ['Y', 'Mirror vertically'], ['V', 'Edit value'], ['U', 'Edit reference designator'], ['F', 'Edit footprint'],
-      ['D', 'Show data sheet'], ['Del', 'Delete'], ['Ctrl+C', 'Copy'], ['Ctrl+X', 'Cut'], ['Ctrl+V', 'Paste'], ['Ctrl+D', 'Duplicate'],
+      ['D', 'Show data sheet'], ['O', 'Autoplace fields'], ['Alt+S', 'Swap two selected parts or labels'], ['Del', 'Delete'], ['Ctrl+C', 'Copy'], ['Ctrl+X', 'Cut'], ['Ctrl+V', 'Paste'], ['Ctrl+D', 'Duplicate'],
       ['Ctrl+A', 'Select all'], ['Ctrl+Shift+A', 'Unselect all'], ['Ctrl+Z', 'Undo'], ['Ctrl+Y / Ctrl+Shift+Z', 'Redo'], ['Esc', 'Cancel the tool / clear the selection']]],
     ['Placing', [
       ['A', 'Add a symbol'], ['P', 'Add a power symbol'], ['W', 'Draw wires (starts at the pointer)'], ['J', 'Junction'], ['Q', 'No-connect flag'],
-      ['L', 'Net label'], ['Ctrl+L', 'Global label (off-sheet)'], ['H', 'Hierarchical label (sheet port)'], ['T', 'Text'], ['I', 'Draw lines'],
-      ['Ins', 'Repeat the last item'], ['/', 'Switch wire posture (while drawing)'], ['Backspace', 'Undo the last wire segment (while drawing)'], ['End / Enter', 'Finish the wire or shape']]],
+      ['L', 'Net label'], ['Ctrl+L', 'Global label (off-sheet)'], ['H', 'Hierarchical label (sheet port)'], ['T', 'Text'], ['I', 'Draw lines'], ['B', 'Draw a bus'], ['Z', 'Bus entry (R turns it)'], ['C', 'Unfold a member from the bus under the pointer'], ['S', 'New hierarchical sheet'], ['Shift+B', 'Design blocks: place a saved block or save the selection'],
+      ['Ins', 'Repeat the last item (label numbers count on: IN1, IN2…)'], ['Shift+Space', 'Wire angle: 90°, 45° or any'], ['/', 'Switch wire posture (while drawing)'], ['Backspace', 'Undo the last wire segment (while drawing)'], ['End / Enter', 'Finish the wire or shape']]],
     ['Nets', [['`', 'Highlight the net under the pointer'], ['~', 'Clear net highlighting']]],
     ['View and sheets', [
       ['Home', 'Zoom to fit the sheet'], ['Ctrl+Home', 'Zoom to the objects'], ['F1 / F2', 'Zoom in / out at the pointer'], ['+ / -', 'Zoom in / out'],
       ['F4', 'Centre on the pointer'], ['Ctrl+F5', 'Zoom to the selection'], ['Arrows, Shift+Arrows', 'Pan'],
-      ['PgDn / PgUp', 'Next / previous sheet'], ['Alt+Backspace, Alt+Up', 'Leave sheet (up a sheet)'], ['Ctrl+H', 'Hierarchy (sheet list)']]],
-    ['Project', [['Ctrl+F, /', 'Find'], ['Ctrl+S', 'Save edits'], ['Ctrl+F1, ?', 'This list of keys']]]
+      ['PgDn / PgUp', 'Next / previous sheet'], ['Alt+Left / Alt+Right', 'Back / forward through sheets you visited'], ['N / Shift+N', 'Next / previous snap grid'], ['Alt+Backspace, Alt+Up', 'Leave sheet (up a sheet)'], ['Ctrl+H', 'Hierarchy (sheet list)']]],
+    ['Project', [['Ctrl+F, /', 'Find'], ['Ctrl+Alt+F', 'Find and replace'], ['Ctrl+Shift+M', 'Measure'], ['Ctrl+S', 'Save edits'], ['Ctrl+F1, ?', 'This list of keys']]]
   ];
   // Ribbon tooltips show the key
   const RB_KEYS = { 'Copy': 'Ctrl+C', 'Paste': 'Ctrl+V', 'Duplicate': 'Ctrl+D', 'Select all': 'Ctrl+A', 'Delete': 'Del', 'Move': 'M', 'Rotate': 'R',
     'Mirror ↔': 'X', 'Mirror ↕': 'Y', 'Edit': 'E', 'Find': 'Ctrl+F', 'Fit': 'Home', 'Zoom to': 'Ctrl+F5', 'Up a sheet': 'Alt+Backspace', 'Add part': 'A',
-    'Power': 'P', 'Draw wire': 'W', 'Line': 'I', 'Text': 'T', 'Net label': 'L', 'Off-sheet': 'Ctrl+L', 'Sheet port': 'H', 'Junction': 'J', 'No-connect': 'Q', 'Keys': 'Ctrl+F1' };
+    'Power': 'P', 'Draw wire': 'W', 'Line': 'I', 'Text': 'T', 'Net label': 'L', 'Off-sheet': 'Ctrl+L', 'Sheet port': 'H', 'Junction': 'J', 'No-connect': 'Q', 'Keys': 'Ctrl+F1', 'Find & replace': 'Ctrl+Alt+F', 'Measure': 'Ctrl+Shift+M', 'Swap': 'Alt+S', 'Autoplace': 'O', 'Draw bus': 'B', 'Bus entry': 'Z', 'New sheet': 'S', 'Blocks': 'Shift+B' };
   function showHotkeys() {
     const body = HOTKEYS.map(([title, keys]) => h('div', { class: 'hk-group' }, h('h4', { text: title }),
       h('table', { class: 'hk' }, ...keys.map(([k, d]) => h('tr', {}, h('td', {}, ...k.split(/(, | \/ )/).map((p) => /^(, | \/ )$/.test(p) ? p : h('kbd', { text: p }))), h('td', { text: d }))))));
@@ -3509,7 +4192,8 @@
     if (!state.mouse || !state.inst || (state.mode !== 'select' && state.mode !== 'move')) return false;
     const hit = view.hitTest(state.mouse, 8);
     if (!hit) return false;
-    if (hit.type === 'net') { const net = state.project.nets[state.inst.netOf[hit.g]]; if (net) selectNet(net, itemFromTag(hit.it)); }
+    if (hit.type === 'net' && hit.it && /^[UE]\d/.test(hit.it)) selectGraphic(state.inst, hit.it);
+    else if (hit.type === 'net') { const net = state.project.nets[state.inst.netOf[hit.g]]; if (net) selectNet(net, itemFromTag(hit.it)); }
     else if (hit.type === 'symbol') selectSymbol(state.inst, hit.si);
     else if (hit.type === 'sheet') selectSheet(state.inst, hit.idx);
     else if (hit.type === 'graphic') selectGraphic(state.inst, hit.it);
@@ -3522,10 +4206,11 @@
     a.run();
     return a;
   }
-  function keyMoveStart() {
+  function keyMoveStart(keep) {
     if (!keyAction(/^MOVE$/, 'Move')) return;
     if (state.mode !== 'move') return;
-    if (state.mouse) { state.keyMove = { from: state.mouse.slice() }; toast('Move the mouse, click to drop. Esc cancels.'); }
+    if (state.moveTarget) state.moveTarget.keepWires = keep;
+    if (state.mouse) { state.keyMove = { from: state.mouse.slice() }; toast((keep ? 'Drag: wires follow. ' : 'Move: wires stay put (G drags them along). ') + 'Click to drop, Esc cancels.'); }
   }
   function keyMoveHover(wp) {
     if (state.mode !== 'move' || !state.keyMove || !view.dragHandler) return;
@@ -3557,11 +4242,6 @@
     const onConductor = s.on && s.on !== 'label';
     if (st.kind === 'text' || ((st.kind === 'label' || st.kind === 'junction') && onConductor) || (st.kind === 'nc' && s.on === 'pin')) placeStencil(st, mouse, 'mouse');
   }
-  function repeatLast() {
-    const k = (Store.pref('recentStencils') || [])[0], st = k && stencilFromKey(k);
-    if (!st) { toast('Nothing placed yet to repeat.'); return; }
-    if (state.mouse) dropStencil(st, state.mouse.slice()); else armStencil(st);
-  }
   function stepSheet(d) {
     const list = state.project.instances.slice().sort((a, b) => a.order - b.order), i = list.indexOf(state.inst), n = list[i + d];
     if (n) { showInstance(n); toast(n.page + '/' + state.project.pageCount + ' · ' + n.name); }
@@ -3573,14 +4253,17 @@
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
       if (e.key === 'Escape' && t.closest && t.closest('#pickerWrap')) closePicker();
       else if (e.key === 'Escape' && t.closest && t.closest('#dialogWrap')) closeDialog();
+      else if (e.key === 'Escape' && t.closest && t.closest('#fieldsWrap')) $('fieldsWrap').querySelector('.report-head .ib').click();
       return;
     }
     const ctrl = e.ctrlKey || e.metaKey, sh = e.shiftKey, alt = e.altKey, key = e.key, k = key.length === 1 ? key.toLowerCase() : key;
     const done = () => { e.preventDefault(); e.stopPropagation(); };
-    const modal = $('dialogWrap') || $('pickerWrap') || $('reportWrap') || !$('search').hidden;
+    const modal = $('dialogWrap') || $('pickerWrap') || $('reportWrap') || $('fieldsWrap') || $('symEditor') || !$('search').hidden;
     if (key === 'Escape') {
       if ($('dialogWrap')) { closeDialog(); return; }
       if ($('pickerWrap')) { closePicker(); return; }
+      if ($('fieldsWrap')) { $('fieldsWrap').querySelector('.report-head .ib').click(); return; }
+      if ($('symEditor')) { $('symEditor').remove(); return; }
       if ($('reportWrap')) { closeReport(); return; }
       if (!$('search').hidden) { closeSearch(); return; }
       if (state.mode !== 'select') { setMode('select'); return; }
@@ -3589,6 +4272,7 @@
     }
     if ((ctrl && key === 'F1') || (key === '?' && !ctrl)) { done(); if (!$('dialogWrap')) showHotkeys(); return; }
     if (modal) return;
+    if (ctrl && alt && (k === 'f' || e.code === 'KeyF') && !modal && state.project) { done(); replaceDialog(); return; }
     if (ctrl && (k === 'f' || k === 'g')) { done(); openSearch(); return; }
     if (!ctrl && !alt && key === '/' && state.mode !== 'wire') { done(); openSearch(); return; }
     if (!state.project) return;
@@ -3606,21 +4290,26 @@
       if (k === 'd') { done(); if (hoverSelect() && canCopy()) duplicateSel(); else keyAction(/^DUPLICATE$/, 'Duplicate'); return; }
       if (k === 'l') { done(); keyPlace('l-glob'); return; }
       if (k === 'h') { done(); $('btnSheets').click(); return; }
+      if (k === 'm' && sh) { done(); startMeasure(); return; }
       if (key === 'Home') { done(); view.fit(); return; }
       if (key === 'F5') { done(); if (state.sel) zoomToSelection(); return; }
       return;
     }
     // ---- with Alt
     if (alt) {
-      if ((key === 'Backspace' || key === 'ArrowUp') && state.inst.parent) { done(); showInstance(state.inst.parent); }
+      if ((key === 'Backspace' || key === 'ArrowUp') && state.inst.parent) { done(); showInstance(state.inst.parent); return; }
+      if (key === 'ArrowLeft') { done(); navGo(state.navBack, state.navFwd); return; }
+      if (key === 'ArrowRight') { done(); navGo(state.navFwd, state.navBack); return; }
+      if (e.code === 'KeyS') { done(); swapSel(); return; }
       return;
     }
     // ---- while drawing a wire or a shape
     if (state.mode === 'wire') {
-      if (key === '/' || (key === ' ' && sh)) { done(); wireFlip(); return; }
+      if (key === '/') { done(); wireFlip(); return; }
       if (key === 'Backspace') { done(); wireBack(); return; }
       if (key === 'End' || key === 'Enter') { done(); finishWire(); return; }
     }
+    if (key === ' ' && sh) { done(); cyclePosture(); return; }
     if (state.mode === 'draw' && state.draw) {
       if ((key === 'End' || key === 'Enter') && state.draw.tool === 'line' && state.draw.pts.length > 1) { done(); finishLine(); return; }
       if (key === 'Backspace' && state.draw.pts.length) { done(); state.draw.pts.pop(); drawOverlay(); renderStatus(); return; }
@@ -3655,8 +4344,11 @@
     if (key.length !== 1) return;
     switch (k) {
       case 'e': done(); keyAction(/^(EDIT|RENAME|STYLE|CABLE|ENTER)$/, 'Properties'); return;
-      case 'm': case 'g': done(); keyMoveStart(); return;
-      case 'r': done(); keyAction(/^ROTATE$/, 'Rotate'); return;
+      case 'm': done(); keyMoveStart(false); return;
+      case 'g': done(); keyMoveStart(true); return;
+      case 'o': done(); autoplaceSel(); return;
+      case 'n': done(); stepGrid(sh ? -1 : 1); return;
+      case 'r': done(); if (state.mode === 'draw' && state.draw && state.draw.tool === 'entry') { state.draw.dir = ((state.draw.dir || 0) + 1) % 4; if (state.mouse) hoverPreview(state.mouse); } else keyAction(/^ROTATE$/, 'Rotate'); return;
       case 'x': done(); keyAction(/^MIRROR ↔$/, 'Mirror'); return;
       case 'y': done(); keyAction(/^MIRROR ↕$/, 'Mirror'); return;
       case 'v': done(); editField('Value'); return;
@@ -3676,8 +4368,15 @@
       case 'h': done(); keyPlace('l-hier'); return;
       case 't': done(); keyPlace('l-text'); return;
       case 'i': done(); if (state.sel) { state.sel = null; applyHighlight(); renderSelectionUI(); } state.draw = { tool: 'line', pts: [] }; setMode('draw'); setDrawTool('line'); return;
-      case 'b': case 'z': done(); toast('Buses aren’t supported in Loomline yet.'); return;
-      case 's': if (!sh) { done(); toast('Adding hierarchical sheets isn’t supported yet; edit those in KiCad.'); } return;
+      case 'b': done(); if (sh) blocksMenu($('rbTools')); else startBus(); return;
+      case 'z': done(); startEntry(); return;
+      case 'c': {
+        done();
+        const hit = state.mouse && view.hitTest(state.mouse, 8), o = hit && hit.it && hit.it[0] === 'U' ? graphicObj(hit.it) : state.sel && state.sel.type === 'graphic' && state.sel.it[0] === 'U' ? graphicObj(state.sel.it) : null;
+        if (o) unfoldDialog(o); else toast('Point at a bus to unfold a member from it.');
+        return;
+      }
+      case 's': if (!sh) { done(); startSheetTool(); } return;
     }
   }
   window.addEventListener('keydown', hotkey);
