@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.4.0';
+  const VERSION = '2.4.1';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1842,8 +1842,10 @@
   $('btnBack').addEventListener('click', () => navGo(state.navBack, state.navFwd));
   // Mouse back / forward buttons (and keyboard Browser Back / Forward keys) step through sheets instead of leaving the app
   const navBlocked = () => !state.project || !!($('dialogWrap') || $('pickerWrap') || $('reportWrap') || $('fieldsWrap') || $('symEditor'));
-  for (const ev of ['mousedown', 'pointerdown', 'pointerup', 'auxclick']) window.addEventListener(ev, (e) => { if ((e.button === 3 || e.button === 4) && state.project) { e.preventDefault(); e.stopPropagation(); } }, true);   // the drawing never sees them as a tap
-  window.addEventListener('mouseup', (e) => {
+  // Chrome sends these as pointer events; cancelling pointerdown also stops the browser's own back / forward
+  // (and suppresses the mousedown / mouseup that would follow), so the step happens on pointerup.
+  for (const ev of ['mousedown', 'mouseup', 'pointerdown', 'auxclick']) window.addEventListener(ev, (e) => { if ((e.button === 3 || e.button === 4) && state.project) { e.preventDefault(); e.stopPropagation(); } }, true);   // the drawing never sees them as a tap
+  window.addEventListener('pointerup', (e) => {
     if (e.button !== 3 && e.button !== 4) return;
     if (!state.project) return;   // no project open: let the browser go back as usual
     e.preventDefault(); e.stopPropagation();
