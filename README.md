@@ -99,7 +99,7 @@ select a part (View → *Properties* turns that off).
 | See every pin on the net | **NETS** in the rail (or tap the status bar) opens the Net Navigator |
 | Inspect a part | Tap the part body or its reference, then **INFO** for fields and pins |
 | Find a part | **PARTS** lists every part with a filter box; the search icon covers parts, nets and sheets |
-| Change sheet | The sheet chip at the top, or **SHEETS** in the rail; ↑ goes to the parent sheet |
+| Change sheet | The sheet chip at the top, or **SHEETS** in the rail; ↑ goes to the parent sheet, and ← / → in the title bar step back and forward through the sheets you've visited (like a browser) |
 | Enter a sheet | Double-tap the sheet box, or tap it and press **ENTER** |
 | Grid dots | Tap the scale chip in the bottom-left corner |
 | Full screen | The ⤢ button at the top (or Layers → *Full screen*) hides the bars. Tap a handle on the top, right or bottom edge, or swipe in from an edge, to bring them back for a few seconds; selecting something shows the status bar. On Android it also hides the system bars |
