@@ -386,7 +386,14 @@ textarea.input { min-height: 84px; padding: 10px 12px; resize: vertical; font: 1
 .rtable th { position: sticky; top: -12px; background: var(--chrome-2); text-align: left; font-weight: 600; letter-spacing: 0.04em; }
 .rtable th, .rtable td { border: 1px solid var(--line); padding: 5px 8px; vertical-align: top; }
 .rtable tbody tr:nth-child(even) td { background: var(--chrome); }
+#printSheets { display: none; }
 @media print {
+  html:has(body.printing-sheets), body.printing-sheets { height: auto; overflow: visible; background: #fff; }
+  body.printing-sheets > :not(#printSheets) { display: none !important; }
+  body.printing-sheets #printSheets { display: block; }
+  #printSheets .psheet { break-after: page; overflow: hidden; position: relative; }
+  #printSheets .psheet:last-child { break-after: auto; }
+  #printSheets .psheet svg { display: block; width: 100%; height: 100%; }
   body.printing > :not(#reportWrap) { display: none !important; }
   body.printing { background: #fff; color: #000; height: auto; }
   body.printing .report-wrap { position: static; display: block; background: #fff; }
