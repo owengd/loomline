@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.3.2';
+  const VERSION = '2.3.3';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -124,6 +124,7 @@
     state.files = files.map((f) => ({ path: f.path, text: f.text }));
     state.base = new Map(files.map((f) => [f.path, f.text]));
     state.undo = []; state.redo = [];
+    state.navBack = []; state.navFwd = [];   // sheet history is per project
     setMode('select');
     state.scenes.clear(); state.views.clear();
     state.sel = null;
@@ -370,6 +371,7 @@
     $('sheetName').textContent = inst.parent ? inst.name : (inst.orphan ? inst.name : 'Root');
     $('btnSheets').title = inst.namePath + ' · ' + K.basename(inst.sheet.path);
     $('btnUp').disabled = !inst.parent;
+    navButtons();
     renderRibbon();   // Up a sheet and other buttons follow the sheet
     writeHash();
     renderStatus();
@@ -1837,6 +1839,8 @@
   $('chipNets').addEventListener('click', () => { if (state.project) showTab('nets', true); });
   $('chipParts').addEventListener('click', () => { if (state.project) showTab('parts', true); });
   $('btnUp').addEventListener('click', () => { if (state.inst && state.inst.parent) showInstance(state.inst.parent); });
+  $('btnBack').addEventListener('click', () => navGo(state.navBack, state.navFwd));
+  $('btnFwd').addEventListener('click', () => navGo(state.navFwd, state.navBack));
 
   function renderProjects() {
     const body = $('projectsBody'); body.replaceChildren();
@@ -2838,6 +2842,8 @@
         { label: 'Find', icon: 'i-search', disabled: !P, run: openSearch },
         { label: 'Fit', icon: 'i-fit', disabled: !P, run: () => view.fit() },
         { label: 'Zoom to', icon: 'i-target', disabled: !s, run: zoomToSelection },
+        { label: 'Back sheet', icon: 'i-back', disabled: !navLive(state.navBack), run: () => navGo(state.navBack, state.navFwd) },
+        { label: 'Forward sheet', icon: 'i-next', disabled: !navLive(state.navFwd), run: () => navGo(state.navFwd, state.navBack) },
         { label: 'Up a sheet', icon: 'i-up', disabled: !(state.inst && state.inst.parent), run: () => state.inst.parent && showInstance(state.inst.parent) }] }
     ];
     if (tab === 'insert') return [
@@ -4206,6 +4212,15 @@
     }
     toast('No more sheets that way.');
   }
+  // Back / Forward light up only when there is a sheet that way (same as KiCad's toolbar arrows)
+  function navLive(list) { return !!(state.project && list && list.some((np) => state.inst && np !== state.inst.namePath && state.project.instances.some((i) => i.namePath === np))); }
+  function navButtons() {
+    const b = $('btnBack'), f = $('btnFwd'); if (!b || !f) return;
+    b.disabled = !navLive(state.navBack); f.disabled = !navLive(state.navFwd);
+    const prev = (list) => { const np = list && list[list.length - 1]; const i = np && state.project && state.project.instances.find((x) => x.namePath === np); return i ? ' – ' + (i.parent ? i.name : 'Root') : ''; };
+    b.title = 'Back to the previous sheet' + prev(state.navBack) + ' (Alt+←)';
+    f.title = 'Forward to the next sheet' + prev(state.navFwd) + ' (Alt+→)';
+  }
 
   // ---- Wire angle (KiCad: Shift+Space cycles 90°, 45° and free angle)
   var POSTURES = ['90', '45', 'free'];
@@ -4239,7 +4254,7 @@
   ];
   // Ribbon tooltips show the key
   const RB_KEYS = { 'Copy': 'Ctrl+C', 'Paste': 'Ctrl+V', 'Duplicate': 'Ctrl+D', 'Select all': 'Ctrl+A', 'Delete': 'Del', 'Move': 'M', 'Rotate': 'R',
-    'Mirror ↔': 'X', 'Mirror ↕': 'Y', 'Edit': 'E', 'Find': 'Ctrl+F', 'Fit': 'Home', 'Zoom to': 'Ctrl+F5', 'Up a sheet': 'Alt+Backspace', 'Add part': 'A',
+    'Mirror ↔': 'X', 'Mirror ↕': 'Y', 'Edit': 'E', 'Find': 'Ctrl+F', 'Fit': 'Home', 'Zoom to': 'Ctrl+F5', 'Up a sheet': 'Alt+Backspace', 'Back sheet': 'Alt+←', 'Forward sheet': 'Alt+→', 'Add part': 'A',
     'Power': 'P', 'Draw wire': 'W', 'Line': 'I', 'Text': 'T', 'Net label': 'L', 'Off-sheet': 'Ctrl+L', 'Sheet port': 'H', 'Junction': 'J', 'No-connect': 'Q', 'Keys': 'Ctrl+F1', 'Find & replace': 'Ctrl+Alt+F', 'Measure': 'Ctrl+Shift+M', 'Swap': 'Alt+S', 'Autoplace': 'O', 'Draw bus': 'B', 'Bus entry': 'Z', 'New sheet': 'S', 'Blocks': 'Shift+B' };
   function showHotkeys() {
     const body = HOTKEYS.map(([title, keys]) => h('div', { class: 'hk-group' }, h('h4', { text: title }),
