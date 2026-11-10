@@ -7,9 +7,9 @@
   // ---------------------------------------------------------------------------
   // S-expression parser. Lists become arrays; atoms and strings become strings.
   // ---------------------------------------------------------------------------
-  // Lists also carry their source span (.s, .e) and the spans of their atom/string children
-  // (.t[i] = [start, end]) so the editor can rewrite single tokens and leave the rest of the
-  // file byte-for-byte untouched.
+  // Lists also carry their source span (.s, .e); the span of any child token is found on demand
+  // with tokSpan(), so the editor can rewrite single tokens and leave the rest of the file
+  // byte-for-byte untouched without the parser storing a span for every token.
   function parseSexpr(text, withPos) {
     const n = text.length;
     let i = 0, cur = null, result = null;
@@ -18,14 +18,13 @@
       const c = text.charCodeAt(i);
       if (c === 40) { // (
         const l = [];
-        if (withPos) { l.s = i; l.t = []; }
+        if (withPos) l.s = i;
         if (cur) cur.push(l); else if (!result) result = l;
         stack.push(cur); cur = l; i++;
       } else if (c === 41) { // )
         if (withPos && cur) cur.e = i + 1;
         cur = stack.pop(); i++;
       } else if (c === 34) { // "
-        const st = i;
         i++;
         let s = '', start = i;
         while (i < n) {
@@ -39,7 +38,7 @@
           else i++;
         }
         s += text.slice(start, i); i++;
-        if (cur) { if (withPos) cur.t[cur.length] = [st, i]; cur.push(s); }
+        if (cur) cur.push(s);
       } else if (c <= 32) {
         i++;
       } else {
@@ -49,12 +48,32 @@
           if (d <= 32 || d === 40 || d === 41) break;
           i++;
         }
-        if (cur) { if (withPos) cur.t[cur.length] = [start, i]; cur.push(text.slice(start, i)); }
+        if (cur) cur.push(text.slice(start, i));
       }
     }
     return result;
   }
 
+  // Source span [start, end] of child idx of a list parsed with positions (idx 0 is its keyword).
+  function tokSpan(text, node, idx) {
+    let i = node.s + 1;
+    const n = node.e - 1;
+    for (let k = 0; k < node.length && i < n; k++) {
+      while (i < n && text.charCodeAt(i) <= 32) i++;
+      const child = node[k];
+      let st = i;
+      if (Array.isArray(child)) { st = child.s; i = child.e; }
+      else if (text.charCodeAt(i) === 34) {
+        i++;
+        while (i < n) { const d = text.charCodeAt(i); if (d === 92) i += 2; else if (d === 34) break; else i++; }
+        i++;
+      } else {
+        while (i < n) { const d = text.charCodeAt(i); if (d <= 32 || d === 40 || d === 41) break; i++; }
+      }
+      if (k === idx) return [st, i];
+    }
+    return null;
+  }
   const isList = Array.isArray;
   function find(node, key) {
     if (!node) return null;
@@ -663,6 +682,7 @@
    * files: [{path, text}] — .kicad_sch files, plus an optional .kicad_pro (JSON) for text variables / root detection.
    * Returns a project with instances (sheet tree) and nets.
    */
+  const parseCache = new Map();
   function buildProject(files, opts) {
     opts = opts || {};
     const sheetsByPath = {};
@@ -670,7 +690,11 @@
     let pro = null, proPath = null;
     for (const f of files) {
       if (/\.kicad_sch$/i.test(f.path)) {
-        try { sheetsByPath[f.path] = parseSchematic(f.text, f.path); }
+        // A sheet file that hasn't changed since the last build is reused as parsed: after an edit
+        // only the edited file is read again. (Parsed sheets are not changed once built.)
+        const hit = parseCache.get(f.path);
+        if (hit && hit.text === f.text) { sheetsByPath[f.path] = hit.sheet; continue; }
+        try { sheetsByPath[f.path] = parseSchematic(f.text, f.path); parseCache.set(f.path, { text: f.text, sheet: sheetsByPath[f.path] }); }
         catch (e) { errors.push({ path: f.path, message: e.message }); }
       } else if (/\.kicad_pro$/i.test(f.path)) {
         try { pro = JSON.parse(f.text); proPath = f.path; } catch (e) { /* ignore */ }
@@ -1059,7 +1083,7 @@
   }
 
   const api = {
-    find, findAll, onSegment, key,
+    find, findAll, onSegment, key, tokSpan,
     parseSexpr, parseSchematic, buildProject, symbolPins, libItemsFor, symTransform, tf, tfInv,
     markupRuns, plainText, resolveVars, unescape, unitLetter, expandBusKeyed, expandBus, isBusName, naturalCmp, basename, dirname, joinPath, PAPER
   };

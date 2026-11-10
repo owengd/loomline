@@ -96,12 +96,14 @@
       const pins = n.pins.filter((p) => !P.instances[p.inst].orphan);
       if (pins.length < 2) continue;
       const inTree = new Uint8Array(pins.length), best = new Float64Array(pins.length).fill(Infinity), from = new Int32Array(pins.length).fill(-1);
+      // Positions and sheet order looked up once per pin (big nets such as 0 V compare every pair).
+      const px = new Float64Array(pins.length), py = new Float64Array(pins.length), ord = new Float64Array(pins.length);
+      pins.forEach((p, i) => { const q = pinOf(p); px[i] = q[0]; py[i] = q[1]; ord[i] = P.instances[p.inst].order; });
       const cost = (i, j) => {
         const a = pins[i], b = pins[j];
         if (a.ref === b.ref) return a.inst === b.inst ? 0.5 : 1;    // pins of one part (stacked pins, units)
-        const pa = pinOf(a), pb = pinOf(b);
-        const d = Math.abs(pa[0] - pb[0]) + Math.abs(pa[1] - pb[1]);
-        return a.inst === b.inst ? d : 1e6 + Math.abs(P.instances[a.inst].order - P.instances[b.inst].order) * 1e4 + d;
+        const d = Math.abs(px[i] - px[j]) + Math.abs(py[i] - py[j]);
+        return a.inst === b.inst ? d : 1e6 + Math.abs(ord[i] - ord[j]) * 1e4 + d;
       };
       best[0] = 0;
       const rows = [];

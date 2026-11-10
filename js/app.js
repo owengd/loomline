@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.3.1';
+  const VERSION = '2.3.2';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -220,6 +220,25 @@
     state.token = token || null;
     try { sessionStorage.setItem('st.ghToken', token || ''); } catch (e) { /* ignore */ }
     Store.pref('ghToken', remember && token ? token : null);
+  }
+  // The browser's password manager as a backup of the connection (repository + token). Some browsers
+  // are set to delete site data on close; saved passwords are kept, so the app can reconnect from them.
+  async function saveCredential(repo, token) {
+    try { if (window.PasswordCredential && navigator.credentials) await navigator.credentials.store(new PasswordCredential({ id: repo, password: token, name: 'Loomline · ' + repo })); } catch (e) { /* not supported or refused */ }
+  }
+  async function restoreCredential(mediation) {
+    try {
+      if (!window.PasswordCredential || !navigator.credentials) return false;
+      // A silent check must never hold up start-up (some browsers never answer it).
+      const c = await Promise.race([navigator.credentials.get({ password: true, mediation }), new Promise((r) => setTimeout(() => r(null), mediation === 'silent' ? 1500 : 120000))]);
+      if (!c || !c.password || !/^[\w.-]+\/[\w.-]+$/.test(c.id)) { if (mediation !== 'silent') toast('No saved Loomline connection in this browser yet.'); return false; }
+      state.gh = { repo: c.id, ref: (state.gh && state.gh.repo === c.id && state.gh.ref) || '', remember: true };
+      Store.pref('gh', state.gh);
+      setToken(c.password, true);
+      state.ghProjects = null;
+      await connectAndOpen(Store.pref('last') && Store.pref('last').key);
+      return !!state.project;
+    } catch (e) { return false; }
   }
   async function pool(items, n, fn) {
     const out = new Array(items.length); let i = 0;
@@ -738,8 +757,9 @@
     state.panelOpen = open;
     $('panel').hidden = !open;
     for (const b of document.querySelectorAll('.rail-btn[data-tab]')) b.setAttribute('aria-pressed', String(open && b.dataset.tab === state.tab));
-    if (open) renderPanel();
+    // Opening the install log turns its colours on, which renders the panel; otherwise render it here (once)
     if (open && state.tab === 'install' && !show.install) setShow('install', true);
+    else if (open) renderPanel();
     if (open && state.tab === 'install') scheduleSync(0);
     if (open && !wideLayout() && typeof dockOpen !== 'undefined' && dockOpen) { dockOpen = false; $('dock').hidden = true; $('railDock').setAttribute('aria-pressed', 'false'); }
     requestAnimationFrame(() => view.resize());
@@ -1103,9 +1123,10 @@
     const before = state.project;
     for (const c of changes) setFileText(c.path, c.after);
     state.undo.push({ label, changes, anchor });
+    if (state.undo.length > 200) state.undo.splice(0, state.undo.length - 200);   // keep memory in check on long sessions
     state.redo = [];
     rebuild(anchor);
-    persistEdits();
+    schedulePersist();
     if (opts && opts.checkMerges) warnMerges(before, state.project, label);
     return true;
   }
@@ -1118,7 +1139,7 @@
     for (const c of h.changes) setFileText(c.path, c.before);
     state.redo.push(h);
     rebuild(h.anchor);
-    persistEdits();
+    schedulePersist();
     toast('Undid: ' + h.label);
   }
   function redo() {
@@ -1126,7 +1147,7 @@
     for (const c of h.changes) setFileText(c.path, c.after);
     state.undo.push(h);
     rebuild(h.anchor);
-    persistEdits();
+    schedulePersist();
     toast('Redid: ' + h.label);
   }
   $('btnUndo').addEventListener('click', undo);
@@ -1153,6 +1174,13 @@
     $('btnUndo').disabled = !(state.undo && state.undo.length);
     $('btnRedo').disabled = !(state.redo && state.redo.length);
   }
+  // Saving the edited files to this device is debounced: a run of quick edits on a big project
+  // writes once, and anything pending is written when the app is hidden or closed.
+  let persistTimer = 0;
+  function schedulePersist() { clearTimeout(persistTimer); persistTimer = setTimeout(() => { persistTimer = 0; persistEdits(); }, 600); }
+  const flushPersist = () => { if (persistTimer) { clearTimeout(persistTimer); persistTimer = 0; persistEdits(); } };
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushPersist(); });
+  window.addEventListener('pagehide', flushPersist);
   async function persistEdits() {
     if (!state.source) return;
     const key = 'edits:' + state.source.key;
@@ -1823,9 +1851,11 @@
     const gh = state.gh;
     const ghSec = h('div', { class: 'section' }, h('h3', null, h('span', { text: 'GitHub' })));
     if (!state.token || !gh.repo) {
-      const repoIn = h('input', { class: 'input', id: 'ghRepo', placeholder: 'your-org/schematics', value: gh.repo || '', autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false' });
+      const repoIn = h('input', { class: 'input', id: 'ghRepo', name: 'username', placeholder: 'your-org/schematics', value: gh.repo || '', autocapitalize: 'off', autocomplete: 'username', spellcheck: 'false' });
       const refIn = h('input', { class: 'input', id: 'ghRef', placeholder: 'default branch', value: gh.ref || '', autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false' });
-      const tokIn = h('input', { class: 'input', id: 'ghToken', type: 'password', placeholder: 'github_pat_… or ghp_…', autocomplete: 'off', spellcheck: 'false' });
+      // Repository + token are marked as a sign-in, so the browser's password manager can keep them:
+      // they then survive a browser that clears site data when it closes.
+      const tokIn = h('input', { class: 'input', id: 'ghToken', name: 'password', type: 'password', placeholder: 'github_pat_… or ghp_…', autocomplete: 'current-password', spellcheck: 'false' });
       const rem = h('input', { type: 'checkbox', id: 'ghRemember', checked: gh.remember !== false });
       const err = h('p', { class: 'err-text', hidden: !state.ghError, text: state.ghError || '' });
       const go = h('button', { class: 'btn primary', onclick: async () => {
@@ -1838,11 +1868,16 @@
         setToken(token, rem.checked);
         state.ghProjects = null;
         await connectAndOpen(null);
+        if (rem.checked && state.source && state.source.kind === 'github') saveCredential(repo, token);
       } }, icon('i-git'), 'Connect');
-      ghSec.append(
+      const form = h('form', { class: 'gh-form', autocomplete: 'on', onsubmit: (e) => { e.preventDefault(); go.click(); } });
+      for (const el of [repoIn, refIn, tokIn]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go.click(); } });
+      const saved = window.PasswordCredential ? h('button', { class: 'btn small', type: 'button', onclick: () => restoreCredential('optional') }, icon('i-git'), 'USE SAVED TOKEN') : null;
+      form.append(
         h('div', { class: 'field' }, h('label', { for: 'ghRepo', text: 'Repository' }), repoIn),
         h('div', { class: 'field' }, h('label', { for: 'ghRef', text: 'Branch or tag (optional)' }), refIn),
-        h('div', { class: 'field' }, h('label', { for: 'ghToken', text: 'Access token' }), tokIn),
+        h('div', { class: 'field' }, h('label', { for: 'ghToken', text: 'Access token' }), tokIn));
+      ghSec.append(form, saved || '',
         h('label', { class: 'check' }, rem, 'Remember the token on this device'),
         h('p', { class: 'hint' }, 'Create it at github.com → Settings → Developer settings → Fine-grained tokens. Resource owner: your organisation. Repository access: only the schematics repo. Permissions: ', h('code', { text: 'Contents: Read-only' }), '. If you are an outside collaborator on the repository rather than an org member, GitHub only allows a classic token with the ', h('code', { text: 'repo' }), ' scope.'),
         err, go);
@@ -2785,7 +2820,8 @@
   }
   function ribbonGroups(tab) {
     const P = !!state.project, s = state.sel;
-    const act = (lbl, label, ic) => { const a = P && selAct(lbl); return { label, icon: ic, disabled: !a, danger: lbl === 'DELETE', run: () => { const x = selAct(lbl); if (x) x.run(); } }; };
+    let SA = null;   // the selection's actions, worked out once per ribbon render
+    const act = (lbl, label, ic) => { if (!SA) SA = P && state.sel ? selectionActions() : []; const a = SA.find((x) => x.label === lbl); return { label, icon: ic, disabled: !a, danger: lbl === 'DELETE', run: () => { const x = selAct(lbl); if (x) x.run(); } }; };
     const show2 = (k, label, ic) => ({ label, icon: ic, on: !!show[k], run: () => setShow(k, !show[k]) });
     if (tab === 'home') return [
       { title: 'Select', tools: [
@@ -4485,8 +4521,12 @@
   renderRibbon();
   if (Store.pref('dockOpen') && wideDock()) setDock(true);
   state.prBase = Store.pref('prBase') || null;
+  // Ask the browser not to clear Loomline's storage when space runs low (cached sheets, install log, settings).
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then((p) => { if (!p) navigator.storage.persist(); }).catch(() => {}); } catch (e) { /* ignore */ }
   async function boot() {
     const last = Store.pref('last');
+    // Settings gone (a browser that deletes site data on close)? Reconnect from the saved password, if any.
+    if ((!state.gh.repo || !state.token) && !last && await restoreCredential('silent')) return;
     if (last && last.kind === 'github' && state.gh.repo && state.token) { await connectAndOpen(last.key); if (state.project) return; }
     if (last && last.kind === 'github' && state.gh.repo && !state.token) {
       // Token not remembered: still open the cached copy offline.

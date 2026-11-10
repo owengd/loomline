@@ -66,7 +66,7 @@
     }
     return [s, e];
   }
-  function setTok(sp, node, idx, str) { const t = node.t[idx]; sp.replace(t[0], t[1], str); }
+  function setTok(sp, node, idx, str) { const t = K.tokSpan(sp.text, node, idx); if (!t) throw new Error('Internal edit error: token not found; nothing was changed.'); sp.replace(t[0], t[1], str); }
   function setXY(sp, node, x, y) { setTok(sp, node, 1, fnum(x)); setTok(sp, node, 2, fnum(y)); }
   function atNode(node) { return K.find(node, 'at'); }
   // Where new top-level items go: just before sheet_instances / embedded_fonts, else before the closing paren.
@@ -326,7 +326,7 @@
     const newM = compose(OPS[op], sym.m);
     const o = orientationFor(newM);
     const a = atNode(sym.src);
-    if (a.length > 3) setTok(sp, a, 3, String(o.angle)); else sp.insert(a.t[2][1], ' ' + o.angle);
+    if (a.length > 3) setTok(sp, a, 3, String(o.angle)); else sp.insert(K.tokSpan(sp.text, a, 2)[1], ' ' + o.angle);
     const mir = K.find(sym.src, 'mirror');
     if (o.mirror) {
       if (mir) setTok(sp, mir, 1, o.mirror);
@@ -358,7 +358,7 @@
     const spin = order[(order.indexOf(label.spin) + 1) % 4];
     const sp = new Splicer(sheet.text);
     const a = atNode(label.src);
-    if (a.length > 3) setTok(sp, a, 3, String(SPIN_ANGLE[spin])); else sp.insert(a.t[2][1], ' ' + SPIN_ANGLE[spin]);
+    if (a.length > 3) setTok(sp, a, 3, String(SPIN_ANGLE[spin])); else sp.insert(K.tokSpan(sp.text, a, 2)[1], ' ' + SPIN_ANGLE[spin]);
     const fx = K.find(label.src, 'effects');
     const just = fx && K.find(fx, 'justify');
     const jtext = justifyFor(label.kind === 'directive' ? 'global' : label.kind, spin);
@@ -639,9 +639,9 @@
       const isp = new Splicer(it.text);
       const walk = (n, top) => {
         if (!Array.isArray(n)) return;
-        if (n[0] === 'uuid' && n.t && n.length >= 2) { const id = uuid(); setTok(isp, n, 1, qstr(id)); if (top) uuids.push(id); return; }
+        if (n[0] === 'uuid' && n.s !== undefined && n.length >= 2) { const id = uuid(); setTok(isp, n, 1, qstr(id)); if (top) uuids.push(id); return; }
         if (n[0] === 'instances') return;
-        if (COORD_KEYS.includes(n[0]) && n.t && n.length >= 3) { setXY(isp, n, parseFloat(n[1]) + d[0], parseFloat(n[2]) + d[1]); return; }
+        if (COORD_KEYS.includes(n[0]) && n.s !== undefined && n.length >= 3) { setXY(isp, n, parseFloat(n[1]) + d[0], parseFloat(n[2]) + d[1]); return; }
         for (const c of n) walk(c, false);
       };
       for (const c of node) walk(c, true);
@@ -874,7 +874,7 @@
   function shiftCoords(sp, node, d) {
     const walk = (n) => {
       if (!Array.isArray(n)) return;
-      if (COORD_KEYS.includes(n[0]) && n.t && n.length >= 3) { setXY(sp, n, parseFloat(n[1]) + d[0], parseFloat(n[2]) + d[1]); return; }
+      if (COORD_KEYS.includes(n[0]) && n.s !== undefined && n.length >= 3) { setXY(sp, n, parseFloat(n[1]) + d[0], parseFloat(n[2]) + d[1]); return; }
       for (const c of n) walk(c);
     };
     walk(node);
@@ -1231,7 +1231,7 @@
       const want = place[p.name];
       if (!want) continue;
       const a = atNode(p.src);
-      if (a) { setXY(sp, a, want.p[0], want.p[1]); if (a.t[3]) setTok(sp, a, 3, '0'); }
+      if (a) { setXY(sp, a, want.p[0], want.p[1]); if (a.length > 3) setTok(sp, a, 3, '0'); }
       const eff = K.find(p.src, 'effects');
       if (!eff) continue;
       const j = K.find(eff, 'justify');
