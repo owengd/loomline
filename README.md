@@ -330,9 +330,9 @@ KiCad. Press **Ctrl+F1** or **?** (or **View → Keys**) for the full list. Ribb
 | Home, Ctrl+Home, F1, F2, F4 | Fit the sheet, fit the objects, zoom in/out at the pointer, centre on the pointer |
 | Arrows, Shift+Arrows | Pan |
 | PgDn, PgUp, Alt+Backspace | Next sheet, previous sheet, up a sheet |
-| Alt+Left, Alt+Right, N, Shift+N | Back / forward through sheets, next / previous snap grid |
+| Alt+Left, Alt+Right, N, Shift+N | Back / forward through sheets (the mouse's back / forward buttons do the same), next / previous snap grid |
 | Ctrl+F, Ctrl+Alt+F, Ctrl+Shift+M | Find, find and replace, measure |
-| Ctrl+S, Ctrl+H | Save edits, sheet list |
+| Ctrl+S, Ctrl+H, Ctrl+P | Save edits, sheet list, print / PDF / SVG |
 
 On a Mac, Cmd works in place of Ctrl. A browser keeps a few Ctrl keys for itself (Ctrl+N, Ctrl+T, Ctrl+W).
 
@@ -363,6 +363,11 @@ Most of these are on the ribbon too, so they work by touch.
 - **Design blocks** (Insert → Blocks, or Shift+B): save a selection (say a standard M12 sensor drop) by
   name and place it on any sheet of any project; parts get fresh references. Export the blocks to a file to
   share them with the team, and import them on another device.
+- **Print, PDF and SVG** (Analyse → Output → Print / PDF, the layers menu, or Ctrl+P): this sheet or all
+  of them, in colour or black and white, with or without wire numbers and cross-references. PRINT / PDF
+  opens the system print dialog (choose a printer or Save as PDF); each sheet gets its own page at its
+  KiCad paper size, true to scale. SVG downloads vector drawings (a zip for several sheets) with the
+  font built in. Unsaved edits are included.
 
 ## Limits
 
