@@ -1068,5 +1068,88 @@
     }
   }
 
-  root.KiRender = { buildScene, SchematicView, PALETTES, clearMeasureCache, textWidthMM };
+  // ---------------------------------------------------------------- SVG (print, PDF and export)
+  /** Waits for a scene's embedded images to decode, so their sizes are known. */
+  function loadSceneImages(S) {
+    return Promise.all(S.images.map((im) => im.img || !im.data || typeof Image === 'undefined' ? null : new Promise((res) => {
+      const img = new Image();
+      img.onload = () => { im.img = img; im.w = img.naturalWidth; im.h = img.naturalHeight; res(); };
+      img.onerror = () => res();
+      img.src = 'data:' + (im.data.startsWith('/9j') ? 'image/jpeg' : 'image/png') + ';base64,' + im.data;
+    })));
+  }
+  const xesc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const f3 = (n) => +n.toFixed(3);
+  /**
+   * One sheet as a stand-alone SVG in millimetres (prints at true scale).
+   * o.mono: black and white; o.annot: Loomline tags (wire numbers, cross-references); o.fontCss: @font-face rules to embed.
+   */
+  function sceneToSVG(S, o) {
+    o = o || {};
+    const P = PALETTES.light, mono = !!o.mono;
+    const C = (c) => mono ? '#000000' : c;
+    const [x0, y0, PW, PH] = S.page;
+    const out = [];
+    out.push(`<svg xmlns="http://www.w3.org/2000/svg" class="ll-sheet" width="${PW}mm" height="${PH}mm" viewBox="${x0} ${y0} ${PW} ${PH}" fill="none" stroke-linecap="round" stroke-linejoin="round">`);
+    if (o.title) out.push(`<title>${xesc(o.title)}</title>`);
+    out.push(`<style>${o.fontCss || ''}.ll-sheet text{font-family:${FONT};white-space:pre}</style>`);
+    out.push(`<rect x="${x0}" y="${y0}" width="${PW}" height="${PH}" fill="#ffffff"/>`);
+    for (const im of S.images) {
+      if (!im.img || !im.w) continue;
+      const w = im.w * im.scale * 25.4 / 300, h = im.h * im.scale * 25.4 / 300;
+      out.push(`<image x="${f3(im.p[0] - w / 2)}" y="${f3(im.p[1] - h / 2)}" width="${f3(w)}" height="${f3(h)}" preserveAspectRatio="none" href="data:${im.data.startsWith('/9j') ? 'image/jpeg' : 'image/png'};base64,${im.data}"/>`);
+    }
+    const pts = (p) => { let d = ''; for (let i = 0; i < p.length; i += 2) d += (i ? 'L' : 'M') + f3(p[i]) + ' ' + f3(p[i + 1]); return d; };
+    for (const f of S.fills) {
+      if (mono && (f.role === 'bodyfill' || !f.role)) continue;
+      out.push(`<path d="${pts(f.p)}Z" fill="${C(f.color || P[f.role] || P.bodyfill)}"/>`);
+    }
+    const dashes = (type, w) => {
+      if (!type) return '';
+      const u = Math.max(0.4, w * 3);
+      const a = type === 'dash' ? [u * 3, u * 2] : type === 'dot' ? [u * 0.3, u * 1.5] : type === 'dash_dot' ? [u * 3, u * 1.5, u * 0.3, u * 1.5] : type === 'dash_dot_dot' ? [u * 3, u * 1.5, u * 0.3, u * 1.5, u * 0.3, u * 1.5] : null;
+      return a ? ` stroke-dasharray="${a.map(f3).join(' ')}"` : '';
+    };
+    const an = o.annot;
+    const gcol = !mono && an && an.groupColor && an.groupColor.size ? an.groupColor : null;
+    for (const s of S.strokes) {
+      const gc = gcol && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? gcol.get(s.g) : null;
+      const w = Math.max(s.w, s.role === 'bus' ? 0.3 : 0.12) * (gc ? 1.6 : 1);
+      out.push(`<path d="${pts(s.p)}" stroke="${C(gc || s.color || P[s.role] || P.note)}" stroke-width="${f3(w)}"${dashes(s.dash, s.w)}/>`);
+    }
+    for (const c of S.circles) {
+      const r = Math.max(c.r, 0.05);
+      let fill = 'none', stroke = '', sw = '';
+      if (c.fill || c.fillColor) { if (!(mono && c.fill === 'bodyfill')) fill = C(c.fillColor || P[c.fill]); }
+      if (!c.fill || c.fill === 'bodyfill') { stroke = ` stroke="${C(P[c.role] || P.note)}"`; sw = ` stroke-width="${f3(Math.max(c.w, 0.12))}"`; }
+      out.push(`<circle cx="${f3(c.c[0])}" cy="${f3(c.c[1])}" r="${f3(r)}" fill="${fill}"${stroke}${sw}/>`);
+    }
+    for (const t of S.texts) {
+      const fs = t.size * EM, color = C(t.color || P[t.role] || P.note);
+      const tf = t.vert ? `translate(${f3(t.x)} ${f3(t.y)}) rotate(-90)` : `translate(${f3(t.x)} ${f3(t.y)})`;
+      let x = t.ha === 'left' ? 0 : t.ha === 'right' ? -t.w : -t.w / 2;
+      const parts = [];
+      for (const r of t.runs) {
+        const small = r.sub || r.sup, f = small ? fs * 0.7 : fs;
+        const yOff = r.sub ? fs * 0.25 : r.sup ? -fs * 0.4 : 0;
+        const w = w100(r.t, t.bold) / 100 * f;
+        if (r.t) parts.push(`<text x="${f3(x)}" y="${f3(yOff)}" font-size="${f3(f)}"${t.bold ? ' font-weight="600"' : ''}${t.italic ? ' font-style="italic"' : ''}>${xesc(r.t)}</text>`);
+        if (r.over) parts.push(`<rect x="${f3(x)}" y="${f3(-t.size * 1.18)}" width="${f3(w)}" height="${f3(Math.max(0.1, fs * 0.07))}" fill="${color}"/>`);
+        x += w;
+      }
+      if (parts.length) out.push(`<g transform="${tf}" fill="${color}">${parts.join('')}</g>`);
+    }
+    if (an && an.tags) for (const t of an.tags) {
+      const fs = (t.size || 1) * EM, w = w100(t.text, true) / 100 * fs, padX = fs * 0.3, h = fs * 1.25;
+      const bx = t.ha === 'center' ? t.x - w / 2 - padX : t.ha === 'right' ? t.x - w - 2 * padX : t.x;
+      const by = t.va === 'top' ? t.y : t.va === 'center' ? t.y - h / 2 : t.y - h;
+      const col = C(t.color);
+      out.push(`<rect x="${f3(bx)}" y="${f3(by)}" width="${f3(w + 2 * padX)}" height="${f3(h)}" fill="#ffffff" fill-opacity="0.9"${t.box !== false ? ` stroke="${col}" stroke-width="0.12"` : ''}/>`);
+      out.push(`<text x="${f3(bx + padX)}" y="${f3(by + h / 2 + fs * 0.04)}" dominant-baseline="middle" font-size="${f3(fs)}" font-weight="600" fill="${col}">${xesc(t.text)}</text>`);
+    }
+    out.push('</svg>');
+    return out.join('\n');
+  }
+
+  root.KiRender = { buildScene, SchematicView, PALETTES, clearMeasureCache, textWidthMM, sceneToSVG, loadSceneImages };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

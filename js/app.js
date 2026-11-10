@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.3.3';
+  const VERSION = '2.4.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1840,6 +1840,21 @@
   $('chipParts').addEventListener('click', () => { if (state.project) showTab('parts', true); });
   $('btnUp').addEventListener('click', () => { if (state.inst && state.inst.parent) showInstance(state.inst.parent); });
   $('btnBack').addEventListener('click', () => navGo(state.navBack, state.navFwd));
+  // Mouse back / forward buttons (and keyboard Browser Back / Forward keys) step through sheets instead of leaving the app
+  const navBlocked = () => !state.project || !!($('dialogWrap') || $('pickerWrap') || $('reportWrap') || $('fieldsWrap') || $('symEditor'));
+  for (const ev of ['mousedown', 'pointerdown', 'pointerup', 'auxclick']) window.addEventListener(ev, (e) => { if ((e.button === 3 || e.button === 4) && state.project) { e.preventDefault(); e.stopPropagation(); } }, true);   // the drawing never sees them as a tap
+  window.addEventListener('mouseup', (e) => {
+    if (e.button !== 3 && e.button !== 4) return;
+    if (!state.project) return;   // no project open: let the browser go back as usual
+    e.preventDefault(); e.stopPropagation();
+    if (navBlocked()) return;
+    if (e.button === 3) navGo(state.navBack, state.navFwd); else navGo(state.navFwd, state.navBack);
+  }, true);
+  window.addEventListener('keydown', (e) => {
+    if ((e.key !== 'BrowserBack' && e.key !== 'BrowserForward') || !state.project) return;
+    e.preventDefault();
+    if (!navBlocked()) { if (e.key === 'BrowserBack') navGo(state.navBack, state.navFwd); else navGo(state.navFwd, state.navBack); }
+  }, true);
   $('btnFwd').addEventListener('click', () => navGo(state.navFwd, state.navBack));
 
   function renderProjects() {
@@ -1949,6 +1964,7 @@
       tog('wireNos', 'Wire numbers'), tog('xrefs', 'Cross-references between part units'), tog('markers', 'Design check markers'), tog('install', 'Colour wires by install status')));
     if (state.project) body.append(section('Tools', null, h('div', { class: 'actions' },
       h('button', { class: 'btn small', onclick: () => { closeDrawers(); showTab('reports', true); } }, icon('i-report'), 'Reports'),
+      h('button', { class: 'btn small', onclick: () => { closeDrawers(); printDialog(); } }, icon('i-print'), 'Print / PDF'),
       h('button', { class: 'btn small', onclick: () => { closeDrawers(); showTab('compare', true); } }, icon('i-compare'), 'Compare revisions'))));
     body.append(section('Storage', null,
       h('p', { class: 'hint', text: 'Downloaded schematics are kept on this device so the last revision opens offline.' }),
@@ -2879,7 +2895,8 @@
           { label: 'Measure', icon: 'i-line', disabled: !P, on: state.mode === 'measure', run: () => state.mode === 'measure' ? setMode('select') : startMeasure() },
           { label: 'Swap', icon: 'i-sync', disabled: !(s && s.type === 'multi'), run: swapSel }, { label: 'Autoplace', icon: 'i-text', disabled: !(s && s.type === 'symbol'), run: autoplaceSel },
           { label: 'Snap ' + E.snapGrid() + ' mm', icon: 'i-more', disabled: !P, run: () => { const i = GRIDS.indexOf(E.snapGrid()); stepGrid(i === GRIDS.length - 1 ? -i : 1); renderRibbon(); } }] },
-        { title: 'Check & report', tools: [tabBtn('check', 'Design check', 'i-alert'), tabBtn('reports', 'Reports', 'i-report'), tabBtn('install', 'Install log', 'i-install'), tabBtn('compare', 'Compare', 'i-compare')] }
+        { title: 'Check & report', tools: [tabBtn('check', 'Design check', 'i-alert'), tabBtn('reports', 'Reports', 'i-report'), tabBtn('install', 'Install log', 'i-install'), tabBtn('compare', 'Compare', 'i-compare')] },
+        { title: 'Output', tools: [{ label: 'Print / PDF', icon: 'i-print', disabled: !P, run: printDialog }] }
       ];
     }
     if (tab === 'view') return [
@@ -2947,12 +2964,16 @@
 
   // ---- drawing annotations for the current sheet
   function updateAnnot() {
-    const P = state.project, inst = state.inst, A = state.A;
-    if (!P || !inst || !A) { view.setAnnot(null); return; }
-    const S = sceneFor(inst);
-    const d = view.dark ? 1 : 0;
+    const inst = state.inst;
+    if (!state.project || !inst || !state.A) { view.setAnnot(null); return; }
+    view.setAnnot(annotFor(inst, sceneFor(inst), { wireNos: show.wireNos, xrefs: show.xrefs, markers: show.markers, live: true, dark: view.dark }));
+  }
+  /** Tags and colours drawn over a sheet. opt.live adds the on-screen extras (check marks, install, compare, trace). */
+  function annotFor(inst, S, opt) {
+    const P = state.project, A = state.A;
+    const d = opt.dark ? 1 : 0;
     const an = { groupColor: new Map(), symMarks: new Map(), tags: [], markers: [] };
-    if (show.wireNos) {
+    if (opt.wireNos) {
       const best = new Map();
       for (const s of S.strokes) {
         if (s.role !== 'wire' || s.g < 0 || s.p.length < 4) continue;
@@ -2969,7 +2990,7 @@
           : { x: x0 + 0.5, y: (y0 + y1) / 2, text: b.no, color: COL.wireNo[d], size: 1, ha: 'left', va: 'center', box: false });
       }
     }
-    if (show.xrefs) for (const sy of S.syms) {
+    if (opt.xrefs) for (const sy of S.syms) {
       const others = A.xref.get(inst.idx + ':' + sy.si);
       if (!others || !others.length) continue;
       const ref = inst.refs[sy.si].ref;
@@ -2977,7 +2998,8 @@
       const b = sy.body || sy.bb;
       an.tags.push({ x: (b[0] + b[2]) / 2, y: b[3] + 0.6, text: '⇄ ' + txt, color: COL.xref[d], size: 0.95, ha: 'center', va: 'top' });
     }
-    if (show.markers) for (const is of shownIssues()) if (is.inst === inst.idx) an.markers.push({ x: is.p[0], y: is.p[1], sev: is.sev, issue: is, current: state.curIssue && state.curIssue.msg === is.msg && state.curIssue.p === is.p });
+    if (opt.live && opt.markers) for (const is of shownIssues()) if (is.inst === inst.idx) an.markers.push({ x: is.p[0], y: is.p[1], sev: is.sev, issue: is, current: state.curIssue && state.curIssue.msg === is.msg && state.curIssue.p === is.p });
+    if (!opt.live) return an;
     const cmp = state.compare && state.compare.diff;
     if (cmp) {
       for (const n of cmp.nets) { const net = P.nets[n.net]; if (net) for (const g of groupsFor(net, inst)) an.groupColor.set(g, COL.net); }
@@ -3002,7 +3024,7 @@
       if (s.step.k < tr.steps.length - 1) for (const g of groupsFor(s.net, inst)) an.groupColor.set(g, COL.ahead[d]);
       for (const st of tr.steps[s.step.k].stops) if ((st.kind === 'conn' || st.kind === 'pin') && st.inst === inst.idx) an.symMarks.set(st.si, { color: COL.stop, dash: true });
     }
-    view.setAnnot(an);
+    return an;
   }
 
   $('btnLayers').addEventListener('click', (e) => {
@@ -3017,6 +3039,7 @@
       { label: 'Steps stop only at connectors', icon: traceBy === 'conn' ? 'i-check' : 'i-none', checked: traceBy === 'conn', run: () => { traceBy = traceBy === 'conn' ? 'section' : 'conn'; Store.pref('traceBy', traceBy); const s = state.sel; if (s && s.step) { s.step.k = 0; applyHighlight(); renderSelectionUI(); } } },
       { label: 'Grid dots', icon: view.showGrid ? 'i-check' : 'i-none', checked: view.showGrid, run: () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); } },
       { sep: true },
+      { label: 'Print / export sheets', icon: 'i-print', run: printDialog },
       { label: 'Reports', icon: 'i-report', run: () => showTab('reports', true) },
       { label: 'Compare revisions', icon: 'i-compare', run: () => showTab('compare', true) }
     ]);
@@ -4048,6 +4071,83 @@
   function pickName(title, names, fn) {
     openDialog(title, [h('div', { class: 'chips unfold' }, ...names.map((n) => h('button', { class: 'chip', onclick: () => { closeDialog(); fn(n); } }, n)))], [{ label: 'CANCEL', run: closeDialog }]);
   }
+  // ---- Print, PDF and SVG export of the sheets (KiCad: File → Print / Plot)
+  let fontCssCache = null;
+  async function embeddedFontCss() {   // the drawing font, inside each SVG so it looks the same anywhere
+    if (fontCssCache !== null) return fontCssCache;
+    const b64 = async (u) => { const b = new Uint8Array(await (await fetch(u)).arrayBuffer()); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+    try {
+      const w = await Promise.all([400, 600].map((n) => b64('fonts/ibm-plex-sans-condensed-latin-' + n + '-normal.woff2')));
+      fontCssCache = w.map((d, i) => `@font-face{font-family:"Plex Condensed";font-weight:${i ? 600 : 400};src:url(data:font/woff2;base64,${d}) format("woff2")}`).join('');
+    } catch (e) { fontCssCache = ''; }
+    return fontCssCache;
+  }
+  const sheetLabel = (inst) => inst.parent ? inst.name : (inst.orphan ? inst.name : 'Root');
+  function outputSheets(which) {
+    const P = state.project;
+    return which === 'this' ? [state.inst] : P.instances.slice().sort((a, b) => a.order - b.order);
+  }
+  async function sheetSVGs(list, o) {
+    const out = [];
+    for (const inst of list) {
+      const S = state.scenes.get(inst.idx) || R.buildScene(state.project, inst);
+      await R.loadSceneImages(S);
+      const an = state.A && (o.wireNos || o.xrefs) ? annotFor(inst, S, { wireNos: o.wireNos, xrefs: o.xrefs }) : null;
+      out.push({ inst, S, svg: R.sceneToSVG(S, { mono: o.mono, annot: an, fontCss: o.fontCss, title: state.project.name + ' · ' + inst.page + ' · ' + sheetLabel(inst) }) });
+    }
+    return out;
+  }
+  async function printSheets(o) {
+    const list = outputSheets(o.which);
+    if (list.length > 3) toast('Preparing ' + list.length + ' sheets…');
+    const sv = await sheetSVGs(list, o);
+    const old = $('printSheets'); if (old) old.remove();
+    const oldCss = $('printSheetsCss'); if (oldCss) oldCss.remove();
+    const sizes = new Map(), wrap = h('div', { id: 'printSheets' });
+    for (const x of sv) {
+      const W = x.S.page[2], H = x.S.page[3], key = 'll' + Math.round(W * 10) + 'x' + Math.round(H * 10);
+      sizes.set(key, [W, H]);
+      const d = h('div', { class: 'psheet' }); d.style.page = key; d.style.width = W + 'mm'; d.style.height = H + 'mm';
+      d.innerHTML = x.svg; wrap.append(d);
+    }
+    const css = h('style', { id: 'printSheetsCss' });
+    css.textContent = [...sizes].map(([k, [W, H]]) => `@page ${k} { size: ${W}mm ${H}mm; margin: 0; }`).join('\n');
+    document.head.append(css); document.body.append(wrap);
+    document.body.classList.add('printing-sheets');
+    try { await document.fonts.ready; } catch (e) { /* print anyway */ }
+    const done = () => { document.body.classList.remove('printing-sheets'); wrap.remove(); css.remove(); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done);
+    setTimeout(() => window.print(), 60);
+  }
+  async function downloadSheetSVGs(o) {
+    const list = outputSheets(o.which), P = state.project;
+    const sv = await sheetSVGs(list, Object.assign({}, o, { fontCss: await embeddedFontCss() }));
+    const base = slug(P.name), name = (x) => `${base}-p${slug(String(x.inst.page))}-${slug(sheetLabel(x.inst))}.svg`;
+    if (sv.length === 1) { download(name(sv[0]), sv[0].svg, 'image/svg+xml'); toast('Downloaded ' + name(sv[0])); return; }
+    const blob = Zip.writeZip(sv.map((x) => ({ path: name(x), text: x.svg })));
+    const a = h('a', { href: URL.createObjectURL(blob), download: base + '-sheets-svg.zip' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('Downloaded ' + sv.length + ' sheets as SVG (zip)');
+  }
+  function printDialog() {
+    const P = state.project; if (!P) return;
+    const n = P.instances.length;
+    const pref = Store.pref('printOpts') || {};
+    const which = seg('Sheets', [['this', 'THIS SHEET'], ['all', n === 1 ? 'ALL (1)' : 'ALL ' + n]], n === 1 ? 'this' : (pref.which || 'all'));
+    const colour = seg('Colour', [['colour', 'COLOUR'], ['mono', 'BLACK & WHITE']], pref.mono ? 'mono' : 'colour');
+    const wn = h('input', { type: 'checkbox', checked: pref.wireNos !== undefined ? pref.wireNos : !!show.wireNos });
+    const xr = h('input', { type: 'checkbox', checked: pref.xrefs !== undefined ? pref.xrefs : !!show.xrefs });
+    const opts = () => { const o = { which: which.get(), mono: colour.get() === 'mono', wireNos: wn.checked, xrefs: xr.checked }; Store.pref('printOpts', o); return o; };
+    const go = (fn) => async () => { const o = opts(); closeDialog(); try { await fn(o); } catch (e) { console.error(e); toast('Could not export: ' + e.message); } };
+    openDialog('PRINT / EXPORT', [
+      h('div', { class: 'field' }, h('label', { text: 'Sheets' }), which.el),
+      h('div', { class: 'field' }, h('label', { text: 'Colour' }), colour.el),
+      h('label', { class: 'check' }, wn, 'Wire numbers'),
+      h('label', { class: 'check' }, xr, 'Cross-references between part units'),
+      h('p', { class: 'hint', text: 'PRINT / PDF opens the system print dialog: pick a printer, or Save as PDF. Each sheet prints on its own page at its KiCad paper size (A4, A3…), true to scale. SVG downloads vector drawings (a zip for several sheets) that open in a browser, Inkscape or Illustrator. Unsaved edits are included.' })
+    ], [{ label: 'CANCEL', run: closeDialog }, { label: 'SVG', run: go(downloadSheetSVGs) }, { label: 'PRINT / PDF', primary: true, run: go(printSheets) }]);
+  }
   function downloadText(name, text) { download(name, text, 'text/plain;charset=utf-8'); toast('Downloaded ' + name); }
 
   // ---- Design blocks (KiCad 9: Shift+B): named, reusable copies of a selection, kept on this device
@@ -4249,13 +4349,13 @@
     ['View and sheets', [
       ['Home', 'Zoom to fit the sheet'], ['Ctrl+Home', 'Zoom to the objects'], ['F1 / F2', 'Zoom in / out at the pointer'], ['+ / -', 'Zoom in / out'],
       ['F4', 'Centre on the pointer'], ['Ctrl+F5', 'Zoom to the selection'], ['Arrows, Shift+Arrows', 'Pan'],
-      ['PgDn / PgUp', 'Next / previous sheet'], ['Alt+Left / Alt+Right', 'Back / forward through sheets you visited'], ['N / Shift+N', 'Next / previous snap grid'], ['Alt+Backspace, Alt+Up', 'Leave sheet (up a sheet)'], ['Ctrl+H', 'Hierarchy (sheet list)']]],
-    ['Project', [['Ctrl+F, /', 'Find'], ['Ctrl+Alt+F', 'Find and replace'], ['Ctrl+Shift+M', 'Measure'], ['Ctrl+S', 'Save edits'], ['Ctrl+F1, ?', 'This list of keys']]]
+      ['PgDn / PgUp', 'Next / previous sheet'], ['Alt+Left / Alt+Right', 'Back / forward through sheets you visited (and the mouse’s back / forward buttons)'], ['N / Shift+N', 'Next / previous snap grid'], ['Alt+Backspace, Alt+Up', 'Leave sheet (up a sheet)'], ['Ctrl+H', 'Hierarchy (sheet list)']]],
+    ['Project', [['Ctrl+F, /', 'Find'], ['Ctrl+Alt+F', 'Find and replace'], ['Ctrl+Shift+M', 'Measure'], ['Ctrl+S', 'Save edits'], ['Ctrl+P', 'Print, PDF or SVG of the sheets'], ['Ctrl+F1, ?', 'This list of keys']]]
   ];
   // Ribbon tooltips show the key
   const RB_KEYS = { 'Copy': 'Ctrl+C', 'Paste': 'Ctrl+V', 'Duplicate': 'Ctrl+D', 'Select all': 'Ctrl+A', 'Delete': 'Del', 'Move': 'M', 'Rotate': 'R',
     'Mirror ↔': 'X', 'Mirror ↕': 'Y', 'Edit': 'E', 'Find': 'Ctrl+F', 'Fit': 'Home', 'Zoom to': 'Ctrl+F5', 'Up a sheet': 'Alt+Backspace', 'Back sheet': 'Alt+←', 'Forward sheet': 'Alt+→', 'Add part': 'A',
-    'Power': 'P', 'Draw wire': 'W', 'Line': 'I', 'Text': 'T', 'Net label': 'L', 'Off-sheet': 'Ctrl+L', 'Sheet port': 'H', 'Junction': 'J', 'No-connect': 'Q', 'Keys': 'Ctrl+F1', 'Find & replace': 'Ctrl+Alt+F', 'Measure': 'Ctrl+Shift+M', 'Swap': 'Alt+S', 'Autoplace': 'O', 'Draw bus': 'B', 'Bus entry': 'Z', 'New sheet': 'S', 'Blocks': 'Shift+B' };
+    'Power': 'P', 'Draw wire': 'W', 'Line': 'I', 'Text': 'T', 'Net label': 'L', 'Off-sheet': 'Ctrl+L', 'Sheet port': 'H', 'Junction': 'J', 'No-connect': 'Q', 'Keys': 'Ctrl+F1', 'Find & replace': 'Ctrl+Alt+F', 'Measure': 'Ctrl+Shift+M', 'Swap': 'Alt+S', 'Autoplace': 'O', 'Draw bus': 'B', 'Bus entry': 'Z', 'New sheet': 'S', 'Blocks': 'Shift+B', 'Print / PDF': 'Ctrl+P' };
   function showHotkeys() {
     const body = HOTKEYS.map(([title, keys]) => h('div', { class: 'hk-group' }, h('h4', { text: title }),
       h('table', { class: 'hk' }, ...keys.map(([k, d]) => h('tr', {}, h('td', {}, ...k.split(/(, | \/ )/).map((p) => /^(, | \/ )$/.test(p) ? p : h('kbd', { text: p }))), h('td', { text: d }))))));
@@ -4356,6 +4456,7 @@
     const P = state.project;
     // ---- with Ctrl / Cmd
     if (ctrl && !alt) {
+      if (k === 'p' && !sh) { done(); printDialog(); return; }
       if (k === 'z') { done(); if (sh) redo(); else undo(); return; }
       if (k === 'y') { done(); redo(); return; }
       if (k === 's') { done(); const c = $('chipEdits'); if (c && !c.hidden) c.click(); else toast('No unsaved edits.'); return; }
