@@ -1013,7 +1013,7 @@
     return ['(kicad_sch', `\t(version ${NEW_SHEET_VERSION})`, '\t(generator "eeschema")', '\t(generator_version "8.0")', `\t(uuid ${qstr(uuid())})`, `\t(paper ${qstr(paper || 'A4')})`, '\t(lib_symbols)', ')'].join('\n') + '\n';
   }
   function sheetPinLines(name, shape, p, side) {
-    const ang = { right: 0, top: 90, left: 180, bottom: 270 }[side] || 180;
+    const ang = { right: 0, top: 90, left: 180, bottom: 270 }[side] ?? 180;   // ?? not ||: right is 0
     const just = side === 'right' || side === 'bottom' ? 'right' : 'left';
     return [`(pin ${qstr(name)} ${shape || 'input'}`, `\t(at ${fnum(p[0])} ${fnum(p[1])} ${ang})`, '\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', `\t\t(justify ${just})`, '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
   }
