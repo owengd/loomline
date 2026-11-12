@@ -203,7 +203,9 @@
   function rubberBand(sp, sheet, moves, movedWires) {
     const text = sheet.text;
     const byWire = new Map();
-    for (const w of sheet.wires) {
+    const isBus = new Set(sheet.buses);
+    const lineFor = (w) => (isBus.has(w) ? busLines : wireLines);
+    for (const w of sheet.wires.concat(sheet.buses)) {
       if (movedWires && movedWires.has(w)) continue;
       let a = w.a, b = w.b, ch = false;
       // Each end follows the first move that starts there (moves can swap places, e.g. a mirror).
@@ -228,8 +230,8 @@
           for (const end of [w.a, w.b]) {
             if (!same(end, m.from)) continue;
             const corner = Math.abs(m.from[1] - m.to[1]) < 1e-3 || Math.abs(m.from[0] - m.to[0]) < 1e-3 ? null : [m.to[0], m.from[1]];
-            if (corner && !clashes(corner, [[m.from, corner], [corner, m.to]])) { occupied.push(corner); ins.push(wireLines(m.from, corner), wireLines(corner, m.to)); }
-            else ins.push(wireLines(m.from, m.to));
+            if (corner && !clashes(corner, [[m.from, corner], [corner, m.to]])) { occupied.push(corner); ins.push(lineFor(w)(m.from, corner), lineFor(w)(corner, m.to)); }
+            else ins.push(lineFor(w)(m.from, m.to));
           }
         }
         continue;
@@ -256,7 +258,7 @@
         occupied.push(corner);
         setXY(sp, xys[0], fixed[0], fixed[1]);
         setXY(sp, xys[1], corner[0], corner[1]);
-        if (!same(corner, moving)) ins.push(wireLines(corner, moving));
+        if (!same(corner, moving)) ins.push(lineFor(w)(corner, moving));
       }
     }
     return ins;
@@ -293,7 +295,7 @@
     for (const p of sym.props) { const pa = atNode(p.src); if (pa) setXY(sp, pa, p.p[0] + d[0], p.p[1] + d[1]); }
   }
 
-  /** Move items by d (mm). items: [{type:'symbol', sym} | {type:'label', label} | {type:'wire', wire} | {type:'junction'|'nc'|'text', item}] */
+  /** Move items by d (mm). items: [{type:'symbol', sym} | {type:'sheet', sheet} | {type:'label', label} | {type:'wire', wire} (a wire or bus) | {type:'junction'|'nc'|'text', item}] */
   function moveItems(sheet, items, d, opts) {
     opts = opts || {};
     const sp = new Splicer(sheet.text);
@@ -314,6 +316,10 @@
         setXY(sp, xys[w.seg], w.a[0] + d[0], w.a[1] + d[1]);
         setXY(sp, xys[w.seg + 1], w.b[0] + d[0], w.b[1] + d[1]);
         moves.push({ from: w.a, to: [w.a[0] + d[0], w.a[1] + d[1]] }, { from: w.b, to: [w.b[0] + d[0], w.b[1] + d[1]] });
+      } else if (it.type === 'sheet') {
+        // A hierarchical sheet: its box, fields and pins move; wires on its pins stretch.
+        shiftCoords(sp, it.sheet.src, d);
+        for (const p of it.sheet.pins) moves.push({ from: p.p, to: [p.p[0] + d[0], p.p[1] + d[1]] });
       } else if (it.type === 'node') {
         shiftCoords(sp, it.node, d);
       } else if (it.item) {

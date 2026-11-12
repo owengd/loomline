@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.6.0';
+  const VERSION = '2.6.1';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -2344,8 +2344,8 @@
 
   // ================================================================== 2.0: multi-select, clipboard, stencils, ribbon
   // ---- multi selection (box select), kept by UUID so it survives the rebuild after each edit
-  const MKINDS = ['sym', 'wire', 'label', 'junction', 'nc', 'graphic'];
-  const emptyMulti = () => ({ sym: new Set(), wire: new Set(), label: new Set(), junction: new Set(), nc: new Set(), graphic: new Set() });
+  const MKINDS = ['sym', 'wire', 'label', 'junction', 'nc', 'graphic', 'sheet', 'bus', 'entry'];
+  const emptyMulti = () => ({ sym: new Set(), wire: new Set(), label: new Set(), junction: new Set(), nc: new Set(), graphic: new Set(), sheet: new Set(), bus: new Set(), entry: new Set() });
   const multiCount = (m) => MKINDS.reduce((n, k) => n + m[k].size, 0);
   function multiResolve(m, inst) {
     inst = inst || state.inst;
@@ -2362,10 +2362,16 @@
     for (const [list, t] of [[sh.graphics, 'G'], [sh.texts, 'T'], [sh.textBoxes, 'B']]) {
       list.forEach((o, i) => { const u = uuidOf(o); if (!u || !m.graphic.has(u)) return; out.its.add(t + i); out.items.push({ type: 'node', node: o.src, item: o }); out.copy.push({ type: 'node', obj: o }); });
     }
+    // Hierarchical sheets (with their pins), buses and bus entries move and delete with the rest;
+    // they aren't copied (a copied sheet would need its own file and instance).
+    if (m.sheet) sh.sheets.forEach((o, i) => { if (!o.uuid || !m.sheet.has(o.uuid)) return; out.its.add('H' + i); o.pins.forEach((_, pi) => out.its.add('HP' + i + ':' + pi)); out.items.push({ type: 'sheet', sheet: o }); out.nocopy = (out.nocopy || 0) + 1; });
+    if (m.bus) sh.buses.forEach((o, i) => { const u = uuidOf(o); if (!u || !m.bus.has(u)) return; out.its.add('U' + i); out.items.push({ type: 'wire', wire: o }); out.nocopy = (out.nocopy || 0) + 1; });
+    if (m.entry) sh.entries.forEach((o, i) => { const u = uuidOf(o); if (!u || !m.entry.has(u)) return; out.its.add('E' + i); out.items.push({ type: 'node', node: o.src, item: o }); out.nocopy = (out.nocopy || 0) + 1; });
     return out;
   }
   function multiSummary(m) {
-    const parts = [[m.sym.size, 'part'], [m.wire.size, 'wire'], [m.label.size, 'label'], [m.junction.size, 'junction'], [m.nc.size, 'no-connect'], [m.graphic.size, 'drawing item']];
+    const parts = [[m.sheet ? m.sheet.size : 0, 'sheet'], [m.sym.size, 'part'], [m.wire.size, 'wire'], [m.bus ? m.bus.size : 0, 'bus'], [m.entry ? m.entry.size : 0, 'bus entry'], [m.label.size, 'label'], [m.junction.size, 'junction'], [m.nc.size, 'no-connect'], [m.graphic.size, 'drawing item']];
+    parts.forEach((x) => { if (x[1] === 'bus' && x[0] > 1) x[1] = 'buse'; if (x[1] === 'bus entry' && x[0] > 1) x[1] = 'bus entrie'; });
     return parts.filter(([n]) => n).map(([n, w]) => n + ' ' + w + (n === 1 ? '' : 's')).join(' · ') || 'Nothing';
   }
   function selectMulti(m) {
@@ -2386,6 +2392,9 @@
     addP('label', sh.labels, (l) => inP(l.p));
     addP('junction', sh.junctions, (j) => inP(j.p));
     addP('nc', sh.noConnects, (n) => inP(n.p));
+    addP('bus', sh.buses, (w) => inP(w.a) && inP(w.b));
+    addP('entry', sh.entries, (e) => inP(e.a) && inP(e.b));
+    for (const s of sh.sheets) if (s.uuid && inP(s.p) && inP([s.p[0] + s.size[0], s.p[1] + s.size[1]])) m.sheet.add(s.uuid);
     const gb = new Map();
     const grow = (it, bb) => { if (!it || !'GTB'.includes(it[0]) || !bb) return; const g = gb.get(it); gb.set(it, g ? [Math.min(g[0], bb[0]), Math.min(g[1], bb[1]), Math.max(g[2], bb[2]), Math.max(g[3], bb[3])] : bb.slice()); };
     for (const x of S.strokes) grow(x.it, x.bb);
@@ -2421,6 +2430,9 @@
     const sh = state.inst.sheet, m = mergeMulti(curMulti(), emptyMulti());
     let k = null, u = null;
     if (hit.type === 'symbol') { k = 'sym'; u = sh.symbols[hit.si].uuid; }
+    else if (hit.type === 'sheet') { k = 'sheet'; u = sh.sheets[hit.idx] && sh.sheets[hit.idx].uuid; }
+    else if (hit.it && /^U\d/.test(hit.it)) { k = 'bus'; u = uuidOf(graphicObj(hit.it, sh)); }
+    else if (hit.it && /^E\d/.test(hit.it)) { k = 'entry'; u = uuidOf(graphicObj(hit.it, sh)); }
     else if (hit.type === 'graphic') { k = 'graphic'; u = uuidOf(graphicObj(hit.it, sh)); }
     else if (hit.type === 'net' && hit.it) {
       const it = itemFromTag(hit.it);
