@@ -636,7 +636,9 @@
         if (!isCableFlag(l)) continue;
         const f = cableFields(l);
         const net = P.nets[inst.netOf[l.group]];
-        const ends = sectionEnds(P, inst, l.node);
+        let ends = [];
+        if (net && net.bus) ends = ['bus ' + plain(net.shortName)];   // a whole cable on a bus: the build tab lists its ends
+        else try { ends = sectionEnds(P, inst, l.node); } catch (e) { ends = []; }
         rows.push({ inst, label: l, f, net, wire: net && A && A.wireNo[net.id] || '', from: ends[0] || '', to: ends.slice(1).join(', '), page: inst.page, zone: zoneOf(inst, l.p), m: lengthMetres(f.Cable_Length) });
       }
     }

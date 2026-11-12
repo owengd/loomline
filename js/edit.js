@@ -163,6 +163,30 @@
     return { path: sheet.path, text: sp.apply() };
   }
 
+  /** Sets one field to the same value on several symbols of a sheet (added hidden if missing;
+   *  an empty value removes it). Used for the Loom field. */
+  function setFieldMany(sheet, syms, name, value) {
+    const text = sheet.text;
+    const sp = new Splicer(text);
+    let n = 0;
+    for (const sym of syms) {
+      const p = sym.props.find((x) => x.name === name);
+      if (p) {
+        if (!value) { const r = nodeRange(text, p.src); sp.replace(r[0], r[1], ''); n++; }
+        else if (p.value !== value) { setTok(sp, p.src, 2, qstr(value)); n++; }
+        continue;
+      }
+      if (!value) continue;
+      const last = sym.props.length ? sym.props[sym.props.length - 1].src : null;
+      const ind = last ? indentAt(text, last.s) : '\t\t';
+      const lines = ['(property ' + qstr(name) + ' ' + qstr(value), `\t(at ${fnum(sym.p[0])} ${fnum(sym.p[1])} 0)`, '\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', '\t\t(hide yes)', '\t)', ')'];
+      sp.insert(last ? last.e : K.find(sym.src, 'uuid').e, '\n' + lines.map((l) => ind + l).join('\n'));
+      n++;
+    }
+    if (!n) return null;
+    return { path: sheet.path, text: sp.apply() };
+  }
+
   function renameLabel(sheet, label, name) {
     const sp = new Splicer(sheet.text);
     setTok(sp, label.src, 1, qstr(name));
@@ -930,13 +954,14 @@
     lines.push(')');
     return lines;
   }
-  /** Adds a cable flag at p (on wire w, which is split there if p is inside it). */
-  function addCableFlag(sheet, w, p, fields, side) {
+  /** Adds a cable flag at p (on wire w, which is split there if p is inside it; a bus is left whole). */
+  function addCableFlag(sheet, w, p, fields, side, onBus) {
     const v8 = !sheet.version || sheet.version >= 20231120;
     const vertical = Math.abs(w.a[0] - w.b[0]) < 1e-3;
     const sp = new Splicer(sheet.text);
     const out = [cableFlagLines(p, vertical, fields, v8, null, null, side || 'a')];
-    if (interior(p, w)) {
+    // A flag anywhere along a bus is on it (as in KiCad), so a bus isn't split.
+    if (!onBus && interior(p, w)) {
       const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
       setXY(sp, xys[w.seg + 1], p[0], p[1]);
       out.push(wireLines(p, w.b));
@@ -1252,7 +1277,7 @@
   root.KiEdit = {
     CABLE_FIELDS, addCableFlag, setCableFields, cableSideOf, cableTextAt,
     GRID, snap, same, fnum, qstr, uuid, connectionPoints,
-    setSymbolFields, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addWireSegs, addLabel, addNoConnect, addJunction, nextReference,
+    setSymbolFields, setFieldMany, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addWireSegs, addLabel, addNoConnect, addJunction, nextReference,
     reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
     setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,

@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.5.0';
+  const VERSION = '2.6.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -599,6 +599,12 @@
     return { items, flags, wires };
   }
   function cableOfSel(s) {
+    // A bus: one cable, its members are the cores in order.
+    if (s && s.type === 'graphic' && s.it && s.it[0] === 'U') {
+      const sh = state.inst.sheet, o = graphicObj(s.it, sh); if (!o) return null;
+      const flags = sh.labels.filter((l) => Loom.isCableFlag(l) && l.group === o.group);
+      return { flags, flag: flags[0] || null, wires: sh.buses.filter((b) => b.group === o.group), bus: o };
+    }
     if (!s || s.type !== 'net' || !s.item) return null;
     const o = itemObj(s.item);
     if (s.item.type === 'label' && o && o.kind === 'directive') return { flags: [o], flag: o, wires: [], label: o };
@@ -697,14 +703,23 @@
       coreSel.disabled = !list.length;
     };
     setCores(cat.find((k) => k.Cable_PN === cur.Cable_PN));
-    rows.unshift(h('div', { class: 'fieldrow' }, h('label', { text: 'Cable list' }), pick), desc, h('div', { class: 'fieldrow' }, h('label', { text: 'Core' }), coreSel));
+    if (c.bus) rows.splice(Loom.CABLE.indexOf('Cable_Colour'), 1);   // each member's colour comes from the cable list
+    rows.unshift(h('div', { class: 'fieldrow' }, h('label', { text: 'Cable list' }), pick), desc);
+    if (!c.bus) rows.splice(2, 0, h('div', { class: 'fieldrow' }, h('label', { text: 'Core' }), coreSel));
     inputs.Cable_PN.addEventListener('change', fill('Cable_PN'));
     inputs.Cable_Type.addEventListener('change', fill('Cable_Type'));
     const net = s.net;
-    const ends = c.flag || (c.wires[0]) ? Loom.sectionEnds(state.project, state.inst, (c.flag || c.wires[0]).node) : [];
-    const where = h('p', { class: 'hint', text: `Section of ${K.plainText(K.unescape(net.shortName))}${ends.length ? ': ' + ends.join(' → ') : ''}. Saved in the schematic as a net class flag on the wire, so KiCad keeps it too.` });
+    let where;
+    if (c.bus) {
+      const bn = busName(c.bus);
+      where = h('p', { class: 'hint', text: `The cable this bus${bn ? ' (' + bn + ')' : ''} carries. Its members are the cores in order (member 1 is core 1), and each takes its colour from the cable list. Saved in the schematic as a net class flag on the bus, so KiCad keeps it too.` });
+    } else {
+      const ends = c.flag || (c.wires[0]) ? Loom.sectionEnds(state.project, state.inst, (c.flag || c.wires[0]).node) : [];
+      where = h('p', { class: 'hint', text: `Section of ${K.plainText(K.unescape(net.shortName))}${ends.length ? ': ' + ends.join(' → ') : ''}. Saved in the schematic as a net class flag on the wire, so KiCad keeps it too.` });
+    }
     const save = () => {
       const f = {}; for (const k of Loom.CABLE) f[k] = inputs[k].value.trim();
+      if (c.bus) f.Cable_Colour = '';
       if (Loom.CABLE.some((k) => f[k])) f.Cable_Label = Loom.cableLabel(f);
       const empty = !Loom.CABLE.some((k) => f[k]);
       closeDialog();
@@ -716,7 +731,7 @@
       if (empty) return;
       const spot = cableSpot(c.wires, f.Cable_Label);
       if (!spot) { banner('err', 'Tap a wire to add cable details.'); return; }
-      run('Cable details', () => E.addCableFlag(sh, spot.w, spot.p, f, spot.side));
+      run('Cable details', () => E.addCableFlag(sh, spot.w, spot.p, f, spot.side, !!c.bus));
     };
     const acts = [{ label: 'CANCEL', run: closeDialog }];
     if (c.flag) acts.unshift({ label: 'REMOVE', run: () => { closeDialog(); run('Remove cable details', () => E.deleteItems(sh, [{ type: 'label', label: c.flag }]), { anchor: null }); } });
@@ -754,7 +769,7 @@
   // ------------------------------------------------------------------ side panel + tool rail
   // The rail on the right (bottom on phones) opens a panel next to it, like the KiCad Editor app.
   const wideLayout = () => window.matchMedia('(min-width: 761px)').matches;
-  const TAB_TITLES = { sheets: 'SHEETS', nets: 'NET NAVIGATOR', parts: 'PARTS', info: 'PROPERTIES', check: 'DESIGN CHECK', install: 'INSTALL', reports: 'REPORTS', compare: 'COMPARE REVISIONS' };
+  const TAB_TITLES = { sheets: 'SHEETS', nets: 'NET NAVIGATOR', parts: 'PARTS', info: 'PROPERTIES', check: 'DESIGN CHECK', install: 'INSTALL', reports: 'REPORTS', build: 'BUILD LOOMS', compare: 'COMPARE REVISIONS' };
   state.tab = 'sheets';
   state.panelOpen = false;
   function setPanel(open) {
@@ -801,6 +816,7 @@
     else if (state.tab === 'check') renderCheck(body);
     else if (state.tab === 'install') renderInstall(body);
     else if (state.tab === 'reports') renderReports(body);
+    else if (state.tab === 'build') renderBuild(body);
     else if (state.tab === 'compare') renderCompare(body);
     else renderProperties(body);
     if (state._keepScroll) body.scrollTop = top;
@@ -1483,6 +1499,7 @@
     if (s.type === 'symbol') {
       const sym = sh.symbols[s.si], ref = s.inst.refs[s.si].ref;
       A.push({ label: 'EDIT', icon: 'i-edit', run: () => fieldsDialog(s.inst, s.si) });
+      A.push({ label: 'LOOM', icon: 'i-tag', run: () => loomDialog([{ inst: s.inst, si: s.si }]) });
       A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'symbol', uuid: sym.uuid, name: ref }) });
       A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate ' + ref, () => E.transformSymbol(sh, sym, 'rotate'), { checkMerges: true }) });
       A.push({ label: 'DUPLICATE', icon: 'i-dup', run: () => copyPart(s.inst, s.si) });
@@ -1530,6 +1547,7 @@
     } else if (s.type === 'multi') {
       const r = multiResolve(s.m), n = r.items.length;
       A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'multi', name: n + ' items' }) });
+      if (r.syms.size) A.push({ label: 'LOOM', icon: 'i-tag', run: () => loomDialog(Array.from(r.syms).map((si) => ({ inst: state.inst, si }))) });
       A.push({ label: 'COPY', icon: 'i-copy2', run: copySel });
       A.push({ label: 'DUPLICATE', icon: 'i-dup', run: duplicateSel });
       A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run(`Delete ${n} item${n === 1 ? '' : 's'}`, () => E.deleteItems(sh, r.items), { anchor: null }) });
@@ -1538,7 +1556,7 @@
       const o = graphicObj(s.it, sh);
       if (o) {
         const name = graphicName(s.it, o);
-        if (s.it[0] === 'U') A.push({ label: 'UNFOLD', icon: 'i-tee', run: () => unfoldDialog(o) });
+        if (s.it[0] === 'U') A.push({ label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) }, { label: 'UNFOLD', icon: 'i-tee', run: () => unfoldDialog(o) });
         if (s.it[0] === 'T') A.push({ label: 'EDIT', icon: 'i-edit', run: () => textDialog({ edit: o }) });
         else if (s.it[0] === 'G') A.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(o) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'graphic', kind: s.it[0], uuid: uuidOf(o), name: name.toLowerCase() }) });
@@ -2825,7 +2843,7 @@
   const propsFollow = () => (propsFollowPref === undefined || propsFollowPref === null ? window.innerWidth >= 1100 : !!propsFollowPref) && wideLayout();
 
   // ---- the ribbon
-  const RTABS = [['home', 'Home'], ['insert', 'Insert'], ['wire', 'Wire'], ['draw', 'Draw'], ['analyse', 'Analyse'], ['view', 'View']];
+  const RTABS = [['home', 'Home'], ['insert', 'Insert'], ['wire', 'Wire'], ['draw', 'Draw'], ['analyse', 'Analyse'], ['build', 'Build'], ['view', 'View']];
   state.rtab = Store.pref('rtab') || 'home';
   // On a phone held sideways there's little height, so the tools start folded (tap a tab to open them).
   var ribbonOpen = Store.pref('ribbonOpen') === undefined || Store.pref('ribbonOpen') === null ? window.innerHeight > 480 : Store.pref('ribbonOpen') !== false;
@@ -2901,6 +2919,18 @@
           { label: 'Snap ' + E.snapGrid() + ' mm', icon: 'i-more', disabled: !P, run: () => { const i = GRIDS.indexOf(E.snapGrid()); stepGrid(i === GRIDS.length - 1 ? -i : 1); renderRibbon(); } }] },
         { title: 'Check & report', tools: [tabBtn('check', 'Design check', 'i-alert'), tabBtn('reports', 'Reports', 'i-report'), tabBtn('install', 'Install log', 'i-install'), tabBtn('compare', 'Compare', 'i-compare')] },
         { title: 'Output', tools: [{ label: 'Print / PDF', icon: 'i-print', disabled: !P, run: printDialog }] }
+      ];
+    }
+    if (tab === 'build') {
+      const B = P ? harness() : null, n = B ? B.looms.length : 0, ch = B ? chosenLooms(B) : [];
+      const mk = (what, label, ic) => ({ label, icon: ic, disabled: !n, run: () => openBuild(what) });
+      return [
+        { title: 'Looms', tools: [
+          { label: 'Looms', icon: 'i-cable', disabled: !P, on: state.panelOpen && state.tab === 'build', run: () => { if (state.panelOpen && state.tab === 'build') setPanel(false); else showTab('build', true); } },
+          act('LOOM', 'Set loom', 'i-tag'), act('CABLE', 'Cable', 'i-cable')] },
+        { title: n ? `Make · ${ch.length === n ? 'all ' + n + ' looms' : ch.map((L) => L.name).join(', ')}` : 'Make', tools: [
+          mk(BUILD_ALL, 'Build pack', 'i-print'), mk({ drawing: true }, 'Drawing', 'i-draw'), mk({ parts: true }, 'Parts', 'i-chip'),
+          mk({ cut: true }, 'Cut list', 'i-line'), mk({ wires: true }, 'Wire list', 'i-wire'), mk({ pinouts: true }, 'Pin-outs', 'i-number')] }
       ];
     }
     if (tab === 'view') return [
@@ -3084,6 +3114,7 @@
       { sep: true },
       { label: 'Print / export sheets', icon: 'i-print', run: printDialog },
       { label: 'Reports', icon: 'i-report', run: () => showTab('reports', true) },
+      { label: 'Build looms', icon: 'i-cable', run: () => showTab('build', true) },
       { label: 'Compare revisions', icon: 'i-compare', run: () => showTab('compare', true) }
     ]);
   });
@@ -3216,6 +3247,8 @@
       } }
   ];
   function reportCsv(rep) {
+    rep = Object.assign({}, rep, { sections: rep.sections.filter((s) => !s.svg && !s.notes && s.cols && s.cols.length) });
+    if (!rep.sections.length) return '';
     if (rep.sections.length === 1) return Loom.csv(rep.sections[0].cols, rep.sections[0].rows);
     const cols = [rep.group || 'Group', ...rep.sections[0].cols];
     const rows = [];
@@ -3236,10 +3269,12 @@
     const table = (s) => h('table', { class: 'rtable' }, h('thead', null, h('tr', null, ...s.cols.map((c) => h('th', { text: c })))),
       h('tbody', null, ...s.rows.slice(0, 5000).map((row) => h('tr', null, ...row.map((v) => h('td', { text: v === null || v === undefined ? '' : String(v) }))))));
     const bodyKids = [h('div', { class: 'rtitle' }, h('h1', { text: r.title }), h('p', { text: `${P.name} · ${revisionText()} · ${new Date().toLocaleString()} · ${rep.count}` }))];
-    for (const s of rep.sections) {
-      if (s.heading) bodyKids.push(h('h2', { class: 'rsec' }, s.heading, s.sub ? h('small', { text: '  ' + s.sub }) : null));
+    rep.sections.forEach((s, i) => {
+      if (s.heading) bodyKids.push(h('h2', { class: 'rsec' + (s.loomHead ? ' rloom' + (i ? ' brk' : '') : '') }, s.heading, s.sub ? h('small', { text: '  ' + s.sub }) : null));
+      if (s.svg) { const d = h('div', { class: 'rdraw' }); d.innerHTML = s.svg; bodyKids.push(d); return; }
+      if (s.notes) { bodyKids.push(s.notes.length ? h('ul', { class: 'rnotes' }, ...s.notes.map((t) => h('li', { text: t }))) : h('p', { class: 'hint', text: s.okText || '' })); return; }
       bodyKids.push(s.rows.length ? table(s) : h('p', { class: 'hint', text: 'Nothing to list.' }));
-    }
+    });
     const wrap = h('div', { class: 'report-wrap', id: 'reportWrap', role: 'dialog', 'aria-label': r.title },
       h('div', { class: 'report-head' },
         h('div', { class: 'titles' }, h('b', { text: r.title.toUpperCase() }), h('small', { text: rep.count })),
@@ -3267,6 +3302,141 @@
           h('button', { class: 'btn small', onclick: () => exportCsv(r) }, icon('i-download'), 'CSV'))));
     }
     body.append(list);
+  }
+
+  // ---- build looms: a loom is every part with the same Loom field; the Build tab makes its pack
+  const BUILD_OUT = [['drawing', 'Flat loom drawing'], ['parts', 'Connectors & parts'], ['cut', 'Cable cut list'], ['wires', 'Wire / termination list'], ['pinouts', 'Pin-out tables']];
+  const BUILD_ALL = { drawing: true, parts: true, cut: true, wires: true, pinouts: true };
+  state.buildSel = new Set(Store.pref('buildSel') || []);
+  let buildOut = Object.assign({}, BUILD_ALL, Store.pref('buildOut') || {});
+  let harnessCache = null;
+  function harness() {
+    if (!state.project || !state.A) return null;
+    if (!harnessCache || harnessCache.A !== state.A) {
+      let B;
+      try { B = Harness.build(state.project, state.A); } catch (e) { console.error(e); B = { looms: [], suggestions: [], error: e.message || String(e) }; }
+      harnessCache = { A: state.A, B };
+    }
+    return harnessCache.B;
+  }
+  // The looms ticked in the panel; none ticked means all of them.
+  const chosenLooms = (B) => { const s = B.looms.filter((L) => state.buildSel.has(L.name)); return s.length ? s : B.looms; };
+  const loomSummary = (L) => [`${L.parts.length} part${L.parts.length === 1 ? '' : 's'}`, `${L.wires.length} wire${L.wires.length === 1 ? '' : 's'}`, `${L.cables.length} cable${L.cables.length === 1 ? '' : 's'}`, L.metres ? `${Math.round(L.metres * 100) / 100} m` : ''].filter(Boolean).join(' · ');
+  function buildReport(what) {
+    const B = harness(), looms = chosenLooms(B);
+    const picked = BUILD_OUT.filter(([k]) => what[k]);
+    const one = looms.length === 1 ? looms[0].name : looms.length + ' looms';
+    return { id: 'loom-' + slug(looms.length === 1 ? looms[0].name : 'pack') + (picked.length === 1 ? '-' + picked[0][0] : ''),
+      title: (picked.length === 1 ? picked[0][1] : 'Loom build pack') + ' · ' + one,
+      make: (P) => {
+        const meta = { project: P.name, revision: revisionText(), date: new Date().toLocaleDateString() };
+        const sections = [];
+        for (const L of looms) {
+          sections.push({ heading: 'Loom ' + L.name, sub: loomSummary(L), loomHead: true, notes: L.issues, okText: 'Nothing missing: every wire has cable details and every cable a length.' });
+          if (what.drawing) sections.push({ heading: L.name + ' · flat drawing', svg: Harness.drawing(L, meta).svg });
+          for (const t of Harness.tables(L, what)) sections.push(Object.assign({}, t, { heading: L.name + ' · ' + t.heading }));
+        }
+        return { group: 'Section', count: looms.map((L) => L.name).join(', '), sections };
+      } };
+  }
+  function openBuild(what) {
+    const B = harness(); if (!B || !B.looms.length) { toast('No looms yet: give connectors a Loom field first.'); return; }
+    openReport(buildReport(what));
+  }
+  function goToPart(e) {
+    const u = e.units[0]; if (!u) return;
+    selectSymbol(u.inst, u.si);
+    zoomToSelection();
+  }
+  function renderBuild(body) {
+    const B = harness();
+    if (!B) { body.append(h('p', { class: 'empty', text: 'Open a project first.' })); return; }
+    body.append(h('p', { class: 'hint', text: 'A loom is every part with the same Loom field: the plugs, and anything built into the loom. Select a connector (or box-select several), then LOOM to put them in one. For cut lengths and core colours, tap a wire or bus, then CABLE.' }));
+    if (B.error) body.append(h('p', { class: 'hint err', text: 'Couldn\'t work out the looms: ' + B.error }));
+    if (!B.looms.length) body.append(h('p', { class: 'empty', text: 'No looms yet.' }));
+    else {
+      const sel = state.buildSel;
+      const save = () => { Store.pref('buildSel', Array.from(sel)); renderRibbon(); };
+      body.append(h('div', { class: 'loom-bar' },
+        h('b', { text: `${B.looms.length} loom${B.looms.length === 1 ? '' : 's'}` }),
+        h('span', { class: 'meta', text: sel.size && B.looms.some((L) => sel.has(L.name)) ? `${B.looms.filter((L) => sel.has(L.name)).length} chosen` : 'none ticked: all are made' }),
+        h('button', { class: 'btn small', onclick: () => { for (const L of B.looms) sel.add(L.name); save(); renderPanel(); } }, 'ALL'),
+        h('button', { class: 'btn small', onclick: () => { sel.clear(); save(); renderPanel(); } }, 'NONE')));
+      const list = h('div', { class: 'cards-list' });
+      for (const L of B.looms) {
+        const cb = h('input', { type: 'checkbox', checked: sel.has(L.name), onchange: (e) => { if (e.target.checked) sel.add(L.name); else sel.delete(L.name); save(); renderPanel(); } });
+        const det = h('details', { class: 'loom-det' }, h('summary', { text: L.issues.length ? `${L.issues.length} to sort out · parts` : 'Ready · parts' }),
+          L.issues.length ? h('ul', { class: 'rnotes' }, ...L.issues.map((t) => h('li', { text: t }))) : null,
+          h('div', { class: 'rows' }, ...L.partRows.map((r) => h('button', { class: 'row', onclick: () => goToPart(r.e) },
+            h('span', { class: 'main' }, h('b', { text: r.ref }), h('span', { text: ' ' + (r.mpn || r.value || '') })),
+            h('span', { class: 'meta', text: [r.mates ? '→ ' + r.mates : '', 'p' + r.page].filter(Boolean).join(' · ') })))));
+        list.append(h('div', { class: 'rcard loom-card' + (L.issues.length ? ' warn' : '') },
+          h('label', { class: 'loom-head' }, cb, h('span', { class: 'ln' }, h('b', { text: L.name }), h('small', { text: loomSummary(L) }))),
+          det,
+          h('div', { class: 'rc-actions' },
+            h('button', { class: 'btn small', onclick: () => { state.buildSel = new Set([L.name]); Store.pref('buildSel', [L.name]); openBuild(buildOut); renderPanel(); renderRibbon(); } }, icon('i-print'), 'BUILD PACK'),
+            h('button', { class: 'btn small', onclick: () => renameLoom(L) }, 'RENAME'))));
+      }
+      body.append(list);
+      body.append(h('h3', { class: 'psub', text: 'Build pack' }));
+      body.append(h('div', { class: 'checks' }, ...BUILD_OUT.map(([k, label]) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: !!buildOut[k], onchange: (e) => { buildOut[k] = e.target.checked; Store.pref('buildOut', buildOut); } }), label))));
+      const ch = chosenLooms(B);
+      body.append(h('div', { class: 'btnrow' },
+        h('button', { class: 'btn primary', onclick: () => { if (!BUILD_OUT.some(([k]) => buildOut[k])) { toast('Tick at least one thing to make.'); return; } openBuild(buildOut); } }, icon('i-print'), ch.length === B.looms.length ? 'MAKE ALL' : `MAKE ${ch.length}`),
+        h('button', { class: 'btn', onclick: () => { const r = buildReport(buildOut); exportCsv(r); } }, icon('i-download'), 'CSV')));
+      body.append(h('p', { class: 'hint', text: 'Opens a printable pack: PRINT / PDF there saves it as a PDF. The CSV has the tables (not the drawing).' }));
+    }
+    if (B.suggestions && B.suggestions.length) {
+      body.append(h('h3', { class: 'psub', text: 'Wired to a loom, but not in one' }));
+      body.append(h('div', { class: 'rows' }, ...B.suggestions.map((sg) => h('div', { class: 'row' },
+        h('span', { class: 'main' }, h('b', { text: sg.ref }), h('span', { text: ' ' + (sg.value || '') })),
+        h('span', { class: 'meta', text: 'p' + sg.page }),
+        h('button', { class: 'btn small', onclick: () => { const e = state.A.parts.get(sg.ref); if (e) loomDialog([{ inst: e.units[0].inst, si: e.units[0].si }], sg.looms[0]); } }, 'ADD TO ' + sg.looms[0])))));
+    }
+  }
+  // Every unit of each part, so a multi-unit connector is in the loom whichever unit was tapped.
+  function loomTargets(targets) {
+    const out = [], seen = new Set();
+    for (const t of targets) {
+      const ref = t.inst.refs[t.si] && t.inst.refs[t.si].ref;
+      const e = ref && state.A.parts.get(ref);
+      for (const u of e ? e.units : [t]) { const k = u.inst.idx + ':' + u.si; if (!seen.has(k)) { seen.add(k); out.push({ inst: u.inst, si: u.si }); } }
+    }
+    return out;
+  }
+  function setLoom(targets, value, label) {
+    const bySheet = new Map();
+    for (const t of loomTargets(targets)) { const sh = t.inst.sheet, sym = sh.symbols[t.si]; let a = bySheet.get(sh); if (!a) bySheet.set(sh, a = []); if (!a.includes(sym)) a.push(sym); }
+    run(label || (value ? 'Loom ' + value : 'Remove from loom'), () => Array.from(bySheet).map(([sh, syms]) => E.setFieldMany(sh, syms, Harness.FIELD, value)).filter(Boolean));
+    if (state.panelOpen && state.tab === 'build') { state._keepScroll = true; renderPanel(); }
+  }
+  function loomDialog(targets, preset) {
+    targets = targets.filter((t) => { const sym = t.inst.sheet.symbols[t.si]; return sym && sym.lib && !sym.lib.power; });
+    if (!targets.length) { toast('Select a connector or part first.'); return; }
+    const B = harness(), names = B ? B.looms.map((L) => L.name) : [];
+    const refs = Array.from(new Set(targets.map((t) => t.inst.refs[t.si].ref))).sort(K.naturalCmp);
+    const cur = Array.from(new Set(targets.map((t) => Harness.loomOfSym(t.inst.sheet.symbols[t.si])))).filter(Boolean);
+    const inp = h('input', { class: 'input', value: preset || (cur.length === 1 ? cur[0] : ''), placeholder: 'e.g. 331-1A', spellcheck: 'false', autocomplete: 'off', autocapitalize: 'characters', list: 'dl_looms' });
+    const save = () => { const v = inp.value.trim(); if (!v) { toast('Type a loom name, or REMOVE.'); return; } closeDialog(); setLoom(targets, v); };
+    openDialog('LOOM', [
+      h('p', { class: 'hint', text: `${refs.slice(0, 12).join(', ')}${refs.length > 12 ? ` and ${refs.length - 12} more` : ''}${cur.length ? ' · now in ' + cur.join(', ') : ''}` }),
+      h('div', { class: 'fieldrow' }, h('label', { text: 'Loom' }), inp, h('datalist', { id: 'dl_looms' }, ...names.map((n) => h('option', { value: n })))),
+      h('p', { class: 'hint', text: 'Saved as a hidden Loom field on each part, so KiCad keeps it. Parts with the same loom name are made as one loom; their wires to each other are its wires.' })],
+      [cur.length ? { label: 'REMOVE', run: () => { closeDialog(); setLoom(targets, ''); } } : null, { label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: save }].filter(Boolean));
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+    setTimeout(() => { inp.focus(); inp.select(); }, 60);
+  }
+  function renameLoom(L) {
+    const inp = h('input', { class: 'input', value: L.name, spellcheck: 'false', autocomplete: 'off', autocapitalize: 'characters' });
+    const save = () => {
+      const v = inp.value.trim(); closeDialog();
+      if (!v || v === L.name) return;
+      const was = state.buildSel.delete(L.name); if (was) { state.buildSel.add(v); Store.pref('buildSel', Array.from(state.buildSel)); }
+      setLoom(L.parts.map((e) => ({ inst: e.units[0].inst, si: e.units[0].si })), v, `Rename loom ${L.name} to ${v}`);
+    };
+    openDialog('RENAME LOOM', [h('div', { class: 'fieldrow' }, h('label', { text: 'Name' }), inp), h('p', { class: 'hint', text: `Changes the Loom field on its ${L.parts.length} parts.` })], [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: save }]);
+    setTimeout(() => { inp.focus(); inp.select(); }, 60);
   }
 
   // ---- revision compare
