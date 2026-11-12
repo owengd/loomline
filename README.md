@@ -186,6 +186,40 @@ The wire list turns each net into individual wires by joining its pins in the sh
 drawing allows (pins on the same sheet first). That matches how a loom is usually made up, but
 check it against the drawing for nets where the order of terminations matters.
 
+### Building looms
+
+The **Build** tab (and **Looms** in the rail) turns the schematic into what a harness builder
+needs, loom by loom.
+
+**Which parts are in a loom.** A loom is every part with the same `Loom` field, e.g.
+`Loom = 331-1A`: the plugs, and anything built into the loom (termination resistors, splices).
+Select a connector, or box-select several, and tap **LOOM** to set it; it is saved as a hidden
+field, so KiCad keeps it and shows it in Symbol Fields. A loom can span any number of sheets.
+Its wires are the connections between its parts: a net that reaches several of them becomes the
+shortest chain between them (parts on one sheet first, then sheet to sheet). A pin on a part
+outside the loom (the socket a plug mates with) is where the loom ends, and is shown as
+"plugs into". The panel lists connectors that are wired to a loom but not in one.
+
+**Cables.** Tap a wire and **CABLE** to tag that core, or tap a **bus** and **CABLE** to tag the
+whole cable it carries: the bus members are the cores in order (`CAN_X[1..4]`: member 1 is
+core 1), each taking its colour from the cable list. The product code and length are all the
+builder needs for the cut list; core colours come from the cable list.
+
+**The build pack.** Tick the looms (none ticked means all) and what to make, then **MAKE**:
+
+| Part | Contents |
+| --- | --- |
+| Flat loom drawing | Each part as a box with its used pins (wire, colour, signal), cables as lines labelled with cable, product code and cut length |
+| Connectors & parts | Reference, value, part number, manufacturer, what it plugs into, and the cable to order (total length per product code) |
+| Cable cut list | One line per cable: product code, cut length, the parts it runs between, cores used and their colours |
+| Wire / termination list | Every wire: from part and pin, to part and pin, cable, core colour, signal |
+| Pin-out tables | For each part: pin, wire, colour, signal, the loom pins it goes to, and the device pin it mates with |
+
+Each loom starts with what's missing (wires without cable details, cables without a length,
+three or more wires in one pin). PRINT / PDF prints each loom from a new page; CSV has the
+tables. The drawing is laid out as a tree from the best-connected part: lengths are the cut
+lengths from the cable details, not drawn to scale.
+
 ### Hydraulic valves
 
 **Add a part → Hydraulics** has the Bucher WS22GD cartridge seat valve (2/2, size 5, normally
@@ -405,6 +439,7 @@ library/              part library (KiCad symbols as gzipped JSON, plus a search
 tools/build-kicad-library.js  rebuilds library/ from a checkout of KiCad's symbol library
 tools/build-loomline-library.js  builds Loomline's own libraries (Beckhoff I/O so far) from tools/*-data.js
 js/loom.js            wire numbers, wire list, cross-references, design check, reports, revision compare
+js/harness.js         looms from the Loom field: wires, cables, cut list, pin-outs and the flat loom drawing
 js/edit.js            schematic edits as text splices: fields, move, rotate, wires, labels, copy and paste, parts dropped into wires
 js/app.js             UI: ribbon, stencil dock, projects, sheets, inspector, search, deep links, editing, saving
 sw.js                 offline app shell
@@ -416,6 +451,7 @@ test/loom-test.js     node test: wire numbers, wire list, checks and self-compar
 test/stencil-test.js  node test: stencils on wires, parts dropped in series, copy and paste, group move
 test/trace-test.js    node test: step-by-step tracing
 test/tools-test.js    node test: annotate, find and replace, autoplace, sheets, buses, box symbols
+test/harness-test.js  node test: looms, wires between loom parts, cable tags on wires and buses, cut list, drawing
 fonts/                IBM Plex (SIL Open Font License, see OFL-LICENSE.txt)
 ```
 
