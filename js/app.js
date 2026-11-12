@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.4.2';
+  const VERSION = '2.5.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -130,7 +130,9 @@
     state.sel = null;
     state.index = buildIndex(project);
     state.compare = null;
+    state.kicadErc = null;
     analyzeNow();
+    restoreKicadErc();
     $('welcome').hidden = true;
     closeDrawers();
     updateHeader();
@@ -2944,11 +2946,50 @@
 
   function analyzeNow() {
     try { state.A = Loom.analyze(state.project); } catch (e) { console.error(e); state.A = null; }
+    if (state.A && state.kicadErc && state.kicadErc.project === state.project.name) state.A.issues = state.A.issues.concat(kicadIssues(state.kicadErc));
     renderCheckBadge();
   }
+  // ---- KiCad ERC report (File → ERC → Save… as .json in KiCad): shown with the app's own check
+  const ercKey = () => 'kicadErc:' + (state.source && state.source.key || state.project.name);
+  const kicadKinds = new Map();   // 'kicad:<type>' -> the description KiCad gives that test
+  function kicadIssues(r) {
+    const P = state.project, out = [];
+    const byPath = new Map(P.instances.map((i) => [i.path, i])), byName = new Map(P.instances.map((i) => [i.namePath, i]));
+    for (const sh of r.sheets) {
+      const inst = byPath.get(sh.uuid_path) || byName.get(sh.path); if (!inst) continue;
+      for (const v of sh.violations) {
+        if (v.severity === 'exclusion' || v.excluded) continue;
+        const it = (v.items || [])[0], p = it && it.pos ? [it.pos.x * r.scale, it.pos.y * r.scale] : [0, 0];
+        const what = (v.items || []).map((x) => x.description).join('; ');
+        kicadKinds.set('kicad:' + v.type, 'KiCad: ' + v.description);
+        out.push({ sev: v.severity === 'error' ? 'error' : 'warn', code: 'kicad:' + v.type, kicadType: v.type, msg: 'KiCad: ' + v.description + (what ? ' – ' + what : ''), inst: inst.idx, page: inst.page, zone: Loom.zoneOf(inst, p), p });
+      }
+    }
+    return out;
+  }
+  function loadKicadErc(file) {
+    file.text().then((text) => {
+      let d; try { d = JSON.parse(text); } catch (e) { banner('err', 'That is not a KiCad ERC report. In KiCad: Inspect → Electrical Rules Checker → Run ERC → Save…, and choose the .json format.'); return; }
+      if (!d || !Array.isArray(d.sheets)) { banner('err', 'That file has no ERC results in it.'); return; }
+      // KiCad writes positions in hundreds of the coordinate unit (mm)
+      const scale = (d.coordinate_units || 'mm') === 'mm' ? 100 : 100 * 25.4 / 1000;
+      const r = { project: state.project.name, file: file.name, date: d.date || '', kicad: d.kicad_version || '', scale, sheets: d.sheets.map((s) => ({ path: s.path, uuid_path: s.uuid_path, violations: s.violations || [] })) };
+      const n = r.sheets.reduce((a, s) => a + s.violations.length, 0);
+      const known = kicadIssues(r).length;
+      state.kicadErc = r; Store.set(ercKey(), r).catch(() => {});
+      analyzeNow(); updateAnnot(); if (state.panelOpen && state.tab === 'check') renderPanel();
+      toast(`Loaded ${known} KiCad ERC result${known === 1 ? '' : 's'}` + (known < n ? ` (${n - known} on sheets this project doesn't have)` : ''));
+    });
+  }
+  function clearKicadErc() { state.kicadErc = null; Store.del(ercKey()).catch(() => {}); analyzeNow(); updateAnnot(); if (state.panelOpen && state.tab === 'check') renderPanel(); }
+  function restoreKicadErc() {
+    const name = state.project && state.project.name; state.kicadErc = null;
+    Store.get(ercKey()).then((r) => { if (r && state.project && state.project.name === name && r.project === name) { state.kicadErc = r; analyzeNow(); updateAnnot(); } }).catch(() => {});
+  }
   // Kinds of problem that can be hidden from the check (some drawings never use no-connect flags)
-  const CHECK_KINDS = { pin: 'Unconnected pins', nc: 'No-connect flag on a connected net', dangling: 'Loose wire ends', label: 'Labels with no pins', global1: 'Global labels used once', annotate: 'Not annotated', value: 'Missing values', dupref: 'Duplicate references', drive: 'Outputs driving each other', sheetpin: 'Sheet pins with no label', hier: 'Labels with no sheet pin', ebus: 'E-bus power' };
-  const checkHide = new Set(Store.pref('checkHide') || []);
+  const CHECK_KINDS = { pin: 'Unconnected pins', nc: 'No-connect flag on a connected net', dangling: 'Loose wire ends', label: 'Labels with no pins', global1: 'Global labels used once', annotate: 'Not annotated', value: 'Missing values', dupref: 'Duplicate references', drive: 'Outputs driving each other', sheetpin: 'Sheet pins with no label', hier: 'Labels with no sheet pin', ebus: 'E-bus power',
+    duppin: 'Same pin number on different nets', names: 'Two names on one wire or bus', busname: 'Bus names KiCad won\u2019t join', lbldangle: 'Labels not on a wire', buswire: 'Wires or pins touching a bus', power: 'Power inputs with no source', unit: 'Units not placed', grid: 'Off the connection grid' };
+  const checkHide = new Set(Store.pref('checkHide') || ['grid']);   // off-grid is noisy on older drawings; on request
   const shownIssues = () => (state.A ? state.A.issues.filter((i) => !checkHide.has(i.code)) : []);
   function toggleCheckKind(code) {
     if (checkHide.has(code)) checkHide.delete(code); else checkHide.add(code);
@@ -3073,12 +3114,13 @@
     // Filter: one switch per kind of problem found (or hidden)
     const counts = new Map();
     for (const is of A.issues) counts.set(is.code, (counts.get(is.code) || 0) + 1);
-    const codes = Object.keys(CHECK_KINDS).filter((c) => counts.has(c) || checkHide.has(c));
+    const kindName = (c) => CHECK_KINDS[c] || kicadKinds.get(c) || c;
+    const codes = Object.keys(CHECK_KINDS).concat(Array.from(kicadKinds.keys())).filter((c) => counts.has(c) || (checkHide.has(c) && CHECK_KINDS[c]));
     if (codes.length) {
       const f = h('div', { class: 'rows' });
       for (const c of codes) {
         const box = h('input', { type: 'checkbox', checked: !checkHide.has(c), onchange: () => toggleCheckKind(c) });
-        f.append(h('label', { class: 'row check-kind' }, h('span', { class: 'main' }, box, h('span', { class: 'nm', text: CHECK_KINDS[c] })), h('span', { class: 'meta', text: String(counts.get(c) || 0) })));
+        f.append(h('label', { class: 'row check-kind' }, h('span', { class: 'main' }, box, h('span', { class: 'nm', text: kindName(c) })), h('span', { class: 'meta', text: String(counts.get(c) || 0) })));
       }
       body.append(section('Show these problems', checkHide.size ? checkHide.size + ' kind' + (checkHide.size === 1 ? '' : 's') + ' hidden' : 'all shown', f));
     }
@@ -3094,7 +3136,12 @@
       if (I.length > 600) rows.append(h('div', { class: 'row' }, h('span', { class: 'meta', text: `${I.length - 600} more in the Design check report` })));
       body.append(section('Problems', String(I.length), rows));
     }
-    body.append(h('p', { class: 'hint', text: 'Checks for unconnected pins, wire ends that touch nothing, labels that reach no pins, global labels used once, sheet pins without a hierarchical label, duplicate or unannotated references, missing values, and outputs driving each other. It covers the common mistakes; run ERC in KiCad before release.' }));
+    const ercFile = h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: (e) => { const f = e.target.files[0]; if (f) loadKicadErc(f); e.target.value = ''; } });
+    const er = state.kicadErc;
+    body.append(section('KiCad ERC report', er ? er.file : 'none loaded',
+      h('p', { class: 'hint', text: er ? `From KiCad ${er.kicad}${er.date ? ', run ' + er.date : ''}. Its results are listed with the app's own, marked “KiCad:”. They don't update as you edit: run ERC in KiCad again and load the new report.` : 'In KiCad: Inspect → Electrical Rules Checker → Run ERC → Save… as .json, then load the file here to see KiCad\u2019s results on the drawing.' }),
+      h('div', { class: 'actions' }, ercFile, h('button', { class: 'btn small', onclick: () => ercFile.click() }, icon('i-file'), er ? 'LOAD A NEWER REPORT' : 'LOAD KICAD REPORT'), er ? h('button', { class: 'btn small', onclick: clearKicadErc }, icon('i-close'), 'CLEAR') : null)));
+    body.append(h('p', { class: 'hint', text: 'Checks as you edit, using KiCad\u2019s ERC rules for: unconnected pins, wire ends that touch nothing, labels that reach no pins or sit on no wire, two names on one wire, bus names KiCad won\u2019t join, wires meeting a bus without an entry, the same pin number on different nets, power inputs with no source, unplaced units, sheet pins without a hierarchical label, duplicate or unannotated references, missing values and outputs driving each other. Load KiCad\u2019s own report to see everything KiCad found.' }));
   }
   function pickIssue(is, zoom) {
     const inst = state.project.instances[is.inst];

@@ -194,6 +194,7 @@
       if (l.kind === 'directive' || !l.text) continue;
       const net = P.nets[inst.netOf[l.group]];
       if (!net || net.bus || net.pins.length || net.hasPower || reported.has(net.id)) continue;
+      if ((inst.sheet.groups[l.group] || { items: [] }).items.length <= 1) continue;   // reported as not on a wire below
       reported.add(net.id);
       add('warn', 'label', `Label ${plain(l.netName || l.text)} connects to no pins`, inst, l.p, { net: net.id });
     }
@@ -233,6 +234,96 @@
           add('warn', 'dangling', 'Wire end is not connected', inst, end);
         }
       }
+    }
+    // ---- KiCad ERC rules (the ones that matter for looms and hierarchy)
+    const sheetDone = new Set();
+    const firstInst = new Map();
+    for (const inst of P.instances) if (!inst.orphan && !firstInst.has(inst.sheet)) firstInst.set(inst.sheet, inst);
+    for (const inst of P.instances) {
+      if (inst.orphan) continue;
+      const sh = inst.sheet, once = !sheetDone.has(sh);
+      sheetDone.add(sh);
+      // Same pin number on different nets (KiCad: duplicate_pins). KiCad joins pins by number in the
+      // netlist, so two pins numbered 1 on different nets short them together on the board/loom.
+      sh.symbols.forEach((sym, si) => {
+        const ref = inst.refs[si].ref;
+        if (!sym.lib || sym.lib.power || ref.startsWith('#')) return;
+        const byNum = new Map();
+        for (const pin of K.symbolPins(sym)) {
+          if (!pin.number) continue;
+          const net = inst.netOf[pin.group];
+          if (!byNum.has(pin.number)) byNum.set(pin.number, []);
+          byNum.get(pin.number).push({ pin, net });
+        }
+        for (const [num, list] of byNum) {
+          if (list.length < 2 || new Set(list.map((x) => x.net)).size < 2) continue;
+          const names = Array.from(new Set(list.map((x) => plain(x.pin.name)).filter((n) => n && n !== '~')));
+          add('error', 'duppin', `${ref} has more than one pin ${num}${names.length ? ' (' + names.join(', ') + ')' : ''} on different nets; KiCad joins them`, inst, list[1].pin.pos, { ref, si, pin: num });
+        }
+      });
+      if (!once) continue;
+      // Labels and buses, once per sheet file
+      sh.groups.forEach((g, gi) => {
+        const labs = inst.groupLabels[gi] || [];
+        // Two different label names on one wire or bus (KiCad: multiple_net_names)
+        const names = Array.from(new Set(labs.filter((l) => l.kind === 'local' || l.kind === 'global').map((l) => l.name)));
+        if (names.length > 1) {
+          const l0 = sh.labels.find((l) => l.group === gi && l.kind !== 'directive');
+          add('warn', 'names', `${names.slice(0, 3).map(plain).join(' and ')} are on the same ${g.bus ? 'bus' : 'wire'}; KiCad keeps only one name`, inst, l0 ? l0.p : [0, 0]);
+        }
+        // Group buses with different prefixes (KiCad joins group members only when the whole name matches)
+        if (g.bus) {
+          const groupsN = labs.map((l) => l.name).filter((n) => /\{.*\}$/.test(n));
+          const prefixes = Array.from(new Set(groupsN.map((n) => n.replace(/\{.*$/, ''))));
+          if (prefixes.length > 1) {
+            const l0 = sh.labels.find((l) => l.group === gi && /\{/.test(l.text)) || null;
+            const sp = !l0 && sh.sheets.map((s) => s.pins.find((p) => p.group === gi)).find(Boolean);
+            add('error', 'busname', `Bus joins ${groupsN.slice(0, 3).map(plain).join(', ')}: KiCad only connects group members whose full names match (${prefixes[0]}.X is not ${prefixes[1]}.X). Use one name, or numbered buses such as NAME[1..4]`, inst, l0 ? l0.p : sp ? sp.p : [0, 0]);
+          }
+        }
+      });
+      // A label that touches nothing (KiCad: label_dangling)
+      for (const l of sh.labels) {
+        if (l.kind === 'directive' || !l.text) continue;
+        const items = sh.groups[l.group] ? sh.groups[l.group].items : [];
+        if (items.length <= 1) add('error', 'lbldangle', `Label ${plain(l.text)} is not on a wire, bus or pin`, inst, l.p);
+      }
+      // Wires and pins that meet a bus without a bus entry (KiCad: bus_to_net_conflict)
+      const entryEnds = [];
+      sh.entries.forEach((e) => { entryEnds.push(e.a, e.b); });
+      const onBus = (p) => sh.buses.some((b) => K.onSegment(p, b.a, b.b));
+      const isEntryEnd = (p) => entryEnds.some((q) => Math.abs(q[0] - p[0]) < 1e-3 && Math.abs(q[1] - p[1]) < 1e-3);
+      for (const w of sh.wires) for (const end of [w.a, w.b]) if (onBus(end) && !isEntryEnd(end)) add('error', 'buswire', 'A wire meets a bus without a bus entry', inst, end);
+      sh.symbols.forEach((sym, si) => { for (const pin of K.symbolPins(sym)) if (onBus(pin.pos)) add('error', 'buswire', `${inst.refs[si].ref} pin ${pin.number} is on a bus`, inst, pin.pos, { ref: inst.refs[si].ref, si }); });
+      // Off the 1.27 mm connection grid (KiCad: endpoint_off_grid)
+      const off = (v) => Math.abs(v / 1.27 - Math.round(v / 1.27)) > 0.002;
+      const offP = (p) => off(p[0]) || off(p[1]);
+      for (const w of sh.wires.concat(sh.buses)) for (const end of [w.a, w.b]) if (offP(end)) { add('warn', 'grid', 'Wire end is off the 1.27 mm connection grid', inst, end); break; }
+      sh.symbols.forEach((sym, si) => { const bad = K.symbolPins(sym).find((pin) => offP(pin.pos)); if (bad) add('warn', 'grid', `${inst.refs[si].ref} pins are off the 1.27 mm connection grid`, inst, bad.pos, { ref: inst.refs[si].ref, si }); });
+    }
+    // Power inputs with nothing to power them (KiCad: power_pin_not_driven)
+    for (const net of P.nets) {
+      if (net.bus || net.hasPower) continue;
+      const ins = net.pins.filter((p) => p.type === 'power_in');
+      if (!ins.length || net.pins.some((p) => p.type === 'power_out')) continue;
+      const p = ins[0], inst = P.instances[p.inst];
+      add('error', 'power', `${p.ref} ${p.number ? 'pin ' + p.number + (p.name && p.name !== '~' && p.name !== p.number ? ' (' + plain(p.name) + ')' : '') : 'pin ' + plain(p.name || '?')} is a power input with no power source on its net`, inst, A.pinPos(p), { ref: p.ref, net: net.id });
+    }
+    // Units of a multi-unit part that are not placed anywhere (KiCad: missing_unit)
+    const units = new Map();
+    for (const inst of P.instances) {
+      if (inst.orphan) continue;
+      inst.sheet.symbols.forEach((sym, si) => {
+        if (!sym.lib || !(sym.lib.unitCount > 1) || sym.lib.power) return;
+        const ref = inst.refs[si].ref; if (/\?$/.test(ref)) return;
+        if (!units.has(ref)) units.set(ref, { inst, sym, si, n: sym.lib.unitCount, have: new Set() });
+        units.get(ref).have.add(inst.refs[si].unit || sym.unit || 1);
+      });
+    }
+    for (const [ref, u] of units) {
+      const missing = [];
+      for (let k = 1; k <= u.n; k++) if (!u.have.has(k)) missing.push(K.unitLetter(k));
+      if (missing.length) add('warn', 'unit', `${ref} has unit${missing.length === 1 ? '' : 's'} ${missing.join(', ')} not placed`, u.inst, u.sym.p, { ref, si: u.si });
     }
     // E-bus budget: terminals' stated consumption against the couplers' and power terminals' supply
     try {
