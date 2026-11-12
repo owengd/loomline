@@ -386,6 +386,23 @@ textarea.input { min-height: 84px; padding: 10px 12px; resize: vertical; font: 1
 .rtable th { position: sticky; top: -12px; background: var(--chrome-2); text-align: left; font-weight: 600; letter-spacing: 0.04em; }
 .rtable th, .rtable td { border: 1px solid var(--line); padding: 5px 8px; vertical-align: top; }
 .rtable tbody tr:nth-child(even) td { background: var(--chrome); }
+.psub { font: 600 13px var(--ui); letter-spacing: 0.05em; margin: 16px 0 6px; text-transform: uppercase; color: var(--fg-dim); }
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.loom-bar { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.loom-bar .meta { flex: 1; color: var(--fg-dim); font-size: 12.5px; }
+.loom-card.warn { border-left: 4px solid #c88a00; }
+.loom-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 4px; cursor: pointer; }
+.loom-head input { width: 22px; height: 22px; flex: none; }
+.loom-head .ln { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.loom-head .ln b { font: 600 15px var(--ui); letter-spacing: 0.03em; }
+.loom-head .ln small { color: var(--fg-dim); font-size: 12.5px; }
+.loom-det { padding: 0 12px 4px 44px; font-size: 12.5px; }
+.loom-det summary { cursor: pointer; color: var(--fg-dim); padding: 4px 0; }
+.rnotes { margin: 4px 0 10px; padding-left: 20px; font-size: 12.5px; line-height: 1.45; }
+.rnotes li { margin: 2px 0; }
+.rdraw { overflow: auto; border: 1px solid var(--line); background: #fff; margin: 6px 0 14px; border-radius: 4px; }
+.rdraw svg { display: block; }
+.rsec.rloom { font-size: 17px; margin-top: 26px; border-bottom: 2px solid var(--line); padding-bottom: 4px; }
 #printSheets { display: none; }
 @media print {
   html:has(body.printing-sheets), body.printing-sheets { height: auto; overflow: visible; background: #fff; }
@@ -403,6 +420,9 @@ textarea.input { min-height: 84px; padding: 10px 12px; resize: vertical; font: 1
   body.printing .rtable th { position: static; background: #eee; }
   body.printing .rtable td, body.printing .rtable th { border-color: #999; color: #000; background: #fff; }
   body.printing .rsec { break-after: avoid; }
+  body.printing .rsec.brk { break-before: page; }
+  body.printing .rdraw { border: 0; overflow: visible; break-inside: avoid; }
+  body.printing .rdraw svg { width: 100%; height: auto; }
   body.printing tr { break-inside: avoid; }
   @page { margin: 12mm; }
 }
