@@ -234,7 +234,16 @@ CHECK in the rail runs after every edit and marks problems on the drawing (a red
 error, an amber triangle a warning). It looks for: unconnected pins, wire ends that touch
 nothing, labels that reach no pins, global labels used only once, sheet pins without a matching
 hierarchical label (and the reverse), duplicate or unannotated references, missing values, and
-outputs driving each other. It covers the common mistakes; run ERC in KiCad before release.
+outputs driving each other. It also follows KiCad's ERC rules for: the same pin number on
+different nets, two label names on one wire, group buses KiCad won't join (`A{X Y}` and `B{X Y}`
+on one bus; use one name or numbered buses such as `A[1..4]`), labels on no wire, wires or pins
+meeting a bus without a bus entry, power inputs with no source, unplaced units, and ends off the
+1.27 mm grid (hidden until you tick it). Each kind can be hidden.
+
+**KiCad's own report:** in KiCad, Inspect → Electrical Rules Checker → Run ERC → Save… as `.json`,
+then in CHECK use **LOAD KICAD REPORT**. KiCad's results join the list (marked "KiCad:", one kind per
+KiCad test) and are marked on the drawing; they're kept on the device until you clear them or load
+a newer report, and don't change as you edit.
 
 ## 7. Compare revisions
 

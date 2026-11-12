@@ -1,5 +1,5 @@
 /* Offline app shell. Schematic data is cached separately in IndexedDB by the app. */
-const CACHE = 'loomline-v2.4.2';
+const CACHE = 'loomline-v2.5.0';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'js/kicad-core.js', 'js/render.js', 'js/storage.js', 'js/zip.js', 'js/edit.js', 'js/loom.js', 'js/cables.js', 'js/github.js', 'js/app.js',
