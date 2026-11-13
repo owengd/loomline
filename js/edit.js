@@ -200,6 +200,47 @@
   }
 
   // Move wire endpoints from old to new positions, keeping wires orthogonal by adding a corner.
+  // Right-angle paths for stretched and bridging wires: an L either way round, else a Z with
+  // its middle leg moved out step by step, never landing on or running along anything else.
+  function makeRouter(sheet, moves, skip) {
+    const occupied = [];
+    for (const c of connectionPoints(sheet)) if (!moves.some((m) => same(m.from, c.p))) occupied.push(c.p);
+    for (const m of moves) occupied.push(m.to);
+    const lines = sheet.wires.concat(sheet.buses).filter((w) => !(skip && skip.has(w)));
+    const overlaps = (u, v) => lines.some((w) => {
+      const horiz = Math.abs(u[1] - v[1]) < 1e-3 && Math.abs(w.a[1] - w.b[1]) < 1e-3 && Math.abs(u[1] - w.a[1]) < 1e-3;
+      const vert = Math.abs(u[0] - v[0]) < 1e-3 && Math.abs(w.a[0] - w.b[0]) < 1e-3 && Math.abs(u[0] - w.a[0]) < 1e-3;
+      if (!horiz && !vert) return false;
+      const k = horiz ? 0 : 1;
+      const lo = Math.max(Math.min(u[k], v[k]), Math.min(w.a[k], w.b[k])), hi = Math.min(Math.max(u[k], v[k]), Math.max(w.a[k], w.b[k]));
+      return hi - lo > 1e-3;
+    });
+    const bad = (pts) => {
+      for (let i = 1; i < pts.length - 1; i++) if (occupied.some((q) => same(q, pts[i]))) return true;
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const u = pts[i], v = pts[i + 1];
+        if (occupied.some((q) => K.onSegment(q, u, v) && !same(q, u) && !same(q, v))) return true;
+        if (overlaps(u, v)) return true;
+      }
+      return false;
+    };
+    const clean = (pts) => pts.filter((p, i) => i === 0 || !same(p, pts[i - 1]));
+    return {
+      path(from, to, horizFirst) {
+        if (Math.abs(from[0] - to[0]) < 1e-3 || Math.abs(from[1] - to[1]) < 1e-3) return [from, to];
+        const c1 = [to[0], from[1]], c2 = [from[0], to[1]];
+        const cands = horizFirst === false ? [[from, c2, to], [from, c1, to]] : [[from, c1, to], [from, c2, to]];
+        const mx = snap((from[0] + to[0]) / 2), my = snap((from[1] + to[1]) / 2);
+        for (let k = 0; k <= 12; k++) for (const sgn of k ? [1, -1] : [1]) {
+          const x = mx + sgn * k * GRID * 2, y = my + sgn * k * GRID * 2;
+          cands.push([from, [x, from[1]], [x, to[1]], to], [from, [from[0], y], [to[0], y], to]);
+        }
+        for (const c of cands) if (!bad(c)) { const out = clean(c); for (const q of out) occupied.push(q); return out; }
+        return null;
+      },
+      claim(pts) { for (const q of pts) occupied.push(q); }
+    };
+  }
   function rubberBand(sp, sheet, moves, movedWires) {
     const text = sheet.text;
     const byWire = new Map();
@@ -215,12 +256,10 @@
       if (ch) byWire.set(w, [a, b]);
     }
     const ins = [];
-    // Points a new corner must not land on, or it would short something.
-    const occupied = [];
-    for (const c of connectionPoints(sheet)) if (!moves.some((m) => same(m.from, c.p))) occupied.push(c.p);
-    for (const m of moves) occupied.push(m.to);
-    for (const [, [a, b]] of byWire) occupied.push(a, b);
-    const clashes = (p, segs) => occupied.some((q) => same(q, p)) || segs.some(([u, v]) => occupied.some((q) => K.onSegment(q, u, v) && !same(q, u) && !same(q, v)));
+    // Corners must not land on (or run along) anything else, or they'd short it.
+    const router = makeRouter(sheet, moves, new Set([...(movedWires || []), ...byWire.keys()]));
+    for (const [, [a, b]] of byWire) router.claim([a, b]);
+    const emit = (w, pts) => { for (let i = 0; i + 1 < pts.length; i++) ins.push(lineFor(w)(pts[i], pts[i + 1])); };
     // Something already connects in the middle of this wire (a label, a T-junction, a pin...)?
     const midConnected = (w) => connectionPoints(sheet).some((c) => interior(c.p, w));
     for (const [w, [a, b]] of byWire) {
@@ -229,9 +268,7 @@
         for (const m of moves) {
           for (const end of [w.a, w.b]) {
             if (!same(end, m.from)) continue;
-            const corner = Math.abs(m.from[1] - m.to[1]) < 1e-3 || Math.abs(m.from[0] - m.to[0]) < 1e-3 ? null : [m.to[0], m.from[1]];
-            if (corner && !clashes(corner, [[m.from, corner], [corner, m.to]])) { occupied.push(corner); ins.push(lineFor(w)(m.from, corner), lineFor(w)(corner, m.to)); }
-            else ins.push(lineFor(w)(m.from, m.to));
+            emit(w, router.path(m.from, m.to, Math.abs(w.a[1] - w.b[1]) < 1e-3) || [m.from, m.to]);
           }
         }
         continue;
@@ -248,17 +285,16 @@
         const wasHoriz = Math.abs(w.a[1] - w.b[1]) < 1e-3;
         const fixedA = same(a, w.a);
         const fixed = fixedA ? a : b, moving = fixedA ? b : a;
-        const corner = wasHoriz ? [moving[0], fixed[1]] : [fixed[0], moving[1]];
-        if (clashes(corner, [[fixed, corner], [corner, moving]])) {
-          // A tidy corner would touch something else, so leave this wire diagonal (still connected).
+        const pts = router.path(fixed, moving, wasHoriz);
+        if (!pts) {
+          // No clear right-angle path: leave this wire diagonal (still connected).
           setXY(sp, xys[0], a[0], a[1]);
           setXY(sp, xys[1], b[0], b[1]);
           continue;
         }
-        occupied.push(corner);
-        setXY(sp, xys[0], fixed[0], fixed[1]);
-        setXY(sp, xys[1], corner[0], corner[1]);
-        if (!same(corner, moving)) ins.push(lineFor(w)(corner, moving));
+        setXY(sp, xys[0], pts[0][0], pts[0][1]);
+        setXY(sp, xys[1], pts[1][0], pts[1][1]);
+        emit(w, pts.slice(1));
       }
     }
     return ins;
@@ -339,13 +375,14 @@
       // A moved end that sat on the middle of a wire that stays put gets a bridge back to it.
       const isBusW = new Set(sheet.buses);
       const bridged = [], stay = new Set(), moving = new Set(items.map((it) => it.item).filter(Boolean));
+      const bridgeRouter = makeRouter(sheet, moves, movedWires);
       for (const m of moves.slice()) {
         if (fixed.some((w) => same(w.a, m.from) || same(w.b, m.from))) continue;   // stretched below
         const host = fixed.find((w) => interior(m.from, w));
         if (!host) continue;
         const lines = isBusW.has(host) ? busLines : wireLines;
-        const corner = Math.abs(m.from[1] - m.to[1]) < 1e-3 || Math.abs(m.from[0] - m.to[0]) < 1e-3 ? null : [m.to[0], m.from[1]];
-        if (corner) extra.push(lines(m.from, corner), lines(corner, m.to)); else extra.push(lines(m.from, m.to));
+        const pts = bridgeRouter.path(m.from, m.to, Math.abs(host.a[1] - host.b[1]) >= 1e-3) || [m.from, [m.to[0], m.from[1]], m.to];
+        for (let i = 0; i + 1 < pts.length; i++) if (!same(pts[i], pts[i + 1])) extra.push(lines(pts[i], pts[i + 1]));
         bridged.push(m.from);
         const keep = sheet.junctions.find((j) => same(j.p, m.from) && !moving.has(j));
         if (keep) stay.add(keep); else extra.push(junctionLines(m.from));
