@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.6.6';
+  const VERSION = '2.6.7';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1595,8 +1595,9 @@
         if (wno && !s.net.named) A.push({ label: 'FIX NO.', icon: 'i-number', run: () => fixWireNumber(o, wno) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'wire', uuid: uuidOf(o), name: 'wire' }) });
         // A run of plain wire that joins buses (or bus-named pins and labels) should be a bus.
+        // Turn this run of wire into a bus (always offered; it's what a run joining buses should be).
         const runW = sh.wires.filter((w) => w.group === o.group);
-        if (runW.some((w) => busAt(sh, w.a) || busAt(sh, w.b))) A.push({ label: 'MAKE BUS', icon: 'i-wire', run: () => run('Make bus', () => E.setLineKind(sh, runW, true), { anchor: null }) });
+        A.push({ label: 'MAKE BUS', icon: 'i-wire', run: () => run('Make bus', () => E.setLineKind(sh, runW, true), { anchor: null }) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete wire', () => E.deleteItems(sh, [{ type: 'wire', wire: o }]), { anchor: null }) });
       } else if (it && (it.type === 'junction' || it.type === 'nc') && o) {
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + (it.type === 'nc' ? 'no-connect flag' : 'junction'), () => E.deleteItems(sh, [{ type: it.type, item: o }]), { anchor: null }) });
@@ -1632,7 +1633,8 @@
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + name.toLowerCase(), () => E.deleteNode(sh, o.src), { anchor: null }) });
         if (!uuidOf(o) || /^[UE]/.test(s.it)) { const mi = A.findIndex((x) => x.label === 'MOVE'); if (mi >= 0) A.splice(mi, 1); }
         // A bus piece moves like a wire: it slides sideways and the lines joined to it follow.
-        if (s.it[0] === 'U' && uuidOf(o)) A.splice(A.findIndex((x) => x.label === 'DELETE'), 0, { label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'bus', uuid: uuidOf(o), name: 'bus' }) });
+        if (s.it[0] === 'U' && uuidOf(o)) A.splice(A.findIndex((x) => x.label === 'DELETE'), 0, { label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'bus', uuid: uuidOf(o), name: 'bus' }) },
+          { label: 'MAKE WIRE', icon: 'i-wire', run: () => run('Make wire', () => E.setLineKind(sh, sh.buses.filter((b) => b.group === o.group), false), { anchor: null }) });
       }
     }
     return A;
