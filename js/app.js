@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.6.3';
+  const VERSION = '2.6.4';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1467,9 +1467,12 @@
       if (on) target = { type: 'multi', name: r.items.length + ' items' };
     } else if (s.type === 'symbol' && s.inst === state.inst && hit.type === 'symbol' && hit.si === s.si) {
       const sym = sh.symbols[s.si]; target = { type: 'symbol', uuid: sym.uuid, name: s.inst.refs[s.si].ref };
-    } else if (s.type === 'net' && s.item && hit.type === 'net' && hit.it) {
+    } else if (s.type === 'net' && hit.type === 'net' && hit.it) {
+      // Any wire of the selected net can be grabbed and dragged; a label only if it is the tapped one.
       const it = itemFromTag(hit.it), o = it && itemObj(it);
-      if (it && o && it.type === s.item.type && it.idx === s.item.idx && (it.type === 'wire' || it.type === 'label')) target = { type: it.type, uuid: uuidOf(o), name: it.type === 'wire' ? 'wire' : 'label ' + o.text };
+      const sameNet = state.project.nets[state.inst.netOf[hit.g]] === s.net;
+      if (it && o && it.type === 'wire' && sameNet) target = { type: 'wire', uuid: uuidOf(o), name: 'wire' };
+      else if (it && o && s.item && it.type === 'label' && it.type === s.item.type && it.idx === s.item.idx) target = { type: 'label', uuid: uuidOf(o), name: 'label ' + o.text };
     }
     if (!target) return null;
     state.moveTarget = target;
@@ -1477,7 +1480,18 @@
     return { move: h.move, end: (d) => { h.end(d); if (state.mode === 'move') setMode('select'); renderStatus(); }, cancel: () => { view.preview = null; view.redraw(); } };
   }
   function moveHandler(target) {
-    const snapD = (d) => [E.snap(d[0]), E.snap(d[1])];
+    // A single wire segment slides sideways only (a horizontal one up/down, a vertical one left/right),
+    // so the wires either side just get longer or shorter and everything stays square.
+    const axis = () => {
+      const t = state.moveTarget;
+      if (!t || t.type !== 'wire' || !state.inst) return null;
+      const w = state.inst.sheet.wires.find((x) => uuidOf(x) === t.uuid);
+      if (!w) return null;
+      if (Math.abs(w.a[1] - w.b[1]) < 1e-3) return 'y';
+      if (Math.abs(w.a[0] - w.b[0]) < 1e-3) return 'x';
+      return null;
+    };
+    const snapD = (d) => { const ax = axis(); const r = [E.snap(d[0]), E.snap(d[1])]; if (ax === 'y') r[0] = 0; else if (ax === 'x') r[1] = 0; return r; };
     const tagFor = () => {
       const t = state.moveTarget, sh = state.inst.sheet;
       if (t.type === 'multi') { const r = state.sel && state.sel.type === 'multi' ? multiResolve(state.sel.m) : { syms: new Set(), its: new Set() }; return { sym: -1, syms: r.syms, its: r.its }; }

@@ -241,6 +241,91 @@
       claim(pts) { for (const q of pts) occupied.push(q); }
     };
   }
+  // Wires that end on something that moved are re-drawn rather than stretched: each run of
+  // plain wire (segments meeting end to end with nothing else at the joins) from the moved end
+  // back to the first fixed point it reaches (a pin, junction, label, T or bend with a branch)
+  // is replaced by one tidy right-angle path. So repeated moves don't pile up little jogs.
+  function rerouteChains(sp, sheet, moves, movedWires) {
+    const text = sheet.text;
+    const isBus = new Set(sheet.buses);
+    const all = sheet.wires.concat(sheet.buses);
+    const fixedW = all.filter((w) => !(movedWires && movedWires.has(w)));
+    const key = (p) => Math.round(p[0] * 1000) + ',' + Math.round(p[1] * 1000);
+    const moveAt = (p) => moves.find((m) => same(m.from, p));
+    // What sits at each point, other than wire ends
+    const other = new Map();
+    const bump = (p) => other.set(key(p), (other.get(key(p)) || 0) + 1);
+    for (const c of connectionPoints(sheet)) if (c.kind !== 'wire') bump(c.p);
+    for (const b of sheet.buses) { bump(b.a); bump(b.b); }   // bus ends count as joins for wires (and vice versa via the kind check below)
+    const ends = new Map();
+    for (const w of all) for (const p of [w.a, w.b]) { const k = key(p); let a = ends.get(k); if (!a) ends.set(k, a = []); a.push(w); }
+    const midHit = (w) => connectionPoints(sheet).some((c) => interior(c.p, w)) || all.some((o) => o !== w && (interior(o.a, w) || interior(o.b, w)));
+    const done = new Set();
+    const ins = [];
+    const del = (w) => { const r = nodeRange(text, w.src); sp.replace(r[0], r[1], ''); };
+    const router = makeRouter(sheet, moves, new Set(all));
+    const emit = (bus, pts) => { for (let i = 0; i + 1 < pts.length; i++) if (!same(pts[i], pts[i + 1])) ins.push((bus ? busLines : wireLines)(pts[i], pts[i + 1])); };
+    const plainJoin = (p, w, bus) => {
+      // exactly two ends of this kind meet at p, nothing else is there, and nothing moves there
+      const list = (ends.get(key(p)) || []).filter((o) => isBus.has(o) === bus);
+      if (list.length !== 2 || list.some((o) => movedWires && movedWires.has(o))) return null;
+      if (moveAt(p)) return null;
+      const extra = (other.get(key(p)) || 0) - (bus ? list.length : 0);
+      if (extra > 0) return null;
+      if (all.some((o) => interior(p, o))) return null;
+      return list.find((o) => o !== w) || null;
+    };
+    for (const m of moves) {
+      for (const w0 of fixedW) {
+        if (done.has(w0)) continue;
+        const atA = same(w0.a, m.from), atB = same(w0.b, m.from);
+        if (!atA && !atB) continue;
+        const bus = isBus.has(w0);
+        // A wire with something joined part way along keeps its place: bridge the moved end instead.
+        if (midHit(w0)) {
+          const pts = router.path(m.from, m.to, Math.abs(w0.a[1] - w0.b[1]) < 1e-3) || [m.from, m.to];
+          emit(bus, pts);
+          continue;
+        }
+        // Walk the chain away from the moved end.
+        const chain = [w0];
+        let far = atA ? w0.b : w0.a, cur = w0;
+        // Only the last few segments near the moved end: long routes the user drew stay as they are.
+        for (let n = 0; n < 2; n++) {
+          const next = plainJoin(far, cur, bus);
+          if (!next || chain.includes(next) || midHit(next)) break;
+          chain.push(next);
+          far = same(next.a, far) ? next.b : next.a;
+          cur = next;
+        }
+        for (const w of chain) done.add(w);
+        const farMove = moveAt(far);
+        if (farMove && Math.abs(farMove.to[0] - farMove.from[0] - (m.to[0] - m.from[0])) < 1e-6 && Math.abs(farMove.to[1] - farMove.from[1] - (m.to[1] - m.from[1])) < 1e-6) {
+          // both ends move together: the whole run just shifts
+          const d = [m.to[0] - m.from[0], m.to[1] - m.from[1]];
+          for (const w of chain) { const xys = K.findAll(K.find(w.src, 'pts'), 'xy'); setXY(sp, xys[w.seg], w.a[0] + d[0], w.a[1] + d[1]); setXY(sp, xys[w.seg + 1], w.b[0] + d[0], w.b[1] + d[1]); }
+          continue;
+        }
+        const start = farMove ? farMove.to : far;
+        if (same(start, m.to)) { for (const w of chain) del(w); continue; }
+        // Keep the direction the run leaves its fixed end in.
+        const last = chain[chain.length - 1];
+        const lastHoriz = Math.abs(last.a[1] - last.b[1]) < 1e-3;
+        // If the run already is a right-angle path that just needs a stretch, a single segment that
+        // stays straight is cheapest; otherwise re-draw it.
+        const pts = router.path(start, m.to, lastHoriz);
+        if (!pts) {
+          if (chain.length === 1) { const xys = K.findAll(K.find(w0.src, 'pts'), 'xy'); const end = atA ? w0.seg : w0.seg + 1; setXY(sp, xys[end], m.to[0], m.to[1]); }
+          else { for (const w of chain) del(w); emit(bus, [start, m.to]); }
+          continue;
+        }
+        if (chain.length === 1 && pts.length === 2) { const xys = K.findAll(K.find(w0.src, 'pts'), 'xy'); const end = atA ? w0.seg : w0.seg + 1; const other2 = atA ? w0.seg + 1 : w0.seg; setXY(sp, xys[end], m.to[0], m.to[1]); setXY(sp, xys[other2], start[0], start[1]); continue; }
+        for (const w of chain) del(w);
+        emit(bus, pts);
+      }
+    }
+    return ins;
+  }
   function rubberBand(sp, sheet, moves, movedWires) {
     const text = sheet.text;
     const byWire = new Map();
@@ -387,7 +472,7 @@
         const keep = sheet.junctions.find((j) => same(j.p, m.from) && !moving.has(j));
         if (keep) stay.add(keep); else extra.push(junctionLines(m.from));
       }
-      extra = extra.concat(rubberBand(sp, sheet, moves, movedWires));
+      extra = extra.concat(rerouteChains(sp, sheet, moves, movedWires));
       dragAttached(sp, sheet, moves, new Set(items.map((it) => it.item || it.label || it.sym).filter(Boolean).concat(Array.from(stay))));
     }
     if (extra.length) { const ip = insertPoint(sheet); sp.insert(ip, extra.map((l) => block(l, '\t')).join('')); }
@@ -434,7 +519,7 @@
     const moves = oldPins.map((p, i) => ({ from: p.pos, to: newPins[i].pos })).filter((mv) => !same(mv.from, mv.to));
     let extra = [];
     if (opts.keepWires !== false && moves.length) {
-      extra = rubberBand(sp, sheet, moves);
+      extra = rerouteChains(sp, sheet, moves, new Set());
       dragAttached(sp, sheet, moves, new Set([sym]));
     }
     if (extra.length) sp.insert(insertPoint(sheet), extra.map((l) => block(l, '\t')).join(''));
