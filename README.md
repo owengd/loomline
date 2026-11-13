@@ -131,6 +131,8 @@ edit to the schematic text, so the rest of the file stays exactly as KiCad wrote
 | Move a wire | Tap a wire to select its net, then press on any straight piece of that net and drag: a horizontal piece slides up or down, a vertical one left or right, and the wires either side just lengthen or shorten |
 | Copy and paste | Select one thing or a box of things → **Copy**, then **Paste** and tap where the top-left of the copy goes, on this sheet or any other (even another project). Parts get the next free references, and their symbols come along. `Ctrl+C`, `Ctrl+V`, `Ctrl+D` (duplicate), `Ctrl+A` and `Delete` work on a keyboard |
 | Draw a wire | Wire → **Draw wire**, then tap points; it snaps to the 1.27 mm grid and finishes when it lands on a pin or wire. **FLIP** swaps the corner, **BACK** removes the last point |
+| Wires and buses that match | A run drawn from a bus, a bus label or a bus sheet pin (a name like `CAN[1..4]`) is drawn as a bus by itself. A new wire or bus takes the colour, width and line type of the one it starts or ends on, extra taps along a straight run don't leave joints, and carrying straight on from the free end of a line makes it one longer line. A plain wire run that joins buses gets **MAKE BUS** to turn it into a bus |
+| Moving a label | A net label keeps its wire when it moves: the wire is re-drawn to its new spot, so it stays on the net |
 | Add a label | Insert → **Net label**, **Off-sheet** (a KiCad global label: joins the net across sheets) or **Sheet port** (hierarchical label), then tap a wire or pin and type the name |
 | No-connect flag | Tap a pin → **NO-CONN** |
 | Undo / redo | The arrows in the top bar, or `Ctrl+Z` / `Ctrl+Y` |
