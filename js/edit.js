@@ -79,8 +79,12 @@
   function block(lines, ind) { return lines.map((l) => ind + l).join('\n') + '\n'; }
 
   // ------------------------------------------------------------------ templates (KiCad 8/9 style)
-  function wireLines(a, b, id) {
-    return ['(wire', '\t(pts', `\t\t(xy ${fnum(a[0])} ${fnum(a[1])}) (xy ${fnum(b[0])} ${fnum(b[1])})`, '\t)', '\t(stroke', '\t\t(width 0)', '\t\t(type default)', '\t)', `\t(uuid ${qstr(id || uuid())})`, ')'];
+  // A wire or bus stroke: width, line type and colour (parsed as { w, type, color }); none = KiCad's default look.
+  function lineStroke(st) {
+    return ['\t(stroke', `\t\t(width ${fnum(st && st.w || 0)})`, `\t\t(type ${st && st.type || 'default'})`].concat(st && st.color && st.color.length ? [`\t\t(color ${st.color.join(' ')})`] : []).concat(['\t)']);
+  }
+  function wireLines(a, b, id, st) {
+    return ['(wire', '\t(pts', `\t\t(xy ${fnum(a[0])} ${fnum(a[1])}) (xy ${fnum(b[0])} ${fnum(b[1])})`, '\t)', ...lineStroke(st), `\t(uuid ${qstr(id || uuid())})`, ')'];
   }
   function junctionLines(p) {
     return ['(junction', `\t(at ${fnum(p[0])} ${fnum(p[1])})`, '\t(diameter 0)', '\t(color 0 0 0 0)', `\t(uuid ${qstr(uuid())})`, ')'];
@@ -264,7 +268,7 @@
     const ins = [];
     const del = (w) => { const r = nodeRange(text, w.src); sp.replace(r[0], r[1], ''); };
     const router = makeRouter(sheet, moves, new Set(all));
-    const emit = (bus, pts) => { for (let i = 0; i + 1 < pts.length; i++) if (!same(pts[i], pts[i + 1])) ins.push((bus ? busLines : wireLines)(pts[i], pts[i + 1])); };
+    const emit = (bus, pts, st) => { pts = simplifyPolyline(pts); for (let i = 0; i + 1 < pts.length; i++) ins.push(bus ? busLines(pts[i], pts[i + 1], st) : wireLines(pts[i], pts[i + 1], null, st)); };
     const plainJoin = (p, w, bus) => {
       // exactly two ends of this kind meet at p, nothing else is there, and nothing moves there
       const list = (ends.get(key(p)) || []).filter((o) => isBus.has(o) === bus);
@@ -284,7 +288,7 @@
         // A wire with something joined part way along keeps its place: bridge the moved end instead.
         if (midHit(w0)) {
           const pts = router.path(m.from, m.to, Math.abs(w0.a[1] - w0.b[1]) < 1e-3) || [m.from, m.to];
-          emit(bus, pts);
+          emit(bus, pts, w0.st);
           continue;
         }
         // Walk the chain away from the moved end.
@@ -316,12 +320,12 @@
         const pts = router.path(start, m.to, lastHoriz);
         if (!pts) {
           if (chain.length === 1) { const xys = K.findAll(K.find(w0.src, 'pts'), 'xy'); const end = atA ? w0.seg : w0.seg + 1; setXY(sp, xys[end], m.to[0], m.to[1]); }
-          else { for (const w of chain) del(w); emit(bus, [start, m.to]); }
+          else { for (const w of chain) del(w); emit(bus, [start, m.to], w0.st); }
           continue;
         }
         if (chain.length === 1 && pts.length === 2) { const xys = K.findAll(K.find(w0.src, 'pts'), 'xy'); const end = atA ? w0.seg : w0.seg + 1; const other2 = atA ? w0.seg + 1 : w0.seg; setXY(sp, xys[end], m.to[0], m.to[1]); setXY(sp, xys[other2], start[0], start[1]); continue; }
         for (const w of chain) del(w);
-        emit(bus, pts);
+        emit(bus, pts, w0.st);
       }
     }
     return ins;
@@ -430,6 +434,8 @@
         const l = it.label;
         setXY(sp, atNode(l.src), l.p[0] + d[0], l.p[1] + d[1]);
         for (const p of l.props) { const pa = atNode(p.src); if (pa) setXY(sp, pa, p.p[0] + d[0], p.p[1] + d[1]); }
+        // A net label takes its wire with it, so it stays on the net (cable flags just slide off and on).
+        if (l.kind !== 'directive' && sheet.wires.concat(sheet.buses).some((w) => K.onSegment(l.p, w.a, w.b))) moves.push({ from: l.p, to: [l.p[0] + d[0], l.p[1] + d[1]] });
       } else if (it.type === 'wire') {
         const w = it.wire;
         movedWires.add(w);
@@ -465,9 +471,9 @@
         if (fixed.some((w) => same(w.a, m.from) || same(w.b, m.from))) continue;   // stretched below
         const host = fixed.find((w) => interior(m.from, w));
         if (!host) continue;
-        const lines = isBusW.has(host) ? busLines : wireLines;
-        const pts = bridgeRouter.path(m.from, m.to, Math.abs(host.a[1] - host.b[1]) >= 1e-3) || [m.from, [m.to[0], m.from[1]], m.to];
-        for (let i = 0; i + 1 < pts.length; i++) if (!same(pts[i], pts[i + 1])) extra.push(lines(pts[i], pts[i + 1]));
+        const lines = isBusW.has(host) ? (a, b) => busLines(a, b, host.st) : (a, b) => wireLines(a, b, null, host.st);
+        const pts = simplifyPolyline(bridgeRouter.path(m.from, m.to, Math.abs(host.a[1] - host.b[1]) >= 1e-3) || [m.from, [m.to[0], m.from[1]], m.to]);
+        for (let i = 0; i + 1 < pts.length; i++) extra.push(lines(pts[i], pts[i + 1]));
         bridged.push(m.from);
         const keep = sheet.junctions.find((j) => same(j.p, m.from) && !moving.has(j));
         if (keep) stay.add(keep); else extra.push(junctionLines(m.from));
@@ -615,18 +621,77 @@
   }
 
   /** Add a polyline of wires; splits existing wires where the new ends land and adds junctions. */
-  function addWires(sheet, points) {
+  // Drop points that sit in the middle of a straight run, so a run drawn with several taps is one line.
+  function simplifyPolyline(points) {
+    const pts = [];
+    for (const p of points) if (!pts.length || !same(pts[pts.length - 1], p)) pts.push(p);
+    for (let i = 1; i + 1 < pts.length;) {
+      const a = pts[i - 1], b = pts[i], c = pts[i + 1];
+      const cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+      const dot = (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]);
+      if (Math.abs(cross) < 1e-6 && dot > 0) pts.splice(i, 1); else i++;
+    }
+    return pts;
+  }
+  // Where a new run starts or ends on the free end of an existing line of the same kind, carrying straight
+  // on, and nothing else is there, the old line is taken into the new one: one line instead of two pieces.
+  function mergeIntoEnds(sheet, pts, bus, sp) {
+    const lines = bus ? sheet.buses : sheet.wires, all = sheet.wires.concat(sheet.buses);
+    let style = null;
+    const gone = new Set();
+    const busy = (p) => connectionPoints(sheet).some((c) => c.kind !== 'wire' && same(c.p, p)) || sheet.noConnects.some((n) => same(n.p, p)) || all.some((o) => interior(p, o));
+    const tryEnd = (end, next) => {
+      const p = pts[end], q = pts[next];
+      const touching = all.filter((o) => same(o.a, p) || same(o.b, p));
+      if (touching.length !== 1 || !lines.includes(touching[0]) || busy(p)) return;
+      const o = touching[0];
+      if (K.findAll(K.find(o.src, 'pts'), 'xy').length !== 2) return;
+      const far = same(o.a, p) ? o.b : o.a;
+      // collinear, and the old line lies on the other side of p
+      const cross = (p[0] - far[0]) * (q[1] - p[1]) - (p[1] - far[1]) * (q[0] - p[0]);
+      const dot = (p[0] - far[0]) * (q[0] - p[0]) + (p[1] - far[1]) * (q[1] - p[1]);
+      if (Math.abs(cross) > 1e-6 || dot <= 0) return;
+      const r = nodeRange(sheet.text, o.src); sp.replace(r[0], r[1], '');
+      pts[end] = far.slice();
+      gone.add(o);
+      if (!style) style = o.st;
+    };
+    if (pts.length >= 2) { tryEnd(0, 1); if (pts.length >= 2) tryEnd(pts.length - 1, pts.length - 2); }
+    return { style, gone };
+  }
+  /** The stroke of the line of this kind that a point lands on (an end or part way along), if any. */
+  function strokeAt(sheet, p, bus) {
+    const o = (bus ? sheet.buses : sheet.wires).find((w) => same(w.a, p) || same(w.b, p) || K.onSegment(p, w.a, w.b));
+    return o ? o.st : null;
+  }
+  /**
+   * Draw a wire (or, with opts.bus, a bus) through points. Straight runs become single lines, and the new
+   * line takes the look (width, type, colour) of the line it starts or ends on unless opts.style is given.
+   */
+  function addWires(sheet, points, opts) {
+    opts = opts || {};
+    const pts = simplifyPolyline(points);
+    if (pts.length < 2) throw new Error('Draw at least one segment.');
+    const sp = new Splicer(sheet.text);
+    const st0 = opts.style || strokeAt(sheet, pts[0], !!opts.bus) || strokeAt(sheet, pts[pts.length - 1], !!opts.bus);
+    const merged = mergeIntoEnds(sheet, pts, !!opts.bus, sp);
+    const style = opts.style || st0 || merged.style || null;
     const segs = [];
-    for (let i = 0; i + 1 < points.length; i++) if (!same(points[i], points[i + 1])) segs.push([points[i], points[i + 1]]);
-    return addWireSegs(sheet, segs);
+    for (let i = 0; i + 1 < pts.length; i++) segs.push([pts[i], pts[i + 1]]);
+    const o2 = { style, sp, skip: merged.gone };
+    return opts.bus ? addBusSegs(sheet, segs, o2) : addWireSegs(sheet, segs, o2);
   }
   /** Add separate wire segments [[a, b], ...] (a stencil's arms), with the same splitting and junctions. */
-  function addWireSegs(sheet, segs) {
+  function addWireSegs(sheet, segs, opts) {
+    opts = opts || {};
     segs = segs.filter(([a, b]) => !same(a, b));
     if (!segs.length) throw new Error('Draw at least one segment.');
-    const sp = new Splicer(sheet.text);
+    const sp = opts.sp || new Splicer(sheet.text);
     const newLines = [];
-    const conn = connectionPoints(sheet);
+    const skip = opts.skip || new Set();
+    const goneEnd = (p) => Array.from(skip).some((o) => same(o.a, p) || same(o.b, p));
+    const wiresNow = sheet.wires.filter((w) => !skip.has(w));
+    const conn = connectionPoints(sheet).filter((c) => c.kind !== 'wire' || !goneEnd(c.p) || wiresNow.some((w) => same(w.a, c.p) || same(w.b, c.p)));
     // Split new segments at existing connection points that fall inside them
     const finalSegs = [];
     for (const [a, b] of segs) {
@@ -638,18 +703,18 @@
       for (const p of uniq) { finalSegs.push([prev, p]); prev = p; }
       finalSegs.push([prev, b]);
     }
-    for (const [a, b] of finalSegs) newLines.push(wireLines(a, b));
+    for (const [a, b] of finalSegs) newLines.push(wireLines(a, b, null, opts.style));
     // Split existing wires where a new end lands mid-segment
     const ends = [];
     for (const [a, b] of finalSegs) for (const p of [a, b]) if (!ends.some((q) => same(q, p))) ends.push(p);
     const splitDone = new Set();
     for (const p of ends) {
-      for (const w of sheet.wires) {
+      for (const w of wiresNow) {
         if (splitDone.has(w) || !interior(p, w)) continue;
         splitDone.add(w);
         const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
         setXY(sp, xys[w.seg + 1], p[0], p[1]);
-        newLines.push(wireLines(p, w.b));
+        newLines.push(wireLines(p, w.b, null, w.st));
       }
     }
     // Junctions where three or more things meet
@@ -657,7 +722,7 @@
       if (sheet.junctions.some((j) => same(j.p, p))) continue;
       let n = 0;
       for (const [a, b] of finalSegs) { if (same(a, p)) n++; if (same(b, p)) n++; }
-      for (const w of sheet.wires) { if (same(w.a, p) || same(w.b, p)) n++; else if (interior(p, w)) n += 2; }
+      for (const w of wiresNow) { if (same(w.a, p) || same(w.b, p)) n++; else if (interior(p, w)) n += 2; }
       for (const s of sheet.symbols) for (const pin of K.symbolPins(s)) if (same(pin.pos, p)) n++;
       if (n >= 3) newLines.push(junctionLines(p));
     }
@@ -674,7 +739,7 @@
       if (!interior(p, w)) continue;
       const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
       setXY(sp, xys[w.seg + 1], p[0], p[1]);
-      lines.push(wireLines(p, w.b));
+      lines.push(wireLines(p, w.b, null, w.st));
       break;
     }
     sp.insert(insertPoint(sheet), lines.map((l) => block(l, '\t')).join(''));
@@ -713,7 +778,7 @@
       list.sort((p, q) => Math.hypot(p[0] - w.a[0], p[1] - w.a[1]) - Math.hypot(q[0] - w.a[0], q[1] - w.a[1]));
       const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
       setXY(sp, xys[w.seg + 1], list[0][0], list[0][1]);
-      for (let i = 0; i < list.length; i++) lines.push(wireLines(list[i], i + 1 < list.length ? list[i + 1] : w.b));
+      for (let i = 0; i < list.length; i++) lines.push(wireLines(list[i], i + 1 < list.length ? list[i + 1] : w.b, null, w.st));
     }
     for (const p of pts) {
       if (sheet.junctions.some((j) => same(j.p, p))) continue;
@@ -736,7 +801,7 @@
     const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
     const keepA = !same(w.a, p), keepB = !same(q, w.b);
     const out = [];
-    if (keepA) { setXY(sp, xys[w.seg + 1], p[0], p[1]); if (keepB) out.push(wireLines(q, w.b)); }
+    if (keepA) { setXY(sp, xys[w.seg + 1], p[0], p[1]); if (keepB) out.push(wireLines(q, w.b, null, w.st)); }
     else if (keepB) setXY(sp, xys[w.seg], q[0], q[1]);
     else { const r = nodeRange(sheet.text, w.src); sp.replace(r[0], r[1], ''); }
     if (out.length) sp.insert(insertPoint(sheet), out.map((l) => block(l, '\t')).join(''));
@@ -1113,7 +1178,7 @@
     if (!onBus && interior(p, w)) {
       const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
       setXY(sp, xys[w.seg + 1], p[0], p[1]);
-      out.push(wireLines(p, w.b));
+      out.push(wireLines(p, w.b, null, w.st));
     }
     sp.insert(insertPoint(sheet), out.map((l) => block(l, '\t')).join(''));
     return { path: sheet.path, text: sp.apply() };
@@ -1134,36 +1199,51 @@
 
 
   // ------------------------------------------------------------------ buses and hierarchical sheets
-  function busLines(a, b) {
-    return ['(bus', '\t(pts', `\t\t(xy ${fnum(a[0])} ${fnum(a[1])}) (xy ${fnum(b[0])} ${fnum(b[1])})`, '\t)', '\t(stroke', '\t\t(width 0)', '\t\t(type default)', '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
+  function busLines(a, b, st) {
+    return ['(bus', '\t(pts', `\t\t(xy ${fnum(a[0])} ${fnum(a[1])}) (xy ${fnum(b[0])} ${fnum(b[1])})`, '\t)', ...lineStroke(st), `\t(uuid ${qstr(uuid())})`, ')'];
   }
   function busEntryLines(p, size) {
     return ['(bus_entry', `\t(at ${fnum(p[0])} ${fnum(p[1])})`, `\t(size ${fnum(size[0])} ${fnum(size[1])})`, '\t(stroke', '\t\t(width 0)', '\t\t(type default)', '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
   }
   /** Draw bus segments; existing buses are split where a new end lands on them, with a junction. */
-  function addBusSegs(sheet, segs) {
+  function addBusSegs(sheet, segs, opts) {
+    opts = opts || {};
     segs = segs.filter(([a, b]) => !same(a, b));
     if (!segs.length) throw new Error('Draw at least one bus segment.');
-    const sp = new Splicer(sheet.text);
-    const out = segs.map(([a, b]) => busLines(a, b));
+    const sp = opts.sp || new Splicer(sheet.text);
+    const out = segs.map(([a, b]) => busLines(a, b, opts.style));
     const ends = [];
     for (const [a, b] of segs) for (const p of [a, b]) if (!ends.some((q) => same(q, p))) ends.push(p);
     const split = new Set();
-    for (const p of ends) for (const w of sheet.buses) {
+    for (const p of ends) for (const w of sheet.buses.filter((x) => !(opts.skip && opts.skip.has(x)))) {
       if (split.has(w) || !interior(p, w)) continue;
       split.add(w);
       const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
       setXY(sp, xys[w.seg + 1], p[0], p[1]);
-      out.push(busLines(p, w.b));
+      out.push(busLines(p, w.b, w.st));
     }
     for (const p of ends) {
       if (sheet.junctions.some((j) => same(j.p, p))) continue;
       let n = 0;
       for (const [a, b] of segs) { if (same(a, p)) n++; if (same(b, p)) n++; }
-      for (const w of sheet.buses) { if (same(w.a, p) || same(w.b, p)) n++; else if (interior(p, w)) n += 2; }
+      for (const w of sheet.buses.filter((x) => !(opts.skip && opts.skip.has(x)))) { if (same(w.a, p) || same(w.b, p)) n++; else if (interior(p, w)) n += 2; }
       if (n >= 3) out.push(junctionLines(p));
     }
     sp.insert(insertPoint(sheet), out.map((l) => block(l, '\t')).join(''));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Turn wires into buses (or buses into wires), keeping their points and look. */
+  function setLineKind(sheet, lines, bus) {
+    const sp = new Splicer(sheet.text), done = new Set();
+    for (const w of lines) {
+      if (done.has(w.src)) continue; done.add(w.src);
+      const r = nodeRange(sheet.text, w.src);
+      const head = sheet.text.slice(w.src.s, w.src.s + 6);
+      const m = /^\((wire|bus)\b/.exec(head);
+      if (!m) continue;
+      sp.replace(w.src.s, w.src.s + m[0].length, bus ? '(bus' : '(wire');
+    }
+    if (!done.size) throw new Error('Nothing to change.');
     return { path: sheet.path, text: sp.apply() };
   }
   function addBusEntry(sheet, p, size) {
@@ -1430,7 +1510,7 @@
     reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
     setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,
-    addBusSegs, addBusEntry, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
+    addBusSegs, addBusEntry, setLineKind, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
     PIN_TYPES, parsePinLines, boxSymbol, symbolLibText
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KiEdit;

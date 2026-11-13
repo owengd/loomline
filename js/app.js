@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.6.4';
+  const VERSION = '2.6.5';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1274,6 +1274,26 @@
   }
 
   // ---- wire tool
+  // What a point on the sheet carries: a bus (bus line, or a label / sheet pin with a bus name like CAN[1..4])
+  // or a plain net (wire, part pin, or a label / sheet pin with a plain name).
+  function busAt(sh, p) {
+    return sh.buses.some((b) => K.onSegment(p, b.a, b.b)) ||
+      sh.labels.some((l) => E.same(l.p, p) && l.kind !== 'directive' && K.isBusName(l.text)) ||
+      sh.sheets.some((x) => x.pins.some((q) => E.same(q.p, p) && K.isBusName(q.name)));
+  }
+  function netAt(sh, p) {
+    return sh.wires.some((w) => K.onSegment(p, w.a, w.b)) ||
+      sh.symbols.some((x) => K.symbolPins(x).some((q) => E.same(q.pos, p))) ||
+      sh.labels.some((l) => E.same(l.p, p) && l.kind !== 'directive' && !K.isBusName(l.text)) ||
+      sh.sheets.some((x) => x.pins.some((q) => E.same(q.p, p) && !K.isBusName(q.name)));
+  }
+  // Draw wire becomes a bus by itself when it starts or ends on a bus and nothing plain.
+  function wireIsBus(pts) {
+    if (state.wireKind === 'bus') return true;
+    if (!pts.length || !state.inst) return false;
+    const sh = state.inst.sheet, ends = [pts[0], pts[pts.length - 1]];
+    return ends.some((p) => busAt(sh, p)) && !ends.some((p) => netAt(sh, p));
+  }
   function wirePolyline(anchors, flips) {
     const pts = anchors.length ? [anchors[0]] : [];
     for (let i = 1; i < anchors.length; i++) {
@@ -1307,7 +1327,8 @@
     const s = snapPoint(wp, type);
     const w = state.wire;
     if (w.anchors.length && E.same(w.anchors[w.anchors.length - 1], s.p)) { finishWire(); return; }
-    w.anchors.push(s.p); w.flips.push(false);
+    // Same bend as the preview the pointer was showing
+    w.anchors.push(s.p); w.flips.push(w.flips.length ? !!w.flips[w.flips.length - 1] : false);
     updateWireOverlay(s.on ? s.p : null);
     // Landing on something that conducts ends the wire, like KiCad.
     if (w.anchors.length > 1 && s.on && s.on !== 'label') finishWire();
@@ -1318,8 +1339,9 @@
     if (pts.length < 2) { toast('Tap at least two points to draw a wire.'); return; }
     const sh = state.inst.sheet;
     state.wire = { anchors: [], flips: [] };
-    if (state.wireKind === 'bus') { const segs = []; for (let i = 1; i < pts.length; i++) segs.push([pts[i - 1], pts[i]]); run('Draw bus', () => E.addBusSegs(sh, segs), { anchor: null }); }
-    else run('Draw wire', () => E.addWires(sh, pts), { anchor: null });
+    const bus = wireIsBus(pts);
+    run(bus ? 'Draw bus' : 'Draw wire', () => E.addWires(sh, pts, { bus }), { anchor: null });
+    if (bus && state.wireKind !== 'bus') toast('Drawn as a bus: it joins a bus.');
     updateWireOverlay();
   }
   function wireBack() { const w = state.wire; w.anchors.pop(); w.flips.pop(); updateWireOverlay(); }
@@ -1568,6 +1590,9 @@
         A.splice(ta.length, 0, { label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) });
         if (wno && !s.net.named) A.push({ label: 'FIX NO.', icon: 'i-number', run: () => fixWireNumber(o, wno) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'wire', uuid: uuidOf(o), name: 'wire' }) });
+        // A run of plain wire that joins buses (or bus-named pins and labels) should be a bus.
+        const runW = sh.wires.filter((w) => w.group === o.group);
+        if (runW.some((w) => busAt(sh, w.a) || busAt(sh, w.b))) A.push({ label: 'MAKE BUS', icon: 'i-wire', run: () => run('Make bus', () => E.setLineKind(sh, runW, true), { anchor: null }) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete wire', () => E.deleteItems(sh, [{ type: 'wire', wire: o }]), { anchor: null }) });
       } else if (it && (it.type === 'junction' || it.type === 'nc') && o) {
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + (it.type === 'nc' ? 'no-connect flag' : 'junction'), () => E.deleteItems(sh, [{ type: it.type, item: o }]), { anchor: null }) });
@@ -1741,7 +1766,7 @@
     if (state.mode === 'wire') {
       const n = state.wire.anchors.length;
       setIco('i-wire');
-      const what = state.wireKind === 'bus' ? 'bus' : 'wire';
+      const what = wireIsBus(state.wire.anchors) ? 'bus' : 'wire';
       t1.textContent = n ? 'Drawing ' + what : what[0].toUpperCase() + what.slice(1);
       t2.textContent = n ? 'Tap corners · tap a pin or wire to finish' : 'Tap a pin, wire end or empty grid to start';
       const L = [];
