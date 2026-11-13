@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.6.1';
+  const VERSION = '2.6.2';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -67,6 +67,7 @@
       else view.zoomBy(2, x, y);
     },
     onView: () => { if (!state._scaleRaf) state._scaleRaf = requestAnimationFrame(() => { state._scaleRaf = 0; renderScale(); }); },
+    dragFrom: (wp, type) => dragSelectionFrom(wp, type),
     onHover: (wp) => { state.mouse = wp; keyMoveHover(wp); hoverPreview(wp); hoverWire(wp); if (state.mode === 'measure' && state.measure && state.measure.a && !state.measure.b) measureDraw(snapPoint(wp, 'mouse').p); }
   });
 
@@ -410,7 +411,7 @@
     if (state.mode === 'box') { boxTap(wp, type); return; }
     if (state.mode === 'measure') { measureTap(wp, type); return; }
     if (state.mode === 'paste') { pasteAt(gridSnap(wp)); setMode('select'); return; }
-    if (state.mode === 'move') { if (state.keyMove) keyMoveDrop(wp); return; }
+    if (state.mode === 'move') { if (state.keyMove) { keyMoveDrop(wp); return; } setMode('select'); renderStatus(); }
     const mk = view.markerAt(wp[0] * view.scale + view.ox, wp[1] * view.scale + view.oy, type === 'mouse' ? 12 : 20);
     if (mk && mk.issue) { pickIssue(mk.issue, false); return; }
     const hit = view.hitTest(wp, type === 'mouse' ? 8 : 16);
@@ -1450,6 +1451,32 @@
   function startMove(target) {
     state.moveTarget = target;
     setMode('move');
+    view.dragHandler = moveHandler(target);
+    renderStatus();
+  }
+  // Pressing on the current selection and dragging moves it, without tapping MOVE first.
+  function dragSelectionFrom(wp, type) {
+    if (state.mode !== 'select' || !state.sel || !state.inst || !state.project) return null;
+    const s = state.sel, sh = state.inst.sheet;
+    const hit = view.hitTest(wp, type === 'mouse' ? 6 : 12);
+    if (!hit) return null;
+    let target = null;
+    if (s.type === 'multi' && s.inst === state.inst) {
+      const r = multiResolve(s.m);
+      const on = (hit.type === 'symbol' && r.syms.has(hit.si)) || (hit.type === 'sheet' && r.its.has('H' + hit.idx)) || (hit.it && r.its.has(hit.it));
+      if (on) target = { type: 'multi', name: r.items.length + ' items' };
+    } else if (s.type === 'symbol' && s.inst === state.inst && hit.type === 'symbol' && hit.si === s.si) {
+      const sym = sh.symbols[s.si]; target = { type: 'symbol', uuid: sym.uuid, name: s.inst.refs[s.si].ref };
+    } else if (s.type === 'net' && s.item && hit.type === 'net' && hit.it) {
+      const it = itemFromTag(hit.it), o = it && itemObj(it);
+      if (it && o && it.type === s.item.type && it.idx === s.item.idx && (it.type === 'wire' || it.type === 'label')) target = { type: it.type, uuid: uuidOf(o), name: it.type === 'wire' ? 'wire' : 'label ' + o.text };
+    }
+    if (!target) return null;
+    state.moveTarget = target;
+    const h = moveHandler(target);
+    return { move: h.move, end: (d) => { h.end(d); if (state.mode === 'move') setMode('select'); renderStatus(); }, cancel: () => { view.preview = null; view.redraw(); } };
+  }
+  function moveHandler(target) {
     const snapD = (d) => [E.snap(d[0]), E.snap(d[1])];
     const tagFor = () => {
       const t = state.moveTarget, sh = state.inst.sheet;
@@ -1460,7 +1487,7 @@
       const idx = list.findIndex((o) => uuidOf(o) === t.uuid);
       return { sym: -1, its: new Set([(t.type === 'label' ? 'L' : 'W') + idx]) };
     };
-    view.dragHandler = {
+    return {
       move: (d) => { const tg = tagFor(); view.preview = { sym: tg.sym, syms: tg.syms || null, its: tg.its, d: snapD(d) }; view.redraw(); },
       end: (d) => {
         view.preview = null;
@@ -1488,7 +1515,6 @@
         run('Move ' + t.name, () => E.moveItems(sh, [item], sd, { keepWires: t.keepWires !== false }), { checkMerges: true });
       }
     };
-    renderStatus();
   }
 
   // ---- actions on the selection
@@ -1724,7 +1750,7 @@
       const n = s && s.type === 'multi' ? multiResolve(s.m).items.length : 0;
       setIco('i-box');
       t1.textContent = n ? `${n} selected` : 'Box select';
-      t2.textContent = 'Drag a box round items · tap one to add or remove it · two fingers pan';
+      t2.textContent = 'Drag a box round items · tap one to add or remove it · tap empty space to finish · two fingers pan';
       const L = [];
       if (n) L.push({ label: 'DONE', icon: 'i-check', primary: true, run: () => setMode('select') });
       L.push({ label: 'ALL', icon: 'i-selall', run: selectAll });
@@ -2426,7 +2452,7 @@
   };
   function boxTap(wp, type) {
     const hit = view.hitTest(wp, type === 'mouse' ? 8 : 16);
-    if (!hit) return;
+    if (!hit) { clearSelection(); setMode('select'); renderStatus(); return; }
     const sh = state.inst.sheet, m = mergeMulti(curMulti(), emptyMulti());
     let k = null, u = null;
     if (hit.type === 'symbol') { k = 'sym'; u = sh.symbols[hit.si].uuid; }

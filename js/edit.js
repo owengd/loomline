@@ -329,8 +329,29 @@
     }
     let extra = [];
     if (opts.keepWires !== false && moves.length) {
-      extra = rubberBand(sp, sheet, moves, movedWires);
-      dragAttached(sp, sheet, moves, new Set(items.map((it) => it.item || it.label || it.sym).filter(Boolean)));
+      const all = sheet.wires.concat(sheet.buses);
+      const fixed = all.filter((w) => !movedWires.has(w));
+      // A wire that T-joins the middle of a moved wire follows it.
+      for (const w of fixed) for (const q of [w.a, w.b]) {
+        if (moves.some((m) => same(m.from, q))) continue;
+        for (const mw of movedWires) if (interior(q, mw)) { moves.push({ from: q, to: [q[0] + d[0], q[1] + d[1]] }); break; }
+      }
+      // A moved end that sat on the middle of a wire that stays put gets a bridge back to it.
+      const isBusW = new Set(sheet.buses);
+      const bridged = [], stay = new Set(), moving = new Set(items.map((it) => it.item).filter(Boolean));
+      for (const m of moves.slice()) {
+        if (fixed.some((w) => same(w.a, m.from) || same(w.b, m.from))) continue;   // stretched below
+        const host = fixed.find((w) => interior(m.from, w));
+        if (!host) continue;
+        const lines = isBusW.has(host) ? busLines : wireLines;
+        const corner = Math.abs(m.from[1] - m.to[1]) < 1e-3 || Math.abs(m.from[0] - m.to[0]) < 1e-3 ? null : [m.to[0], m.from[1]];
+        if (corner) extra.push(lines(m.from, corner), lines(corner, m.to)); else extra.push(lines(m.from, m.to));
+        bridged.push(m.from);
+        const keep = sheet.junctions.find((j) => same(j.p, m.from) && !moving.has(j));
+        if (keep) stay.add(keep); else extra.push(junctionLines(m.from));
+      }
+      extra = extra.concat(rubberBand(sp, sheet, moves, movedWires));
+      dragAttached(sp, sheet, moves, new Set(items.map((it) => it.item || it.label || it.sym).filter(Boolean).concat(Array.from(stay))));
     }
     if (extra.length) { const ip = insertPoint(sheet); sp.insert(ip, extra.map((l) => block(l, '\t')).join('')); }
     return { path: sheet.path, text: sp.apply() };

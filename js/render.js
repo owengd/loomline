@@ -612,8 +612,21 @@
       c.addEventListener('pointerdown', (e) => {
         c.setPointerCapture(e.pointerId);
         this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now() });
-        if (this.pointers.size === 1) { this._moved = false; this._tapStart = performance.now(); }
-        if (this.pointers.size === 2) { this._pinch = this._pinchState(); this._moved = true; if (this._dragStart && this.dragHandler) { this._dragStart = null; this.dragHandler.move([0, 0]); } this._beginInteraction(); }
+        if (this.pointers.size === 1) {
+          this._moved = false; this._tapStart = performance.now();
+          // A drag that starts on the current selection can move it (the app decides).
+          if (!this.dragHandler && this.opts.dragFrom) {
+            const r = c.getBoundingClientRect();
+            const h = this.opts.dragFrom(this.toWorld(e.clientX - r.left, e.clientY - r.top), e.pointerType);
+            if (h) { this.dragHandler = h; this._tempDrag = h; }
+          }
+        }
+        if (this.pointers.size === 2) {
+          this._pinch = this._pinchState(); this._moved = true;
+          if (this._dragStart && this.dragHandler) { this._dragStart = null; this.dragHandler.move([0, 0]); }
+          if (this._tempDrag) { const h = this._tempDrag; this._tempDrag = null; if (this.dragHandler === h) this.dragHandler = null; if (h.cancel) h.cancel(); }
+          this._beginInteraction();
+        }
       });
       c.addEventListener('pointermove', (e) => {
         if (this.opts.onHover && e.pointerType === 'mouse') { const r = c.getBoundingClientRect(); this.opts.onHover(this.toWorld(e.clientX - r.left, e.clientY - r.top)); }
@@ -651,7 +664,10 @@
         if (this.pointers.size === 0) {
           this._pinch = null;
           this._endInteraction();
+          const temp = this._tempDrag; this._tempDrag = null;
           if (this._dragStart && this.dragHandler) { const st = this._dragStart; this._dragStart = null; const r = c.getBoundingClientRect(); const w = this.toWorld(e.clientX - r.left, e.clientY - r.top); this.dragHandler.end([w[0] - st[0], w[1] - st[1]]); }
+          else if (temp && temp.cancel) temp.cancel();
+          if (temp && this.dragHandler === temp) this.dragHandler = null;
           this._dragStart = null;
           if (!this._moved && e.type === 'pointerup') {
             const rect = c.getBoundingClientRect();
