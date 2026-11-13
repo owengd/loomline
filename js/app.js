@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.6.5';
+  const VERSION = '2.6.6';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1487,6 +1487,9 @@
       const r = multiResolve(s.m);
       const on = (hit.type === 'symbol' && r.syms.has(hit.si)) || (hit.type === 'sheet' && r.its.has('H' + hit.idx)) || (hit.it && r.its.has(hit.it));
       if (on) target = { type: 'multi', name: r.items.length + ' items' };
+    } else if (s.type === 'graphic' && s.inst === state.inst && s.it[0] === 'U' && hit.it && hit.it[0] === 'U') {
+      const sel = graphicObj(s.it, sh), o = graphicObj(hit.it, sh);
+      if (sel && o && o.group === sel.group && uuidOf(o)) target = { type: 'bus', uuid: uuidOf(o), name: 'bus' };
     } else if (s.type === 'symbol' && s.inst === state.inst && hit.type === 'symbol' && hit.si === s.si) {
       const sym = sh.symbols[s.si]; target = { type: 'symbol', uuid: sym.uuid, name: s.inst.refs[s.si].ref };
     } else if (s.type === 'net' && hit.type === 'net' && hit.it) {
@@ -1506,8 +1509,8 @@
     // so the wires either side just get longer or shorter and everything stays square.
     const axis = () => {
       const t = state.moveTarget;
-      if (!t || t.type !== 'wire' || !state.inst) return null;
-      const w = state.inst.sheet.wires.find((x) => uuidOf(x) === t.uuid);
+      if (!t || (t.type !== 'wire' && t.type !== 'bus') || !state.inst) return null;
+      const w = (t.type === 'bus' ? state.inst.sheet.buses : state.inst.sheet.wires).find((x) => uuidOf(x) === t.uuid);
       if (!w) return null;
       if (Math.abs(w.a[1] - w.b[1]) < 1e-3) return 'y';
       if (Math.abs(w.a[0] - w.b[0]) < 1e-3) return 'x';
@@ -1519,9 +1522,9 @@
       if (t.type === 'multi') { const r = state.sel && state.sel.type === 'multi' ? multiResolve(state.sel.m) : { syms: new Set(), its: new Set() }; return { sym: -1, syms: r.syms, its: r.its }; }
       if (t.type === 'symbol') return { sym: sh.symbols.findIndex((x) => x.uuid === t.uuid), its: null };
       if (t.type === 'graphic') { const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : sh.graphics; return { sym: -1, its: new Set([t.kind + list.findIndex((o) => uuidOf(o) === t.uuid)]) }; }
-      const list = t.type === 'label' ? sh.labels : sh.wires;
+      const list = t.type === 'label' ? sh.labels : t.type === 'bus' ? sh.buses : sh.wires;
       const idx = list.findIndex((o) => uuidOf(o) === t.uuid);
-      return { sym: -1, its: new Set([(t.type === 'label' ? 'L' : 'W') + idx]) };
+      return { sym: -1, its: new Set([(t.type === 'label' ? 'L' : t.type === 'bus' ? 'U' : 'W') + idx]) };
     };
     return {
       move: (d) => { const tg = tagFor(); view.preview = { sym: tg.sym, syms: tg.syms || null, its: tg.its, d: snapD(d) }; view.redraw(); },
@@ -1546,6 +1549,7 @@
         let item;
         if (t.type === 'symbol') item = { type: 'symbol', sym: sh.symbols.find((x) => x.uuid === t.uuid) };
         else if (t.type === 'label') item = { type: 'label', label: sh.labels.find((x) => uuidOf(x) === t.uuid) };
+        else if (t.type === 'bus') item = { type: 'wire', wire: sh.buses.find((x) => uuidOf(x) === t.uuid) };
         else item = { type: 'wire', wire: sh.wires.find((x) => uuidOf(x) === t.uuid) };
         if (!item.sym && !item.label && !item.wire) { setMode('select'); return; }
         run('Move ' + t.name, () => E.moveItems(sh, [item], sd, { keepWires: t.keepWires !== false }), { checkMerges: true });
@@ -1627,6 +1631,8 @@
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'graphic', kind: s.it[0], uuid: uuidOf(o), name: name.toLowerCase() }) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + name.toLowerCase(), () => E.deleteNode(sh, o.src), { anchor: null }) });
         if (!uuidOf(o) || /^[UE]/.test(s.it)) { const mi = A.findIndex((x) => x.label === 'MOVE'); if (mi >= 0) A.splice(mi, 1); }
+        // A bus piece moves like a wire: it slides sideways and the lines joined to it follow.
+        if (s.it[0] === 'U' && uuidOf(o)) A.splice(A.findIndex((x) => x.label === 'DELETE'), 0, { label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'bus', uuid: uuidOf(o), name: 'bus' }) });
       }
     }
     return A;

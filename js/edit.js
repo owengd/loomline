@@ -426,6 +426,7 @@
     const sp = new Splicer(sheet.text);
     const moves = [];
     const movedWires = new Set();
+    const entriesMoved = new Set();
     for (const it of items) {
       if (it.type === 'symbol') {
         symbolMoveSplices(sp, sheet, it.sym, d);
@@ -443,6 +444,19 @@
         setXY(sp, xys[w.seg], w.a[0] + d[0], w.a[1] + d[1]);
         setXY(sp, xys[w.seg + 1], w.b[0] + d[0], w.b[1] + d[1]);
         moves.push({ from: w.a, to: [w.a[0] + d[0], w.a[1] + d[1]] }, { from: w.b, to: [w.b[0] + d[0], w.b[1] + d[1]] });
+        // Bus entries along a moved bus go with it, and the wires on their other end follow.
+        if (sheet.buses.includes(w)) {
+          const picked = new Set(items.filter((x) => x.type === 'node').map((x) => x.node));
+          for (const e of sheet.entries) {
+            if (picked.has(e.src) || entriesMoved.has(e)) continue;
+            const onA = K.onSegment(e.a, w.a, w.b), onB = K.onSegment(e.b, w.a, w.b);
+            if (!onA && !onB) continue;
+            entriesMoved.add(e);
+            shiftCoords(sp, e.src, d);
+            const far = onA ? e.b : e.a;
+            moves.push({ from: far, to: [far[0] + d[0], far[1] + d[1]] });
+          }
+        }
       } else if (it.type === 'sheet') {
         // A hierarchical sheet: its box, fields and pins move; wires on its pins stretch.
         shiftCoords(sp, it.sheet.src, d);
