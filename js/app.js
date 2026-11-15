@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.6.8';
+  const VERSION = '2.7.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1659,6 +1659,7 @@
       const sheet = sh.sheets[s.idx];
       const child = s.inst.children.find((c) => c.sheetSym === sheet);
       A.push({ label: 'ENTER', icon: 'i-open', run: () => child && showInstance(child) });
+      A.push({ label: 'EDIT', icon: 'i-edit', run: () => sheetPropsDialog(s.inst, s.idx) });
       if (child) A.push({ label: 'ADD PIN', icon: 'i-plus', run: () => addSheetPinDialog(s.inst, s.idx) }, { label: 'IMPORT PINS', icon: 'i-hlabel', run: () => importSheetPins(s.inst, s.idx) });
       A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete sheet ' + sheet.name, () => E.deleteItems(sh, [{ type: 'sheet', sheet }]), { anchor: null }) });
     } else if (s.type === 'multi') {
@@ -1702,7 +1703,7 @@
   // Lines added/removed, counted as a multiset (close to what GitHub's diff shows)
   function lineDiff(a, b) {
     const count = new Map();
-    for (const l of a.split('\n')) count.set(l, (count.get(l) || 0) + 1);
+    for (const l of (a || '').split('\n')) if (a) count.set(l, (count.get(l) || 0) + 1);
     let add = 0;
     for (const l of b.split('\n')) { const c = count.get(l) || 0; if (c > 0) count.set(l, c - 1); else add++; }
     let del = 0;
@@ -1713,7 +1714,7 @@
     const files = pendingFiles();
     if (!files.length) { toast('No unsaved edits.'); return; }
     const list = h('div', { class: 'difflist' });
-    for (const f of files) { const d = lineDiff(state.base.get(f.path), f.text); list.append(h('div', null, f.path + '  ', h('span', { class: 'add', text: '+' + d.add }), ' ', h('span', { class: 'del', text: '−' + d.del }))); }
+    for (const f of files) { const d = lineDiff(state.base.get(f.path), f.text); list.append(h('div', null, f.path + (state.base.has(f.path) ? '' : ' (new)') + '  ', h('span', { class: 'add', text: '+' + d.add }), ' ', h('span', { class: 'del', text: '−' + d.del }))); }
     const labels = (state.undo || []).map((u) => u.label);
     const summary = labels.length ? Array.from(new Set(labels)).slice(0, 6).join('; ') : 'Schematic edits';
     const discard = { label: 'DISCARD EDITS', run: () => {
@@ -2998,6 +2999,9 @@
     const act = (lbl, label, ic) => { if (!SA) SA = P && state.sel ? selectionActions() : []; const a = SA.find((x) => x.label === lbl); return { label, icon: ic, disabled: !a, danger: lbl === 'DELETE', run: () => { const x = selAct(lbl); if (x) x.run(); } }; };
     const show2 = (k, label, ic) => ({ label, icon: ic, on: !!show[k], run: () => setShow(k, !show[k]) });
     if (tab === 'home') return [
+      { title: 'Project', tools: [
+        { label: 'New project', icon: 'i-plus', run: newProjectDialog },
+        { label: 'Page settings', icon: 'i-props', disabled: !P, run: pageSettingsDialog }] },
       { title: 'Select', tools: [
         { label: 'Select', icon: 'i-hand', on: state.mode === 'select' || state.mode === 'move', run: () => setMode('select') },
         { label: 'Box select', icon: 'i-box', on: state.mode === 'box', run: startBox },
@@ -3981,6 +3985,7 @@
   $('wConnect').addEventListener('click', () => openDrawer('drawerProjects'));
   $('wOpen').addEventListener('click', () => $('fileInput').click());
   $('wSample').addEventListener('click', loadSample);
+  $('wNew').addEventListener('click', newProjectDialog);
   // ------------------------------------------------------------------ KiCad tools: annotate, find & replace, measure, swap, autoplace, repeat
   const isTyping = () => { const a = document.activeElement; return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT'); };
   function uniqueSheets() { const seen = new Set(), out = []; for (const i of state.project.instances) if (!seen.has(i.sheet.path)) { seen.add(i.sheet.path); out.push(i); } return out; }
@@ -4264,6 +4269,108 @@
     openDialog('NEW SHEET', [h('div', { class: 'field' }, h('label', { for: 'shName', text: 'Sheet name' }), name), h('div', { class: 'field' }, h('label', { for: 'shFile', text: 'File' }), file),
       h('p', { class: 'hint', text: 'A new file is created and saved with your next commit. Type the name of an existing sheet file to use it again (like KiCad’s reused sheets).' })],
       [{ label: 'CANCEL', run: () => { closeDialog(); drawOverlay(); } }, { label: 'ADD SHEET', primary: true, run: go }]);
+    setTimeout(() => name.focus(), 50);
+  }
+  // ---- New project, page settings and sheet properties (KiCad's File → New Project, Page Settings, Sheet Properties)
+  const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const PAPER_NAMES = { A5: 'A5', A4: 'A4', A3: 'A3', A2: 'A2', A1: 'A1', A0: 'A0', A: 'A (ANSI)', B: 'B (ANSI)', C: 'C (ANSI)', D: 'D (ANSI)', E: 'E (ANSI)', USLetter: 'US Letter', USLegal: 'US Legal', USLedger: 'US Ledger', User: 'Custom size' };
+  function pageFields(o) {
+    const fld = (id, label, el) => h('div', { class: 'field' }, h('label', { for: id, text: label }), el);
+    const inp = (id, v, ph) => h('input', { class: 'input', id, value: v || '', placeholder: ph || '', autocomplete: 'off' });
+    const paper = h('select', { class: 'input', id: 'pgPaper' }, ...E.PAPER_SIZES.map((k) => h('option', { value: k, text: PAPER_NAMES[k] || k })));
+    paper.value = o.paper;
+    const orient = h('select', { class: 'input', id: 'pgOrient' }, h('option', { value: 'landscape', text: 'Landscape' }), h('option', { value: 'portrait', text: 'Portrait' }));
+    orient.value = o.portrait ? 'portrait' : 'landscape';
+    const uw = inp('pgW', o.user ? String(+o.user[0].toFixed(2)) : '', 'Width mm'), uh = inp('pgH', o.user ? String(+o.user[1].toFixed(2)) : '', 'Height mm');
+    const userRow = h('div', { class: 'field' }, h('label', { text: 'Custom size (mm)' }), h('div', { style: 'display:flex;gap:8px' }, uw, uh));
+    const sync = () => { userRow.hidden = paper.value !== 'User'; orient.disabled = paper.value === 'User'; };
+    paper.addEventListener('change', sync); sync();
+    const tb = o.titleBlock || { comments: {} };
+    const title = inp('pgTitle', tb.title), date = inp('pgDate', tb.date, 'e.g. ' + todayStr()), rev = inp('pgRev', tb.rev, 'e.g. A'), company = inp('pgCo', tb.company);
+    const comments = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => inp('pgC' + i, tb.comments && tb.comments[i]));
+    const today = h('button', { class: 'btn small', type: 'button', onclick: () => { date.value = todayStr(); } }, 'TODAY');
+    const els = [fld('pgPaper', 'Paper size', paper), fld('pgOrient', 'Orientation', orient), userRow,
+      section('Title block', '', fld('pgTitle', 'Title', title), h('div', { class: 'field' }, h('label', { for: 'pgDate', text: 'Date' }), h('div', { style: 'display:flex;gap:8px;align-items:center' }, date, today)),
+        fld('pgRev', 'Revision', rev), fld('pgCo', 'Company', company), ...comments.map((c, i) => fld('pgC' + (i + 1), 'Comment ' + (i + 1), c)))];
+    const read = () => {
+      const cm = {}; comments.forEach((c, i) => { if (c.value.trim()) cm[i + 1] = c.value.trim(); });
+      return { paper: paper.value, portrait: orient.value === 'portrait', user: [parseFloat(uw.value), parseFloat(uh.value)], titleBlock: { title: title.value.trim(), date: date.value.trim(), rev: rev.value.trim(), company: company.value.trim(), comments: cm } };
+    };
+    return { els, read };
+  }
+  function pageSettingsDialog() {
+    if (!state.project || !state.inst) return;
+    const sh = state.inst.sheet, f = pageFields(E.pageSettingsOf(sh));
+    const all = h('input', { type: 'checkbox' });
+    const others = state.project.instances.map((i) => i.sheet).filter((x, i, a) => a.indexOf(x) === i && x !== sh);
+    openDialog('PAGE SETTINGS', [h('p', { class: 'hint', text: 'Paper and title block of this sheet (' + K.basename(sh.path) + '), as in KiCad’s File → Page Settings.' }), ...f.els,
+      others.length ? h('label', { class: 'check' }, all, `Also set the title block's title, date, revision, company and comments on the other ${others.length} sheet${others.length === 1 ? '' : 's'} (each keeps its own paper size)`) : null],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'APPLY', primary: true, run: () => {
+        const o = f.read();
+        closeDialog();
+        run('Page settings', () => {
+          const out = [E.setPageSettings(sh, o)];
+          if (all.checked) for (const x of others) { const mine = E.pageSettingsOf(x); out.push(E.setPageSettings(x, { paper: mine.paper, portrait: mine.portrait, user: mine.user, titleBlock: o.titleBlock })); }
+          return out;
+        });
+      } }]);
+  }
+  function sheetPropsDialog(inst, idx) {
+    const sheet = inst.sheet.sheets[idx], child = childOf(inst, idx);
+    const name = h('input', { class: 'input', id: 'spName', value: sheet.name, autocomplete: 'off', spellcheck: 'false' });
+    const page = h('input', { class: 'input', id: 'spPage', value: child ? child.page || '' : '', autocomplete: 'off', inputmode: 'numeric' });
+    const go = () => { closeDialog(); run('Sheet ' + name.value.trim(), () => E.setSheetProps(inst.sheet, sheet, { name: name.value, page: page.value })); };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    openDialog('SHEET PROPERTIES', [h('div', { class: 'field' }, h('label', { for: 'spName', text: 'Sheet name' }), name),
+      h('div', { class: 'field' }, h('label', { for: 'spPage', text: 'Page number' }), page),
+      h('p', { class: 'hint', text: 'File: ' + sheet.file + '. To use a different file, add a new sheet with that file name.' })],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: go }]);
+    setTimeout(() => name.focus(), 50);
+  }
+  function newProjectDialog() {
+    const gh = !!(state.token && state.gh && state.gh.repo);
+    const name = h('input', { class: 'input', id: 'npName', placeholder: 'e.g. Mast loom', autocomplete: 'off', spellcheck: 'false' });
+    const dir = h('input', { class: 'input', id: 'npDir', placeholder: 'folder in the repository', autocomplete: 'off', spellcheck: 'false' });
+    let typed = false;
+    name.addEventListener('input', () => { if (!typed) dir.value = name.value.trim(); });
+    dir.addEventListener('input', () => { typed = true; });
+    const where = h('select', { class: 'input', id: 'npWhere' }, gh ? h('option', { value: 'gh', text: 'GitHub: ' + state.gh.repo + ' (saved on a new branch, with a pull request)' }) : null, h('option', { value: 'local', text: 'This device (saved as a ZIP to open in KiCad)' }));
+    const dirRow = h('div', { class: 'field' }, h('label', { for: 'npDir', text: 'Folder' }), dir);
+    const syncW = () => { dirRow.hidden = where.value !== 'gh'; }; where.addEventListener('change', syncW); syncW();
+    const f = pageFields({ paper: 'A4', portrait: false, titleBlock: { date: todayStr(), rev: 'A', comments: {} } });
+    const go = async () => {
+      const n = name.value.trim();
+      if (!n) { name.focus(); return; }
+      flushPersist();   // edits to the project that's open now are kept and offered again when it's reopened
+      const o = f.read();
+      let files;
+      try { files = E.newProjectFiles(n, where.value === 'gh' ? dir.value.trim().replace(/^\/+|\/+$/g, '') : '', { paper: o.paper, portrait: o.portrait, user: o.user, titleBlock: Object.assign({}, o.titleBlock, { title: o.titleBlock.title || n }) }); }
+      catch (e) { banner('err', e.message); return; }
+      const proPath = files[0].path;
+      if (where.value === 'gh') {
+        closeDialog();
+        loading('Checking ' + state.gh.repo + '…');
+        try {
+          await ghRefresh();
+          const d = K.dirname(proPath);
+          if ((state.ghProjects || []).some((p) => p.key === proPath || (d && p.dir === d))) { loading(null); banner('err', 'There is already a project in ' + (d || 'the top of the repository') + '. Choose another folder.'); return; }
+          loading(null);
+          openProject(files, { kind: 'github', repo: state.gh.repo, ref: state.gh.ref, key: 'gh:' + state.gh.repo + ':' + proPath, projKey: proPath, dir: d, head: state.ghHead, projCommit: null, isNew: true }, { noRestore: true });
+        } catch (e) { loading(null); banner('err', e.message || String(e)); return; }
+      } else {
+        closeDialog();
+        openProject(files, { kind: 'local', key: 'local:new:' + n, name: n, isNew: true }, { noRestore: true });
+      }
+      // The new files are unsaved edits until the first save.
+      for (const x of files) state.base.delete(x.path);
+      persistEdits(); updateHeader(); renderEditUI();
+      toast(`New project ${n}. Add parts (A), draw wires (W), then save.`);
+    };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    openDialog('NEW PROJECT', [h('p', { class: 'hint', text: 'Starts an empty KiCad project (a .kicad_pro and its top sheet) that opens in KiCad 8 and 9.' }),
+      h('div', { class: 'field' }, h('label', { for: 'npName', text: 'Project name' }), name),
+      h('div', { class: 'field' }, h('label', { for: 'npWhere', text: 'Save to' }), where), dirRow, ...f.els],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'CREATE', primary: true, run: go }]);
     setTimeout(() => name.focus(), 50);
   }
   function childOf(inst, idx) { const sheet = inst.sheet.sheets[idx]; return inst.children.find((c) => c.sheetSym === sheet); }

@@ -1276,6 +1276,93 @@
     return { path: sheet.path, text: sp.apply() };
   }
 
+  // ------------------------------------------------------------------ page settings and projects
+  const PAPER_SIZES = ['A5', 'A4', 'A3', 'A2', 'A1', 'A0', 'A', 'B', 'C', 'D', 'E', 'USLetter', 'USLegal', 'USLedger', 'User'];
+  function paperLine(o) {
+    if (o.paper === 'User') return `(paper "User" ${fnum(o.user[0])} ${fnum(o.user[1])})`;
+    return `(paper ${qstr(o.paper)}${o.portrait ? ' portrait' : ''})`;
+  }
+  function titleBlockLines(tb) {
+    const L = ['(title_block'];
+    if (tb.title) L.push(`\t(title ${qstr(tb.title)})`);
+    if (tb.date) L.push(`\t(date ${qstr(tb.date)})`);
+    if (tb.rev) L.push(`\t(rev ${qstr(tb.rev)})`);
+    if (tb.company) L.push(`\t(company ${qstr(tb.company)})`);
+    for (let i = 1; i <= 9; i++) { const c = tb.comments && tb.comments[i]; if (c) L.push(`\t(comment ${i} ${qstr(c)})`); }
+    L.push(')');
+    return L;
+  }
+  /** The sheet's paper as KiCad names it ({ paper, portrait, user }) — read from the file. */
+  function pageSettingsOf(sheet) {
+    const t = K.find(sheet.root, 'paper');
+    const o = { paper: 'A4', portrait: false, user: sheet.paper.slice(), titleBlock: JSON.parse(JSON.stringify(sheet.titleBlock || { comments: {} })) };
+    if (t) { o.paper = t[1]; o.portrait = t.includes('portrait'); }
+    if (!o.titleBlock.comments) o.titleBlock.comments = {};
+    return o;
+  }
+  /** KiCad's Page Settings: paper size and orientation, and the title block (title, date, rev, company, comments 1–9). */
+  function setPageSettings(sheet, o) {
+    if (!PAPER_SIZES.includes(o.paper)) throw new Error('Choose a paper size.');
+    if (o.paper === 'User' && !(o.user && o.user[0] > 0 && o.user[1] > 0)) throw new Error('Give the paper a width and height in mm.');
+    const sp = new Splicer(sheet.text), text = sheet.text;
+    const pap = K.find(sheet.root, 'paper'), tbN = K.find(sheet.root, 'title_block');
+    const ind = (n) => { const ls = lineStart(text, n.s); return text.slice(ls, n.s); };
+    const tbText = (i) => { const L = titleBlockLines(o.titleBlock || {}); return L.length > 2 ? L.map((l, k) => (k ? i : '') + l).join('\n') : ''; };
+    if (pap) sp.replace(pap.s, pap.e, paperLine(o));
+    if (tbN) {
+      const t = tbText(ind(tbN));
+      if (t) sp.replace(tbN.s, tbN.e, t);
+      else { const r = nodeRange(text, tbN); sp.replace(r[0], r[1], ''); }
+    } else {
+      const t = tbText('\t');
+      const after = pap || K.find(sheet.root, 'uuid');
+      if (t && after) sp.insert(after.e, '\n\t' + t);
+    }
+    if (!pap) { const u = K.find(sheet.root, 'uuid'); if (u) sp.insert(u.e, '\n\t' + paperLine(o)); }
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Rename a hierarchical sheet and/or set its page number (KiCad's Sheet Properties). */
+  function setSheetProps(sheet, sh, o) {
+    const sp = new Splicer(sheet.text);
+    if (o.name !== undefined) {
+      const name = String(o.name).trim();
+      if (!name) throw new Error('Give the sheet a name.');
+      if (sheet.sheets.some((x) => x !== sh && x.name === name)) throw new Error('Another sheet on this page is already called ' + name + '.');
+      const p = sh.props.find((x) => x.name === 'Sheetname' || x.name === 'Sheet name');
+      if (p && p.value !== name) setTok(sp, p.src, 2, qstr(name));
+    }
+    if (o.page !== undefined && String(o.page).trim()) {
+      const inst = K.find(sh.src, 'instances');
+      if (inst) for (const pr of K.findAll(inst, 'project')) for (const pa of K.findAll(pr, 'path')) { const pg = K.find(pa, 'page'); if (pg) setTok(sp, pg, 1, qstr(String(o.page).trim())); }
+    }
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** The files of a brand-new KiCad project: <dir>/<name>.kicad_pro and its top sheet <dir>/<name>.kicad_sch. */
+  function newProjectFiles(name, dir, o) {
+    name = String(name || '').trim();
+    if (!/^[\w][\w .()+-]*$/.test(name)) throw new Error('Use letters, numbers, spaces, dots and dashes in the project name.');
+    o = o || {};
+    const base = (dir ? dir.replace(/\/+$/, '') + '/' : '') + name;
+    const rootUuid = uuid();
+    const pro = {
+      board: { design_settings: {}, layer_presets: [], viewports: [] },
+      boards: [],
+      libraries: { pinned_footprint_libs: [], pinned_symbol_libs: [] },
+      meta: { filename: name + '.kicad_pro', version: 1 },
+      net_settings: { classes: [{ name: 'Default', wire_width: 6, bus_width: 12, line_style: 0, schematic_color: 'rgba(0, 0, 0, 0.000)', pcb_color: 'rgba(0, 0, 0, 0.000)', clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3, microvia_diameter: 0.3, microvia_drill: 0.1, diff_pair_gap: 0.25, diff_pair_width: 0.2, diff_pair_via_gap: 0.25, priority: 2147483647 }], meta: { version: 3 }, net_colors: null, netclass_assignments: null, netclass_patterns: [] },
+      pcbnew: { last_paths: {}, page_layout_descr_file: '' },
+      schematic: { legacy_lib_dir: '', legacy_lib_list: [] },
+      sheets: [[rootUuid, 'Root']],
+      text_variables: {}
+    };
+    let sch = ['(kicad_sch', `\t(version ${NEW_SHEET_VERSION})`, '\t(generator "eeschema")', '\t(generator_version "8.0")', `\t(uuid ${qstr(rootUuid)})`, `\t(paper "A4")`, '\t(lib_symbols)', '\t(sheet_instances', '\t\t(path "/"', '\t\t\t(page "1")', '\t\t)', '\t)', ')'].join('\n') + '\n';
+    const sheet = K.parseSchematic(sch, base + '.kicad_sch');
+    const tb = Object.assign({ comments: {} }, o.titleBlock || {});
+    if (!tb.title) tb.title = name;
+    sch = setPageSettings(sheet, { paper: o.paper || 'A4', portrait: !!o.portrait, user: o.user, titleBlock: tb }).text;
+    return [{ path: base + '.kicad_pro', text: JSON.stringify(pro, null, 2) + '\n' }, { path: base + '.kicad_sch', text: sch }];
+  }
+
   const NEW_SHEET_VERSION = 20231120;
   function newSheetText(paper) {
     return ['(kicad_sch', `\t(version ${NEW_SHEET_VERSION})`, '\t(generator "eeschema")', '\t(generator_version "8.0")', `\t(uuid ${qstr(uuid())})`, `\t(paper ${qstr(paper || 'A4')})`, '\t(lib_symbols)', ')'].join('\n') + '\n';
@@ -1524,7 +1611,7 @@
     reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
     setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,
-    addBusSegs, addBusEntry, setLineKind, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
+    addBusSegs, addBusEntry, setLineKind, PAPER_SIZES, pageSettingsOf, setPageSettings, setSheetProps, newProjectFiles, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
     PIN_TYPES, parsePinLines, boxSymbol, symbolLibText
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KiEdit;
