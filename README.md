@@ -121,6 +121,9 @@ edit to the schematic text, so the rest of the file stays exactly as KiCad wrote
 
 | To | Do this |
 | --- | --- |
+| Start a new schematic | **New project** on the start screen or Home → **New project**: name it, choose the paper size and fill in the title block. With GitHub connected it goes in a folder of the repository and the first save commits it on a new branch with a pull request; otherwise the save downloads a ZIP to open in KiCad 8 or 9. Save before closing the app: a new project only exists once saved |
+| Paper size and title block | Home → **Page settings** (KiCad's File → Page Settings): paper (A5–A0, ANSI A–E, US sizes or a custom size), orientation, title, date, revision, company and comments 1–9. A tick box copies the title block to every sheet |
+| Rename a sheet or change its page number | Select the sheet box → **EDIT** |
 | Edit reference, value or other fields | Select a part → **EDIT**. **ADD FIELD** adds a new one; DNP is a tick box |
 | Move | Select a part, label or wire → **MOVE**, drag, then **DONE**. Attached wires stretch to follow |
 | Rotate / mirror | Select a part → **ROTATE**, **MIRROR ↔** or **MIRROR ↕** (labels rotate too) |
