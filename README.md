@@ -134,6 +134,12 @@ edit to the schematic text, so the rest of the file stays exactly as KiCad wrote
 | Slice wires | Draw → **Slice**: tap the two ends of a cut line; every wire and bus it crosses is split there (KiCad 9's Slice) |
 | Edit many things at once | Box select, then **EDIT ALL**: set a field (for example Footprint, MPN or Loom) on every selected part, show or hide that field, and set the text size and bold of the selected labels and text (KiCad's Edit Text & Graphic Properties) |
 | Tidy a sheet | Analyse → **Cleanup** (KiCad's Cleanup Schematic): joins straight wires split where nothing else connects, removes duplicate and zero-length wires and junctions that join fewer than three things. Connections never change |
+| Unit, body style and exclude flags | Select a part → **EDIT**: **Unit** (A, B, C… for multi-unit parts such as relays and switches), **Body style** (standard or De Morgan, for symbols that have both), and tick boxes for DNP, exclude from simulation, from the bill of materials and from the board (KiCad's Symbol Properties) |
+| Place a chosen unit | In **Add part**, a part with several units shows **Place unit**: pick A, B, C… before placing |
+| Change Symbol | Select a part → **CHANGE** (under MORE on small screens) and pick the new symbol: the part keeps its place, reference and your own fields; Footprint, Datasheet and Description come from the new symbol, and **Keep the current value** keeps the value |
+| Update from Library | Select a part → **UPDATE**: the schematic's copy of that symbol is replaced with the library's current one on every sheet that uses it (for symbols in Loomline's KiCad library) |
+| Alternate pin functions | Tap a pin that has alternates (many microcontrollers and driver ICs) → **PIN FUNCTION** and choose the function, as in KiCad |
+| Symbols already in the project | **Add part** has an **In this project** list with every symbol the open schematics already contain, including ones from your own libraries, to place again or to change a part to |
 | Edit reference, value or other fields | Select a part → **EDIT**. **ADD FIELD** adds a new one; DNP is a tick box |
 | Move | Select a part, label or wire → **MOVE**, drag, then **DONE**. Attached wires stretch to follow |
 | Rotate / mirror | Select a part → **ROTATE**, **MIRROR ↔** or **MIRROR ↕** (labels rotate too) |
