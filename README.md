@@ -124,6 +124,12 @@ edit to the schematic text, so the rest of the file stays exactly as KiCad wrote
 | Start a new schematic | **New project** on the start screen or Home → **New project**: name it, choose the paper size and fill in the title block. With GitHub connected it goes in a folder of the repository and the first save commits it on a new branch with a pull request; otherwise the save downloads a ZIP to open in KiCad 8 or 9. Save before closing the app: a new project only exists once saved |
 | Paper size and title block | Home → **Page settings** (KiCad's File → Page Settings): paper (A5–A0, ANSI A–E, US sizes or a custom size), orientation, title, date, revision, company and comments 1–9. A tick box copies the title block to every sheet |
 | Rename a sheet or change its page number | Select the sheet box → **EDIT** |
+| Text box | Draw → **Text box**: tap two opposite corners, then type the text. Select a text or text box → **EDIT** to change its words, size, bold, italic, direction and justification |
+| Label size, style and shape | Select a label → **STYLE**: text size, bold, italic, and for off-sheet labels and sheet ports the shape (input, output, bidirectional, tri-state, passive) |
+| Show or hide a part's fields | Select a part → **EDIT**: each field has a **Show** tick box (KiCad's "Visible") |
+| Break a wire | Tap the wire where it should split → **BREAK** (KiCad's Break Wire). Buses too |
+| Align to grid | Select parts or labels (or a box-selected group) → Analyse → **Align to grid**: each moves onto the snap grid (parts by their pins) and the wires follow |
+| Tidy a sheet | Analyse → **Cleanup** (KiCad's Cleanup Schematic): joins straight wires split where nothing else connects, removes duplicate and zero-length wires and junctions that join fewer than three things. Connections never change |
 | Edit reference, value or other fields | Select a part → **EDIT**. **ADD FIELD** adds a new one; DNP is a tick box |
 | Move | Select a part, label or wire → **MOVE**, drag, then **DONE**. Attached wires stretch to follow |
 | Rotate / mirror | Select a part → **ROTATE**, **MIRROR ↔** or **MIRROR ↕** (labels rotate too) |
