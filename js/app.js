@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.9.0';
+  const VERSION = '3.0.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1490,6 +1490,13 @@
       rows.push(h('div', { class: 'fieldrow' }, h('label', { text: p.name }), h('div', { style: 'display:flex;gap:8px;align-items:center' }, inp, h('label', { class: 'check', style: 'margin:0;white-space:nowrap' }, vis, 'Show'))));
     }
     const dnp = h('input', { type: 'checkbox', checked: sym.dnp });
+    // KiCad's Symbol Properties: unit, De Morgan body style and the exclude-from tick boxes
+    const curUnit = inst.refs[si].unit || sym.unit, libS = sym.lib;
+    const unitSeg = libS && libS.unitCount > 1 ? seg('Unit', Array.from({ length: libS.unitCount }, (_, k) => [String(k + 1), K.unitLetter(k + 1)]), String(curUnit)) : null;
+    const hasDM = libS && libS.units.some((u) => u.style === 2);
+    const styleSeg = hasDM ? seg('Body style', [['1', 'STANDARD'], ['2', 'ALTERNATE (DE MORGAN)']], String(sym.style || 1)) : null;
+    const exSim = h('input', { type: 'checkbox', checked: /\(exclude_from_sim yes\)/.test(sh.text.slice(sym.src.s, sym.src.e)) });
+    const exBom = h('input', { type: 'checkbox', checked: !sym.inBom }), exBoard = h('input', { type: 'checkbox', checked: !sym.onBoard });
     const newRows = h('div', { class: 'fieldlist' });
     const added = [];
     const addRow = () => {
@@ -1508,8 +1515,17 @@
       if (changes.ref && state.index.parts.some((p) => p.ref === changes.ref)) { banner('err', `${changes.ref} is already used in this project.`); return; }
       closeDialog();
       const shows = inputs.filter(([, , , vis, was]) => vis.checked !== was).map(([name, , , vis]) => [name, vis.checked]);
+      const attrs = {}, wasSim = exSim.defaultChecked;
+      if (exSim.checked !== wasSim) attrs.sim = exSim.checked;
+      if (exBom.checked === sym.inBom) attrs.bom = exBom.checked;
+      if (exBoard.checked === sym.onBoard) attrs.board = exBoard.checked;
+      const newUnit = unitSeg ? +unitSeg.get() : curUnit, newStyle = styleSeg ? +styleSeg.get() : (sym.style || 1);
       run('Edit ' + ref, () => {
         let r = E.setSymbolFields(sh, sym, inst, changes);
+        const cur = () => { const s2 = E.reparse(sh, r); return [s2, s2.symbols.find((x) => x.uuid === sym.uuid)]; };
+        if (Object.keys(attrs).length) { const [s2, y] = cur(); r = E.setSymbolAttrs(s2, y, attrs); }
+        if (newStyle !== (sym.style || 1)) { const [s2, y] = cur(); r = E.setBodyStyle(s2, y, newStyle); }
+        if (newUnit !== curUnit) { const [s2, y] = cur(); r = E.setSymbolUnit(s2, y, inst, newUnit); }
         for (const [name, show] of shows) {
           const s2 = E.reparse(sh, r), sy = s2.symbols.find((x) => x.uuid === sym.uuid), pr = sy && sy.props.find((x) => x.name === name);
           if (pr) r = E.setTextProps(s2, pr.src, { hide: !show });
@@ -1517,7 +1533,12 @@
         return r;
       });
     };
-    openDialog('EDIT ' + ref, [...rows, h('label', { class: 'check' }, dnp, 'Do not populate (DNP)'), newRows,
+    openDialog('EDIT ' + ref, [...rows,
+      unitSeg ? h('div', { class: 'field' }, h('label', { text: 'Unit' }), unitSeg.el) : null,
+      styleSeg ? h('div', { class: 'field' }, h('label', { text: 'Body style' }), styleSeg.el) : null,
+      h('label', { class: 'check' }, dnp, 'Do not populate (DNP)'),
+      h('label', { class: 'check' }, exSim, 'Exclude from simulation'), h('label', { class: 'check' }, exBom, 'Exclude from bill of materials'), h('label', { class: 'check' }, exBoard, 'Exclude from board'),
+      newRows,
       h('button', { class: 'btn small', type: 'button', onclick: addRow }, icon('i-plus'), 'ADD FIELD')],
       [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: save }]);
     if (focus) {
@@ -1629,6 +1650,8 @@
       A.push({ label: 'DUPLICATE', icon: 'i-dup', run: () => copyPart(s.inst, s.si) });
       const missing = missingUnits(s.inst, s.si);
       if (missing.length) A.push({ label: 'ADD UNIT', icon: 'i-plus', run: () => addMissingUnit(s.inst, s.si, missing[0]) });
+      A.push({ label: 'CHANGE', icon: 'i-part', run: () => openPartPicker(null, { change: { inst: s.inst, si: s.si, uuid: sym.uuid, ref } }) });
+      A.push({ label: 'UPDATE', icon: 'i-sync', run: () => updateFromLibrary(sym.libName || sym.libId) });
       A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + ref, () => E.deleteItems(sh, [{ type: 'symbol', sym }]), { anchor: null }) });
       A.push({ label: 'MIRROR ↔', icon: 'i-mirror', run: () => run('Mirror ' + ref, () => E.transformSymbol(sh, sym, 'mirrorY'), { checkMerges: true }) });
       A.push({ label: 'MIRROR ↕', icon: 'i-mirror', run: () => run('Mirror ' + ref, () => E.transformSymbol(sh, sym, 'mirrorX'), { checkMerges: true }) });
@@ -1665,6 +1688,7 @@
         const lonely = !sh.wires.some((w) => E.same(w.a, o.pos) || E.same(w.b, o.pos)) && !sh.noConnects.some((n) => E.same(n.p, o.pos));
         if (lonely) A.push({ label: 'NO-CONN', icon: 'i-nc', run: () => run('No-connect flag', () => E.addNoConnect(sh, o.pos)) });
         A.push({ label: 'WIRE', icon: 'i-wire', run: () => { setMode('wire'); state.wire = { anchors: [o.pos.slice()], flips: [false] }; updateWireOverlay(o.pos); } });
+        if (o.lib && o.lib.alts && o.lib.alts.length) A.push({ label: 'PIN FUNCTION', icon: 'i-sync', run: () => pinFunctionDialog(sh.symbols[it.si], o) });
       }
       A.push({ label: 'ZOOM', icon: 'i-target', run: zoomToSelection });
       if (s.net.inst.size > 1) A.push({ label: 'NEXT SHEET', icon: 'i-next', run: () => nextSheetForNet(s.net) });
@@ -2383,6 +2407,12 @@
     return libState.files.get(lib);
   }
   async function libEntry(lib, name) {
+    if (lib === PROJ_LIB) {
+      // A symbol already used in this project (from the schematic's own copy), placed under its own library name
+      const t = projectParts.get(name); if (!t) throw new Error(name + ' isn’t in this project.');
+      const i = name.indexOf(':');
+      return { lib: name.slice(0, i), name: name.slice(i + 1), text: t, parentText: null };
+    }
     const f = await loadLibFile(lib);
     const text = f.symbols[name];
     if (!text) throw new Error(`${lib}:${name} isn't in the library.`);
@@ -2396,7 +2426,8 @@
     const P1 = K.buildProject([{ path: 'preview.kicad_sch', text: r.text }]);
     return { scene: R.buildScene(P1, P1.root), units: r.units };
   }
-  function openPartPicker(initial) {
+  function openPartPicker(initial, opts) {
+    opts = opts || {};
     closePicker();
     const recent = Store.pref('recentParts') || [];
     const q = h('input', { class: 'input', type: 'search', placeholder: 'Search 10,000 parts: relay, pushbutton, fuse, Conn_01x04…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
@@ -2404,9 +2435,9 @@
     const list = h('div', { class: 'rows plist' });
     const canvas = h('canvas', { class: 'pcanvas' });
     const info = h('div', { class: 'pinfo' }, h('p', { class: 'hint', text: 'Pick a part to see it here.' }));
-    const place = h('button', { class: 'btn primary', disabled: true }, icon('i-part'), 'PLACE');
+    const place = h('button', { class: 'btn primary', disabled: true }, icon('i-part'), opts.change ? 'CHANGE TO THIS' : 'PLACE');
     const wrap = h('div', { class: 'picker-wrap', id: 'pickerWrap', role: 'dialog', 'aria-label': 'Add a part' },
-      h('div', { class: 'report-head' }, h('div', { class: 'titles' }, h('b', { text: 'ADD A PART' }), h('small', { id: 'pickCount', text: 'Loading the library…' })),
+      h('div', { class: 'report-head' }, h('div', { class: 'titles' }, h('b', { text: opts.change ? 'CHANGE ' + opts.change.ref + ' TO…' : 'ADD A PART' }), h('small', { id: 'pickCount', text: 'Loading the library…' })),
         h('button', { class: 'ib', 'aria-label': 'Close', onclick: closePicker }, icon('i-close'))),
       h('div', { class: 'picker-body' },
         h('div', { class: 'pick-left' }, q, cats, list),
@@ -2428,8 +2459,12 @@
         requestAnimationFrame(() => { pv.resize(); pv.fit(sy ? sy.bb : scene.page, 16); });
         chosen = entry;
         place.disabled = false;
+        // A part with several units (a relay's coil and contacts, a quad gate…): choose which one to place
+        const unitSeg = units.length > 1 && !opts.change ? seg('Unit', units.map((u) => [String(u), 'UNIT ' + K.unitLetter(u)]), String(units[0]), (v) => { if (chosen) chosen.unit = +v; }) : null;
+        if (unitSeg) chosen.unit = units[0];
         info.replaceChildren(
           h('div', { class: 'title small', text: name }),
+          unitSeg ? h('div', { class: 'field' }, h('label', { text: 'Place unit' }), unitSeg.el) : null,
           h('div', { class: 'sub mono', text: lib + ' · ref ' + (row[4] || '?') + ' · ' + row[6] + ' pin' + (row[6] === 1 ? '' : 's') + (units.length > 1 ? ' · ' + units.length + ' units' : '') }),
           row[2] ? h('p', { class: 'pdesc', text: row[2] }) : null,
           row[3] ? h('p', { class: 'hint', text: 'Keywords: ' + row[3] }) : null);
@@ -2437,6 +2472,7 @@
     };
     place.addEventListener('click', () => {
       if (!chosen) return;
+      if (opts.change) { const c = opts.change, e2 = chosen; closePicker(); changeSymbolTo(c, e2); return; }
       const rec = [chosen.lib + ':' + chosen.name].concat(recent.filter((x) => x !== chosen.lib + ':' + chosen.name)).slice(0, 20);
       Store.pref('recentParts', rec);
       state.draw = { tool: 'part', pts: [], part: chosen };
@@ -2485,6 +2521,7 @@
     if (typeof initial === 'string' && !libOnly) q.value = initial;
     if (libOnly) q.placeholder = 'Search the ' + libOnly + ' symbols';
     loadLibIndex().then((idx) => {
+      mergeProjectParts(idx);
       const names = ['All'].concat(Array.from(new Set(idx.libs.map((l) => l.cat))));
       for (const c of names) cats.append(h('button', { class: 'chip' + (c === cat ? ' on' : ''), onclick: (e) => { cat = c; state.pickCat = c; for (const b of cats.children) b.classList.toggle('on', b === e.currentTarget); fill(); } }, c));
       fill();
@@ -2684,7 +2721,7 @@
     const P = state.project, inst = state.inst, sh0 = inst.sheet;
     const snapped = snapPoint(wp, type || 'touch'), p = snapped.p;
     const old = new Set(sh0.symbols.map((x) => x.uuid));
-    let r = E.addLibSymbol(P, sh0, inst, entry, p);
+    let r = E.addLibSymbol(P, sh0, inst, entry, p, entry.unit ? { unit: entry.unit } : {});
     const info = { ref: r.ref, unit: r.unit, units: r.units, how: null };
     let sh = E.reparse(sh0, r);
     const mine = () => sh.symbols.find((x) => !old.has(x.uuid));
@@ -4600,6 +4637,36 @@
         });
       } }]);
   }
+  // ---- KiCad's symbol tools: Change Symbol, Update from Library, alternate pin functions
+  function changeSymbolTo(c, entry) {
+    const sh = c.inst.sheet, sym = sh.symbols.find((x) => x.uuid === c.uuid);
+    if (!sym) return;
+    const keep = h('input', { type: 'checkbox', checked: false });
+    openDialog('CHANGE ' + c.ref, [h('p', { class: 'hint', text: `${c.ref} becomes ${entry.lib}:${entry.name}. It keeps its place, reference and your own fields; Footprint, Datasheet and Description come from the new symbol.` }),
+      h('label', { class: 'check' }, keep, 'Keep the current value'),
+      h('p', { class: 'hint', text: 'Pins that move or disappear can leave wires unconnected: check the part afterwards.' })],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'CHANGE', primary: true, run: () => { closeDialog(); run('Change ' + c.ref + ' to ' + entry.name, () => E.changeSymbol(sh, sym, entry, { keepValue: keep.checked }), { checkMerges: true }); } }]);
+  }
+  async function updateFromLibrary(libId) {
+    const i = libId.indexOf(':'), lib = libId.slice(0, i), name = libId.slice(i + 1);
+    let entry;
+    try { entry = await libEntry(lib, name); }
+    catch (e) { banner('err', `${libId} isn’t in Loomline’s library, so there’s nothing to update it from. Parts from your own libraries are updated in KiCad.`); return; }
+    const sheets = state.project.instances.map((x) => x.sheet).filter((x, k, a) => a.indexOf(x) === k && x.symbols.some((y) => (y.libName || y.libId) === libId));
+    const n = sheets.reduce((a, x) => a + x.symbols.filter((y) => (y.libName || y.libId) === libId).length, 0);
+    run('Update ' + name + ' from library', () => sheets.map((x) => E.updateLibSymbol(x, libId, entry)).filter(Boolean), { checkMerges: true });
+    toast(`${name} updated from the library on ${sheets.length} sheet${sheets.length === 1 ? '' : 's'} (${n} part${n === 1 ? '' : 's'}).`);
+  }
+  function pinFunctionDialog(sym, pin) {
+    const cur = sym.pinAlts[pin.number] || '';
+    const opts = [['', (pin.name || pin.number) + ' (normal)']].concat(pin.lib.alts.map((a) => [a.name, a.name + (a.type ? ' · ' + a.type.replace(/_/g, ' ') : '')]));
+    const list = h('div', { class: 'rows' });
+    let pick = cur;
+    const draw = () => list.replaceChildren(...opts.map(([v, l]) => h('button', { class: 'row' + (v === pick ? ' current' : ''), type: 'button', onclick: () => { pick = v; draw(); } }, h('span', { class: 'main' }, h('span', { class: 'nm', text: l })))));
+    draw();
+    openDialog('PIN ' + pin.number + ' FUNCTION', [h('p', { class: 'hint', text: 'KiCad’s alternate pin functions: the pin keeps its number and place but takes this name and type.' }), list],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: () => { closeDialog(); if (pick === cur) return; run('Pin ' + pin.number + ' function', () => E.setPinAlternate(state.inst.sheet, sym, pin.number, pick || null)); } }]);
+  }
   function childOf(inst, idx) { const sheet = inst.sheet.sheets[idx]; return inst.children.find((c) => c.sheetSym === sheet); }
   // Pins for every sheet port (hierarchical label) in the sub-sheet that has no pin yet: inputs left, the rest right.
   function importSheetPins(inst, idx) {
@@ -4646,6 +4713,32 @@
   // ---- My parts: a simple symbol editor (box parts) kept on this device, in the part library as "My parts"
   const MY_LIB = 'My_Parts';
   async function myParts() { try { return (await Store.get('myParts')) || { symbols: {}, meta: {} }; } catch (e) { return { symbols: {}, meta: {} }; } }
+  // "In this project": every symbol the open schematics already contain, so parts from your own
+  // libraries (not in Loomline's KiCad set) can be placed again and used for Change Symbol.
+  const PROJ_LIB = 'In this project';
+  const projectParts = new Map();
+  function mergeProjectParts(idx) {
+    projectParts.clear();
+    let li = idx.libs.findIndex((l) => l.name === PROJ_LIB);
+    if (li >= 0) idx.rows = idx.rows.filter((r) => r[0] !== li);
+    if (!state.project) return;
+    for (const inst of state.project.instances) {
+      const sh = inst.sheet, ls = K.find(sh.root, 'lib_symbols'); if (!ls) continue;
+      for (let k = 1; k < ls.length; k++) {
+        const n = ls[k]; if (!Array.isArray(n) || n[0] !== 'symbol' || projectParts.has(n[1]) || !/:/.test(n[1])) continue;
+        projectParts.set(n[1], sh.text.slice(n.s, n.e));
+      }
+    }
+    if (!projectParts.size) return;
+    if (li < 0) { idx.libs.push({ name: PROJ_LIB, cat: 'In this project', n: 0, user: true }); li = idx.libs.length - 1; }
+    for (const [id, t] of projectParts) {
+      const parsed = state.project.instances.map((i) => i.sheet.libSymbols[id]).find(Boolean) || { props: {} };
+      const pins = (t.match(/\(pin\s/g) || []).length;
+      idx.rows.unshift([li, id, parsed.props.Description || parsed.props.ki_description || '', parsed.props.ki_keywords || '', (parsed.props.Reference || 'U').replace(/\?$/, ''), parsed.unitCount || 1, pins, 0]);
+    }
+    idx.libs[li].n = projectParts.size;
+    idx.hay = idx.rows.map((r) => (r[1] + ' ' + r[2] + ' ' + r[3] + ' ' + idx.libs[r[0]].name).toLowerCase());
+  }
   function mergeMyParts(idx, mp) {
     let li = idx.libs.findIndex((l) => l.name === MY_LIB);
     if (li < 0) { idx.libs.push({ name: MY_LIB, cat: 'My parts', n: 0, user: true }); li = idx.libs.length - 1; }

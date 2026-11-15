@@ -1073,6 +1073,122 @@
     sp.insert(insertPoint(sheet), L.map((l) => '\t' + l.replace(/\n/g, '\n\t')).join('\n') + '\n');
     return { path: sheet.path, text: sp.apply(), ref: myRef, unit, units, at: p.slice() };
   }
+  // ------------------------------------------------------------------ symbol properties (KiCad's Symbol Properties)
+  function embeddedLibNode(sheet, libId) {
+    const ls = K.find(sheet.root, 'lib_symbols');
+    if (!ls) return null;
+    for (let k = 1; k < ls.length; k++) if (Array.isArray(ls[k]) && ls[k][0] === 'symbol' && ls[k][1] === libId) return ls[k];
+    return null;
+  }
+  function embeddedLibText(sheet, libId) { const n = embeddedLibNode(sheet, libId); return n ? sheet.text.slice(n.s, n.e) : null; }
+  // Replace a placed symbol's pin list with the pins of `unit` (keeping uuids and alternates where numbers match).
+  function rewritePins(sp, sheet, sym, flat, unit) {
+    const text = sheet.text, old = new Map();
+    let last = null;
+    for (let k = 1; k < sym.src.length; k++) {
+      const c = sym.src[k];
+      if (Array.isArray(c) && c[0] === 'pin' && c.s !== undefined) { old.set(c[1], c); let st = c.s; while (st > 0 && /[ \t\n]/.test(text[st - 1])) st--; sp.replace(st, c.e, ''); last = c; }
+    }
+    const nums = pinNumbersFor(flat, unit);
+    const anchorNode = last || K.find(sym.src, 'instances');
+    const ind = anchorNode ? indentAt(text, anchorNode.s) : '\t\t';
+    const lines = nums.map((n) => {
+      const o = old.get(n), u = o ? (K.find(o, 'uuid') || [])[1] : null, alt = o ? (K.find(o, 'alternate') || [])[1] : null;
+      return [`(pin ${qstr(n)}`, `\t(uuid ${qstr(u || uuid())})`].concat(alt ? [`\t(alternate ${qstr(alt)})`] : []).concat([')']).map((l) => ind + l).join('\n');
+    });
+    if (!lines.length) return;
+    if (last) sp.insert(last.e, '\n' + lines.join('\n'));
+    else { const inst = K.find(sym.src, 'instances'); if (inst) { let st = inst.s; sp.insert(st, lines.join('\n').replace(/^\s+/, '') + '\n' + ind); } }
+  }
+  /** Which unit of a multi-unit part this symbol shows (KiCad's Unit in Symbol Properties). */
+  function setSymbolUnit(sheet, sym, inst, unit) {
+    const flat = embeddedLibText(sheet, sym.libName || sym.libId);
+    if (!flat) throw new Error('This part’s symbol isn’t in the sheet.');
+    if (!libUnits(flat).includes(unit)) throw new Error('This part has no unit ' + unit + '.');
+    const sp = new Splicer(sheet.text);
+    const u = K.find(sym.src, 'unit'); if (u) setTok(sp, u, 1, String(unit));
+    const insts = K.find(sym.src, 'instances');
+    if (insts) for (const pr of K.findAll(insts, 'project')) for (const pa of K.findAll(pr, 'path')) { if (inst && pa[1] !== inst.path) continue; const pu = K.find(pa, 'unit'); if (pu) setTok(sp, pu, 1, String(unit)); }
+    rewritePins(sp, sheet, sym, flat, unit);
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** De Morgan: the alternate body style (2) or the standard one (1). */
+  function setBodyStyle(sheet, sym, style) {
+    const sp = new Splicer(sheet.text);
+    const n = K.find(sym.src, 'body_style') || K.find(sym.src, 'convert');
+    if (n) setTok(sp, n, 1, String(style));
+    else { const u = K.find(sym.src, 'unit'); sp.insert(u.e, '\n' + indentAt(sheet.text, u.s) + `(${sheet.version >= 20250114 ? 'body_style' : 'convert'} ${style})`); }
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** KiCad's alternate pin functions: use one of the pin's alternates, or null for its normal function. */
+  function setPinAlternate(sheet, sym, number, alt) {
+    const sp = new Splicer(sheet.text), text = sheet.text;
+    const pn = K.findAll(sym.src, 'pin').find((p) => p[1] === number);
+    if (pn) {
+      const a = K.find(pn, 'alternate');
+      if (a) { if (alt) setTok(sp, a, 1, qstr(alt)); else { let st = a.s; while (st > 0 && /[ \t\n]/.test(text[st - 1])) st--; sp.replace(st, a.e, ''); } }
+      else if (alt) { const u = K.find(pn, 'uuid') || pn; sp.insert(u.e, '\n' + indentAt(text, u.s) + `(alternate ${qstr(alt)})`); }
+    } else if (alt) {
+      const inst = K.find(sym.src, 'instances'), ind = indentAt(text, inst.s);
+      sp.insert(inst.s, `(pin ${qstr(number)}\n${ind}\t(uuid ${qstr(uuid())})\n${ind}\t(alternate ${qstr(alt)})\n${ind})\n${ind}`);
+    }
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Exclude from simulation / bill of materials / board (o.sim, o.bom, o.board: true = excluded). */
+  function setSymbolAttrs(sheet, sym, o) {
+    const sp = new Splicer(sheet.text), text = sheet.text;
+    const put = (key, val) => {
+      const n = K.find(sym.src, key);
+      if (n) setTok(sp, n, 1, val);
+      else { const u = K.find(sym.src, 'unit') || K.find(sym.src, 'at'); sp.insert(u.e, '\n' + indentAt(text, u.s) + `(${key} ${val})`); }
+    };
+    if (o.sim !== undefined && (!sheet.version || sheet.version >= 20231120)) put('exclude_from_sim', o.sim ? 'yes' : 'no');
+    if (o.bom !== undefined) put('in_bom', o.bom ? 'no' : 'yes');
+    if (o.board !== undefined) put('on_board', o.board ? 'no' : 'yes');
+    return { path: sheet.path, text: sp.apply() };
+  }
+  function embedSp(sp, sheet, libId, flat) {
+    if (sheet.libSymbols[libId] || embeddedLibNode(sheet, libId)) return;
+    const ls = K.find(sheet.root, 'lib_symbols'), block = pretty(flat, 2) + '\n';
+    if (ls && ls.length > 1) sp.insert(lineStart(sheet.text, ls.e - 1), block);
+    else if (ls) sp.replace(ls.s, ls.e, '(lib_symbols\n' + block + '\t)');
+    else sp.insert(insertPoint(sheet), '\t(lib_symbols\n' + block + '\t)\n');
+  }
+  /**
+   * KiCad's Change Symbol: the part keeps its place, reference and own fields but uses another library
+   * symbol. Value, Footprint, Datasheet and Description come from the new symbol unless o.keepValue.
+   */
+  function changeSymbol(sheet, sym, entry, o) {
+    o = o || {};
+    const libId = entry.lib + ':' + entry.name;
+    const flat = flattenLibSymbol(entry.lib, entry.name, entry.text, entry.parentText, sheet.version);
+    const sp = new Splicer(sheet.text);
+    embedSp(sp, sheet, libId, flat);
+    setTok(sp, K.find(sym.src, 'lib_id'), 1, qstr(libId));
+    const ln = K.find(sym.src, 'lib_name'); if (ln) { let st = ln.s; while (st > 0 && /[ \t\n]/.test(sheet.text[st - 1])) st--; sp.replace(st, ln.e, ''); }
+    const libProps = {};
+    for (const pr of splitTop(flat).slice(2).filter((x) => /^\(property\s/.test(x))) { const parts = splitTop(pr); libProps[JSON.parse(parts[1])] = JSON.parse(parts[2]); }
+    for (const p of sym.props) {
+      if (!['Value', 'Footprint', 'Datasheet', 'Description'].includes(p.name) || libProps[p.name] === undefined) continue;
+      if (p.name === 'Value' && o.keepValue) continue;
+      if (p.value !== libProps[p.name]) setTok(sp, p.src, 2, qstr(libProps[p.name]));
+    }
+    const units = libUnits(flat), unit = units.includes(sym.unit) ? sym.unit : units[0];
+    if (unit !== sym.unit) { const u = K.find(sym.src, 'unit'); if (u) setTok(sp, u, 1, String(unit)); }
+    rewritePins(sp, sheet, sym, flat, unit);
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** KiCad's Update Symbols from Library: replace the sheet's copy of libId with the library's current one. */
+  function updateLibSymbol(sheet, libId, entry) {
+    const node = embeddedLibNode(sheet, libId);
+    if (!node) return null;
+    const lib = libId.slice(0, libId.indexOf(':')), name = libId.slice(libId.indexOf(':') + 1);
+    const flat = flattenLibSymbol(lib, name, entry.text, entry.parentText, sheet.version);
+    const sp = new Splicer(sheet.text);
+    sp.replace(node.s, node.e, pretty(flat, 2).replace(/^\s+/, ''));
+    for (const sym of sheet.symbols) if ((sym.libName || sym.libId) === libId) rewritePins(sp, sheet, sym, flat, sym.unit);
+    return { path: sheet.path, text: sp.apply() };
+  }
   /** Place another unit of a multi-unit part already in the design (e.g. a relay's contacts). */
   function addUnit(project, sheet, inst, sym, unit, p) {
     const lib = sym.libName || sym.libId;
@@ -1823,7 +1939,7 @@
     reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
     setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,
-    addBusSegs, addBusEntry, setLineKind, addImage, setImageScale, addTable, sliceLines, setTextProps, setLabelShape, breakLine, cleanupSheet, PAPER_SIZES, pageSettingsOf, setPageSettings, setSheetProps, newProjectFiles, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
+    addBusSegs, addBusEntry, setLineKind, setSymbolUnit, setBodyStyle, setPinAlternate, setSymbolAttrs, changeSymbol, updateLibSymbol, embeddedLibText, addImage, setImageScale, addTable, sliceLines, setTextProps, setLabelShape, breakLine, cleanupSheet, PAPER_SIZES, pageSettingsOf, setPageSettings, setSheetProps, newProjectFiles, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
     PIN_TYPES, parsePinLines, boxSymbol, symbolLibText
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KiEdit;
