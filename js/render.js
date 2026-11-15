@@ -150,7 +150,7 @@
     }
 
     // ---- images (embedded PNG/JPEG); decoded lazily by the view
-    for (const im of sh.images) S.images.push({ p: im.p, scale: im.scale, data: im.data, img: null, w: 0, h: 0 });
+    sh.images.forEach((im, ii) => S.images.push({ p: im.p, scale: im.scale, data: im.data, img: null, w: 0, h: 0, it: 'I' + ii }));
 
     // ---- free graphics
     const graphicStroke = (it, o) => {
@@ -782,7 +782,15 @@
       }
       for (const c of S.circles) if (isG(c.it)) { const d = Math.abs(Math.hypot(wp[0] - c.c[0], wp[1] - c.c[1]) - c.r); if (d < gd) { gd = d; gr = c.it; } }
       for (const t of S.texts) if (isG(t.it)) { const b = t.bb; if (wp[0] >= b[0] && wp[0] <= b[2] && wp[1] >= b[1] && wp[1] <= b[3]) { gr = t.it; break; } }
+      // Inside a text box or table cell (the smallest one, so a cell wins over a box around it)
+      if (!gr) { let area = Infinity; for (const s of S.strokes) { if (!s.it || s.it[0] !== 'B') continue; const b = s.bb; if (wp[0] >= b[0] && wp[0] <= b[2] && wp[1] >= b[1] && wp[1] <= b[3]) { const a = (b[2] - b[0]) * (b[3] - b[1]); if (a < area) { area = a; gr = s.it; } } } }
       if (gr) return { type: 'graphic', it: gr };
+      // Images: anywhere inside the picture
+      for (let k = S.images.length - 1; k >= 0; k--) {
+        const im = S.images[k]; if (!im.img || !im.it) continue;
+        const w = im.w * im.scale * 25.4 / 300, h = im.h * im.scale * 25.4 / 300;
+        if (Math.abs(wp[0] - im.p[0]) <= w / 2 && Math.abs(wp[1] - im.p[1]) <= h / 2) return { type: 'graphic', it: im.it };
+      }
       for (const s of S.sheets) {
         const b = s.bb;
         if (wp[0] >= b[0] && wp[0] <= b[2] && wp[1] >= b[1] && wp[1] <= b[3]) return { type: 'sheet', idx: s.idx };
@@ -849,8 +857,9 @@
         const w = im.w * im.scale * 25.4 / 300, h = im.h * im.scale * 25.4 / 300;
         const b = [im.p[0] - w / 2, im.p[1] - h / 2, im.p[0] + w / 2, im.p[1] + h / 2];
         if (!vis(b)) continue;
-        ctx.globalAlpha = dim;
+        ctx.globalAlpha = isHl(im) ? 1 : dim;
         ctx.drawImage(im.img, b[0], b[1], w, h);
+        if (isHl(im)) { ctx.globalAlpha = 1; ctx.strokeStyle = P.sel || '#2f81f7'; ctx.lineWidth = 2 / this.scale; ctx.strokeRect(b[0], b[1], w, h); }
       }
       // fills
       for (const f of S.fills) {

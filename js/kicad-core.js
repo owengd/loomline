@@ -462,7 +462,7 @@
         case 'table': {
           for (const cells of findAll(c, 'cells')) for (const cell of findAll(cells, 'table_cell')) {
             const a = at(cell), s = find(cell, 'size'), m = find(cell, 'margins');
-            sh.textBoxes.push({ s: cell[1] || '', p: [a.x, a.y], size: [num(s && s[1]), num(s && s[2])], a: a.a, st: { w: 0.1524, type: 'solid', color: null }, fl: fill(cell), fx: effects(cell), margins: m ? [num(m[1]), num(m[2]), num(m[3]), num(m[4])] : null });
+            sh.textBoxes.push({ s: cell[1] || '', p: [a.x, a.y], size: [num(s && s[1]), num(s && s[2])], a: a.a, st: { w: 0.1524, type: 'solid', color: null }, fl: fill(cell), fx: effects(cell), margins: m ? [num(m[1]), num(m[2]), num(m[3]), num(m[4])] : null, src: cell, table: c });
           }
           break;
         }
@@ -486,7 +486,7 @@
         }
         case 'image': {
           const a = at(c), d = find(c, 'data');
-          if (d) sh.images.push({ p: [a.x, a.y], scale: num(strVal(c, 'scale', 1), 1), data: d.slice(1).filter((x) => typeof x === 'string').join('') });
+          if (d) sh.images.push({ p: [a.x, a.y], scale: num(strVal(c, 'scale', 1), 1), data: d.slice(1).filter((x) => typeof x === 'string').join(''), uuid: uuidOf(c), src: c });
           break;
         }
         case 'bus_alias': {

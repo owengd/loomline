@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.8.0';
+  const VERSION = '2.9.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -156,6 +156,7 @@
   function updateHeader() {
     const p = state.project, s = state.source;
     $('projName').textContent = p ? p.name : 'Loomline';
+    const ver = $('appVer'); if (ver) ver.textContent = 'v' + VERSION;
     $('netCount').textContent = p ? p.nets.filter((n) => !n.bus && (n.named || n.pins.length > 1)).length : 0;
     $('partCount').textContent = p && state.index ? state.index.parts.length : 0;
     let rev = 'No project open';
@@ -1578,7 +1579,7 @@
       const t = state.moveTarget, sh = state.inst.sheet;
       if (t.type === 'multi') { const r = state.sel && state.sel.type === 'multi' ? multiResolve(state.sel.m) : { syms: new Set(), its: new Set() }; return { sym: -1, syms: r.syms, its: r.its }; }
       if (t.type === 'symbol') return { sym: sh.symbols.findIndex((x) => x.uuid === t.uuid), its: null };
-      if (t.type === 'graphic') { const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : sh.graphics; return { sym: -1, its: new Set([t.kind + list.findIndex((o) => uuidOf(o) === t.uuid)]) }; }
+      if (t.type === 'graphic') { const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : t.kind === 'I' ? sh.images : sh.graphics; return { sym: -1, its: new Set([t.kind + list.findIndex((o) => uuidOf(o) === t.uuid)]) }; }
       const list = t.type === 'label' ? sh.labels : t.type === 'bus' ? sh.buses : sh.wires;
       const idx = list.findIndex((o) => uuidOf(o) === t.uuid);
       return { sym: -1, its: new Set([(t.type === 'label' ? 'L' : t.type === 'bus' ? 'U' : 'W') + idx]) };
@@ -1597,10 +1598,10 @@
           return;
         }
         if (t.type === 'graphic') {
-          const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : sh.graphics;
+          const list = t.kind === 'T' ? sh.texts : t.kind === 'B' ? sh.textBoxes : t.kind === 'I' ? sh.images : sh.graphics;
           const o = list.find((x) => uuidOf(x) === t.uuid);
           if (!o) { setMode('select'); return; }
-          run('Move ' + t.name, () => E.moveNode(sh, o.src, sd));
+          run('Move ' + t.name, () => E.moveNode(sh, o.table || o.src, sd));
           return;
         }
         let item;
@@ -1677,6 +1678,7 @@
     } else if (s.type === 'multi') {
       const r = multiResolve(s.m), n = r.items.length;
       A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'multi', name: n + ' items' }) });
+      A.push({ label: 'EDIT ALL', icon: 'i-edit', run: multiEditDialog });
       if (r.syms.size) A.push({ label: 'LOOM', icon: 'i-tag', run: () => loomDialog(Array.from(r.syms).map((si) => ({ inst: state.inst, si }))) });
       A.push({ label: 'COPY', icon: 'i-copy2', run: copySel });
       A.push({ label: 'DUPLICATE', icon: 'i-dup', run: duplicateSel });
@@ -1689,8 +1691,9 @@
         if (s.it[0] === 'U') A.push({ label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) }, { label: 'UNFOLD', icon: 'i-tee', run: () => unfoldDialog(o) });
         if ((s.it[0] === 'T' || s.it[0] === 'B') && o.src) A.push({ label: 'EDIT', icon: 'i-edit', run: () => textDialog({ edit: o }) });
         else if (s.it[0] === 'G') A.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(o) });
+        if (s.it[0] === 'I') A.push({ label: 'SIZE', icon: 'i-expand', run: () => imageSizeDialog(o) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'graphic', kind: s.it[0], uuid: uuidOf(o), name: name.toLowerCase() }) });
-        A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + name.toLowerCase(), () => E.deleteNode(sh, o.src), { anchor: null }) });
+        A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + name.toLowerCase(), () => E.deleteNode(sh, o.table || o.src), { anchor: null }) });
         if (!uuidOf(o) || /^[UE]/.test(s.it)) { const mi = A.findIndex((x) => x.label === 'MOVE'); if (mi >= 0) A.splice(mi, 1); }
         // A bus piece moves like a wire: it slides sideways and the lines joined to it follow.
         if (s.it[0] === 'U' && uuidOf(o)) A.splice(A.findIndex((x) => x.label === 'DELETE'), 0, { label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'bus', uuid: uuidOf(o), name: 'bus' }) },
@@ -2130,19 +2133,20 @@
 
   // ================================================================== DRAW mode: parts and shapes
   // PART places a symbol from the library; LINE, RECT, CIRCLE, ARC and TEXT add KiCad graphics.
-  const DRAW_TOOLS = [['part', 'PART', 'i-part'], ['line', 'LINE', 'i-line'], ['rect', 'RECT', 'i-rect'], ['circle', 'CIRCLE', 'i-circle'], ['arc', 'ARC', 'i-arc'], ['text', 'TEXT', 'i-text'], ['textbox', 'TEXT BOX', 'i-rect']];
+  const DRAW_TOOLS = [['part', 'PART', 'i-part'], ['line', 'LINE', 'i-line'], ['rect', 'RECT', 'i-rect'], ['circle', 'CIRCLE', 'i-circle'], ['arc', 'ARC', 'i-arc'], ['text', 'TEXT', 'i-text'], ['textbox', 'TEXT BOX', 'i-rect'], ['image', 'IMAGE', 'i-image'], ['table', 'TABLE', 'i-report'], ['slice', 'SLICE', 'i-cut']];
   const COLOURS = { default: null, red: [200, 0, 0, 1], blue: [0, 0, 194, 1], green: [0, 132, 0, 1], black: [0, 0, 0, 1] };
   function drawStyle() { return Object.assign({ width: 0, type: 'default', fill: 'none', colour: 'default' }, Store.pref('drawStyle') || {}); }
   const styleFor = (st) => ({ width: st.width, type: st.type, fill: st.fill, color: COLOURS[st.colour] || null });
   function graphicObj(it, sh) {
     sh = sh || state.inst.sheet;
     const i = +it.slice(1);
-    return it[0] === 'G' ? sh.graphics[i] : it[0] === 'T' ? sh.texts[i] : it[0] === 'B' ? sh.textBoxes[i] : it[0] === 'U' ? sh.buses[i] : it[0] === 'E' ? sh.entries[i] : null;
+    return it[0] === 'G' ? sh.graphics[i] : it[0] === 'T' ? sh.texts[i] : it[0] === 'B' ? sh.textBoxes[i] : it[0] === 'U' ? sh.buses[i] : it[0] === 'E' ? sh.entries[i] : it[0] === 'I' ? sh.images[i] : null;
   }
   function graphicName(it, o) {
     if (!o) return 'Drawing';
     if (it[0] === 'T') return 'Text “' + plain(o.s).slice(0, 40) + '”';
-    if (it[0] === 'B') return 'Text box';
+    if (it[0] === 'B') return o.table ? 'Table' : 'Text box';
+    if (it[0] === 'I') return 'Image';
     if (it[0] === 'U') return 'Bus' + (busName(o) ? ' ' + busName(o) : '');
     if (it[0] === 'E') return 'Bus entry';
     return { polyline: 'Line', rectangle: 'Rectangle', circle: 'Circle', arc: 'Arc', bezier: 'Curve' }[o.kind] || 'Drawing';
@@ -2182,6 +2186,26 @@
     }
     if (d.tool === 'stencil') { if (d.stencil) placeStencil(d.stencil, wp, type); return; }
     if (d.tool === 'text') { textDialog({ p }); return; }
+    if (d.tool === 'image') {
+      if (!d.image) { pickImage(); return; }
+      const im = d.image;
+      run('Add image', () => E.addImage(sh, p, im.data, im.scale), { anchor: null });
+      setMode('select'); return;
+    }
+    if (d.tool === 'table') {
+      if (!d.table) { tableDialog(); return; }
+      const t = d.table;
+      run('Add table', () => E.addTable(sh, p, t), { anchor: null });
+      setMode('select'); return;
+    }
+    if (d.tool === 'slice' && d.pts.length === 1) {
+      const a = d.pts[0]; d.pts = []; drawOverlay();
+      if (E.same(a, p)) { toast('Tap the two ends of the cut line.'); return; }
+      let n = 0;
+      run('Slice', () => { const r = E.sliceLines(sh, a, p); n = r.count; return r.result; });
+      if (n) toast(`Split ${n} wire${n === 1 ? '' : 's'}.`);
+      return;
+    }
     if (d.tool === 'entry') {
       if (!sh.buses.some((b) => K.onSegment(p, b.a, b.b))) { toast('Tap on a bus. R turns the entry.'); return; }
       run('Add bus entry', () => E.addBusEntry(sh, p, ENTRY_DIRS[d.dir || 0]), { anchor: null });
@@ -2214,6 +2238,10 @@
       circle: n ? 'Tap a point on the edge' : 'Tap the centre',
       arc: ['Tap where the arc starts', 'Tap a point the arc passes through', 'Tap where the arc ends'][n] || '',
       text: 'Tap where the text goes',
+      textbox: n ? 'Tap the opposite corner' : 'Tap one corner of the text box',
+      image: d.image ? 'Tap where the picture’s centre goes' : 'Choose a picture',
+      table: d.table ? `Tap where the table’s top-left corner goes (${d.table.rows} × ${d.table.cols})` : 'Set up the table',
+      slice: n ? 'Tap the other end of the cut: every wire it crosses is split there' : 'Tap one end of the cut line',
       entry: 'Tap on a bus to add an entry · R turns it',
       sheet: n ? 'Tap the opposite corner' : 'Tap one corner of the new sheet',
       stencil: d.stencil ? `Tap where the ${d.stencil.name.toLowerCase()} goes${d.stencil.kind === 'wire' ? ' · on a wire to join it' : ''}` : 'Pick a stencil'
@@ -3076,7 +3104,9 @@
     ];
     if (tab === 'draw') return [
       { title: 'Shapes', tools: [drawToolBtn('line', 'Line', 'i-line'), drawToolBtn('rect', 'Rectangle', 'i-rect'), drawToolBtn('circle', 'Circle', 'i-circle'), drawToolBtn('arc', 'Arc', 'i-arc')] },
-      { title: 'Text', tools: [drawToolBtn('text', 'Text', 'i-text'), drawToolBtn('textbox', 'Text box', 'i-rect')] },
+      { title: 'Text', tools: [drawToolBtn('text', 'Text', 'i-text'), drawToolBtn('textbox', 'Text box', 'i-rect'), { label: 'Table', icon: 'i-report', disabled: !P, on: state.mode === 'draw' && state.draw && state.draw.tool === 'table', run: tableDialog }] },
+      { title: 'Picture', tools: [{ label: 'Image', icon: 'i-image', disabled: !P, on: state.mode === 'draw' && state.draw && state.draw.tool === 'image', run: pickImage }] },
+      { title: 'Cut', tools: [drawToolBtn('slice', 'Slice', 'i-cut')] },
       { title: 'Style', tools: [{ label: 'Line style', icon: 'i-style', disabled: !P, run: () => { const g = state.sel && state.sel.type === 'graphic' && state.sel.it[0] === 'G' ? graphicObj(state.sel.it) : null; styleDialog(g); } }] }
     ];
     if (tab === 'analyse') {
@@ -4022,6 +4052,7 @@
   $('wConnect').addEventListener('click', () => openDrawer('drawerProjects'));
   $('wOpen').addEventListener('click', () => $('fileInput').click());
   $('wSample').addEventListener('click', loadSample);
+  if ($('appVer')) $('appVer').textContent = 'v' + VERSION;
   $('wNew').addEventListener('click', newProjectDialog);
   // ------------------------------------------------------------------ KiCad tools: annotate, find & replace, measure, swap, autoplace, repeat
   const isTyping = () => { const a = document.activeElement; return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT'); };
@@ -4479,6 +4510,95 @@
     if (n.zero) parts.push(`${n.zero} zero-length wire${n.zero === 1 ? '' : 's'} removed`);
     if (n.junctions) parts.push(`${n.junctions} unneeded junction${n.junctions === 1 ? '' : 's'} removed`);
     toast('Cleanup: ' + parts.join(', ') + '.');
+  }
+  // ---- images, tables and editing several things at once
+  function pickImage() {
+    if (!state.project) return;
+    const inp = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp,image/bmp', style: 'display:none' });
+    inp.addEventListener('change', () => {
+      const f = inp.files && inp.files[0]; inp.remove();
+      if (!f) return;
+      const url = URL.createObjectURL(f), img = new Image();
+      img.onload = () => {
+        // KiCad stores pictures as PNG; very large ones are reduced so the schematic stays small.
+        const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+        const data = c.toDataURL('image/png').split(',')[1];
+        const wmm = c.width * 25.4 / 300, scale = wmm > 100 ? +(100 / wmm).toFixed(3) : 1;   // about 100 mm wide at most to start
+        if (state.sel) { state.sel = null; applyHighlight(); }
+        state.draw = { tool: 'image', pts: [], image: { data, scale, name: f.name } };
+        if (state.mode !== 'draw') setMode('draw'); else setDrawTool('image'); state.draw.image = { data, scale, name: f.name };
+        setRibbonTab('draw'); renderStatus();
+        toast(`Tap where ${f.name} goes. Select it afterwards to change its SIZE.`);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); banner('err', 'That picture could not be read.'); };
+      img.src = url;
+    });
+    document.body.append(inp); inp.click();
+  }
+  function imageSizeDialog(o) {
+    const pct = h('input', { class: 'input', id: 'imScale', value: String(Math.round(o.scale * 100)), inputmode: 'decimal' });
+    openDialog('IMAGE SIZE', [h('div', { class: 'field' }, h('label', { for: 'imScale', text: 'Scale (%)' }), pct), h('p', { class: 'hint', text: 'As KiCad’s Image Properties scale: 100% is the picture at 300 dots per inch.' })],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: () => { const v = parseFloat(pct.value); if (!(v > 0)) { pct.focus(); return; } closeDialog(); run('Image size', () => E.setImageScale(state.inst.sheet, o, v / 100)); } }]);
+  }
+  function tableDialog() {
+    if (!state.project) return;
+    const last = Store.pref('tableSetup') || { rows: 4, cols: 3, colWidth: 25.4, rowHeight: 5.08, header: true };
+    const inp = (id, v) => h('input', { class: 'input', id, value: String(v), inputmode: 'decimal' });
+    const rows = inp('tbRows', last.rows), cols = inp('tbCols', last.cols), cw = inp('tbCw', last.colWidth), rh = inp('tbRh', last.rowHeight);
+    const header = h('input', { type: 'checkbox', checked: last.header !== false });
+    const fld = (id, l, el) => h('div', { class: 'field' }, h('label', { for: id, text: l }), el);
+    openDialog('ADD TABLE', [fld('tbRows', 'Rows', rows), fld('tbCols', 'Columns', cols), fld('tbCw', 'Column width (mm)', cw), fld('tbRh', 'Row height (mm)', rh), h('label', { class: 'check' }, header, 'Bold header row'),
+      h('p', { class: 'hint', text: 'A KiCad 8 table. Tap a cell afterwards and EDIT to type in it.' })],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'PLACE', primary: true, run: () => {
+        const t = { rows: parseInt(rows.value, 10), cols: parseInt(cols.value, 10), colWidth: parseFloat(cw.value), rowHeight: parseFloat(rh.value), header: header.checked };
+        if (!(t.rows > 0 && t.cols > 0 && t.colWidth > 0 && t.rowHeight > 0)) { banner('err', 'Rows, columns and sizes must be above zero.'); return; }
+        Store.pref('tableSetup', t); closeDialog();
+        if (state.sel) { state.sel = null; applyHighlight(); }
+        state.draw = { tool: 'table', pts: [], table: t };
+        if (state.mode !== 'draw') setMode('draw'); else setDrawTool('table'); state.draw.table = t;
+        setRibbonTab('draw'); renderStatus();
+      } }]);
+  }
+  // KiCad's Edit Text & Graphic Properties for a box selection: a field on every part, text size and style
+  function multiEditDialog() {
+    const s = state.sel; if (!s || s.type !== 'multi') return;
+    const r = multiResolve(s.m), sh0 = state.inst.sheet;
+    const syms = r.items.filter((it) => it.type === 'symbol').map((it) => it.sym);
+    const labels = r.items.filter((it) => it.type === 'label').map((it) => it.label);
+    const texts = r.items.filter((it) => it.type === 'graphic' || it.type === 'node').map((it) => it.obj || it.item || it.node).filter((o) => o && (sh0.texts.includes(o) || sh0.textBoxes.includes(o)));
+    const names = Array.from(new Set(syms.flatMap((x) => x.props.map((p) => p.name)).filter((n) => n !== 'Reference' && !n.startsWith('ki_')))).sort();
+    const fname = h('input', { class: 'input', id: 'meField', list: 'meFields', placeholder: 'e.g. Footprint, MPN, Loom', autocomplete: 'off' });
+    const dl = h('datalist', { id: 'meFields' }, ...names.map((n) => h('option', { value: n })));
+    const fval = h('input', { class: 'input', id: 'meValue', placeholder: 'leave empty to keep each part’s own value', autocomplete: 'off' });
+    const show = seg('Show field', [['', 'LEAVE'], ['show', 'SHOW'], ['hide', 'HIDE']], '');
+    const size = seg('Text size', [['', 'LEAVE'], ['1.27', 'SMALL'], ['1.524', 'MEDIUM'], ['2.54', 'LARGE']], '');
+    const bold = seg('Bold', [['', 'LEAVE'], ['yes', 'BOLD'], ['no', 'PLAIN']], '');
+    const fld = (l, el) => h('div', { class: 'field' }, h('label', { text: l }), el);
+    openDialog('EDIT ' + r.items.length + ' ITEMS', [
+      syms.length ? section('Parts', String(syms.length), fld('Field', fname), dl, fld('Value', fval), fld('Show the field', show.el)) : null,
+      labels.length + texts.length ? section('Labels and text', String(labels.length + texts.length), fld('Text size', size.el), fld('Bold', bold.el)) : null,
+      h('p', { class: 'hint', text: 'Only what you set here changes; LEAVE keeps each item as it is.' })],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'APPLY', primary: true, run: () => {
+        const name = fname.value.trim(), value = fval.value, sv = show.get(), sz = size.get(), bd = bold.get();
+        closeDialog();
+        run('Edit ' + r.items.length + ' items', () => {
+          let sh = sh0, res = null;
+          const step = (x) => { if (x) { res = x; sh = E.reparse(sh, x); } };
+          if (name && syms.length) {
+            if (value !== '') step(E.setFieldMany(sh, syms.map((x) => sh.symbols.find((y) => y.uuid === x.uuid)).filter(Boolean), name, value));
+            if (sv) for (const x of syms) { const y = sh.symbols.find((q) => q.uuid === x.uuid), pr = y && y.props.find((p) => p.name === name); if (pr) step(E.setTextProps(sh, pr.src, { hide: sv === 'hide' })); }
+          }
+          if (sz || bd) {
+            const o = {}; if (sz) o.size = +sz; if (bd) o.bold = bd === 'yes';
+            for (const l of labels) { const y = sh.labels.find((q) => uuidOf(q) === uuidOf(l)); if (y) step(E.setTextProps(sh, y.src, o)); }
+            for (const t of texts) { const y = sh.texts.concat(sh.textBoxes).find((q) => q.src && uuidOf(q) === uuidOf(t)); if (y) step(E.setTextProps(sh, y.src, o)); }
+          }
+          if (!res) throw new Error('Nothing was set to change.');
+          return res;
+        });
+      } }]);
   }
   function childOf(inst, idx) { const sheet = inst.sheet.sheets[idx]; return inst.children.find((c) => c.sheetSym === sheet); }
   // Pins for every sheet port (hierarchical label) in the sub-sheet that has no pin yet: inputs left, the rest right.

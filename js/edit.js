@@ -1426,6 +1426,68 @@
     return { result: total ? { path: sheet.path, text: sp.apply() } : null, counts };
   }
 
+  // ------------------------------------------------------------------ images, tables and slice
+  /** Place a picture (base64 PNG) centred at p, KiCad's Add Image. Its size is pixels at 300 dpi times scale. */
+  function addImage(sheet, p, png64, scale) {
+    if (!/^iVBOR/.test(png64)) throw new Error('Only PNG pictures can be placed.');
+    const chunks = png64.match(/.{1,76}/g);
+    const L = ['(image', `\t(at ${fnum(p[0])} ${fnum(p[1])})`].concat(scale && Math.abs(scale - 1) > 1e-6 ? [`\t(scale ${fnum(scale)})`] : [])
+      .concat([`\t(uuid ${qstr(uuid())})`, `\t(data ${qstr(chunks[0])}`]).concat(chunks.slice(1).map((c) => '\t\t' + qstr(c))).concat(['\t)', ')']);
+    const sp = new Splicer(sheet.text);
+    sp.insert(insertPoint(sheet), block(L, '\t'));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  function setImageScale(sheet, img, scale) {
+    if (!(scale > 0)) throw new Error('Give a scale above zero.');
+    const sp = new Splicer(sheet.text), sc = K.find(img.src, 'scale');
+    if (sc) setTok(sp, sc, 1, fnum(scale));
+    else { const a = K.find(img.src, 'at'); sp.insert(a.e, '\n' + indentAt(sheet.text, a.s) + `(scale ${fnum(scale)})`); }
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** KiCad 8's tables: rows × cols cells, top-left at p, each cell a text box. */
+  function addTable(sheet, p, o) {
+    const rows = Math.max(1, Math.min(60, o.rows | 0)), cols = Math.max(1, Math.min(20, o.cols | 0));
+    const cw = o.colWidth || 25.4, rh = o.rowHeight || 5.08, sz = fnum(o.size || 1.27), m = fnum(0.9525);
+    const cell = (r, c) => {
+      const text = (o.cells && o.cells[r] && o.cells[r][c]) || '';
+      return ['(table_cell ' + qstr(text), '\t(exclude_from_sim no)', `\t(at ${fnum(p[0] + c * cw)} ${fnum(p[1] + r * rh)} 0)`, `\t(size ${fnum(cw)} ${fnum(rh)})`, `\t(margins ${m} ${m} ${m} ${m})`, '\t(span 1 1)', '\t(fill', '\t\t(type none)', '\t)',
+        '\t(effects', '\t\t(font', `\t\t\t(size ${sz} ${sz})`].concat(o.header && r === 0 ? ['\t\t\t(bold yes)'] : []).concat(['\t\t)', '\t\t(justify left top)', '\t)', `\t(uuid ${qstr(uuid())})`, ')']);
+    };
+    const L = ['(table', `\t(column_count ${cols})`, '\t(border', '\t\t(external yes)', `\t\t(header ${o.header ? 'yes' : 'no'})`, '\t\t(stroke', '\t\t\t(width 0)', '\t\t\t(type solid)', '\t\t)', '\t)',
+      '\t(separators', '\t\t(rows yes)', '\t\t(cols yes)', '\t\t(stroke', '\t\t\t(width 0)', '\t\t\t(type solid)', '\t\t)', '\t)',
+      `\t(column_widths ${Array(cols).fill(fnum(cw)).join(' ')})`, `\t(row_heights ${Array(rows).fill(fnum(rh)).join(' ')})`, '\t(cells'];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) L.push(...cell(r, c).map((l) => '\t\t' + l));
+    L.push('\t)', ')');
+    const sp = new Splicer(sheet.text);
+    sp.insert(insertPoint(sheet), block(L, '\t'));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** KiCad 9's Slice: every wire or bus that the line a–b crosses is broken where it crosses. */
+  function sliceLines(sheet, a, b) {
+    const hits = [];
+    const cross = (p1, p2, p3, p4) => {
+      const d = (p2[0] - p1[0]) * (p4[1] - p3[1]) - (p2[1] - p1[1]) * (p4[0] - p3[0]);
+      if (Math.abs(d) < 1e-9) return null;
+      const t = ((p3[0] - p1[0]) * (p4[1] - p3[1]) - (p3[1] - p1[1]) * (p4[0] - p3[0])) / d;
+      const u = ((p3[0] - p1[0]) * (p2[1] - p1[1]) - (p3[1] - p1[1]) * (p2[0] - p1[0])) / d;
+      if (t < -1e-9 || t > 1 + 1e-9 || u < 0 || u > 1) return null;
+      return [p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1])];
+    };
+    for (const w of sheet.wires.concat(sheet.buses)) {
+      let q = cross(w.a, w.b, a, b); if (!q) continue;
+      if (Math.abs(w.a[1] - w.b[1]) < 1e-6) q = [snap(q[0]), w.a[1]]; else if (Math.abs(w.a[0] - w.b[0]) < 1e-6) q = [w.a[0], snap(q[1])];
+      if (interior(q, w) && K.findAll(K.find(w.src, 'pts'), 'xy').length === 2) hits.push([w.uuid, q, sheet.buses.includes(w)]);
+    }
+    if (!hits.length) throw new Error('The line doesn’t cross any wire.');
+    let sh = sheet, r = null;
+    for (const [u, q, bus] of hits) {
+      const w = (bus ? sh.buses : sh.wires).find((x) => x.uuid === u && interior(q, x)) || (bus ? sh.buses : sh.wires).find((x) => interior(q, x));
+      if (!w) continue;
+      r = breakLine(sh, w, q); sh = K.parseSchematic(r.text, sheet.path);
+    }
+    return { result: r, count: hits.length };
+  }
+
   // ------------------------------------------------------------------ page settings and projects
   const PAPER_SIZES = ['A5', 'A4', 'A3', 'A2', 'A1', 'A0', 'A', 'B', 'C', 'D', 'E', 'USLetter', 'USLegal', 'USLedger', 'User'];
   function paperLine(o) {
@@ -1761,7 +1823,7 @@
     reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
     setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,
-    addBusSegs, addBusEntry, setLineKind, setTextProps, setLabelShape, breakLine, cleanupSheet, PAPER_SIZES, pageSettingsOf, setPageSettings, setSheetProps, newProjectFiles, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
+    addBusSegs, addBusEntry, setLineKind, addImage, setImageScale, addTable, sliceLines, setTextProps, setLabelShape, breakLine, cleanupSheet, PAPER_SIZES, pageSettingsOf, setPageSettings, setSheetProps, newProjectFiles, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
     PIN_TYPES, parsePinLines, boxSymbol, symbolLibText
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KiEdit;
