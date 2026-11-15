@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.6.7';
+  const VERSION = '2.6.8';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -67,7 +67,7 @@
       else view.zoomBy(2, x, y);
     },
     onView: () => { if (!state._scaleRaf) state._scaleRaf = requestAnimationFrame(() => { state._scaleRaf = 0; renderScale(); }); },
-    dragFrom: (wp, type) => dragSelectionFrom(wp, type),
+    dragFrom: (wp, type) => wireDragFrom(wp, type) || dragSelectionFrom(wp, type),
     onHover: (wp) => { state.mouse = wp; keyMoveHover(wp); hoverPreview(wp); hoverWire(wp); if (state.mode === 'measure' && state.measure && state.measure.a && !state.measure.b) measureDraw(snapPoint(wp, 'mouse').p); }
   });
 
@@ -1265,7 +1265,8 @@
       if (d < bd) {
         bd = d;
         // snap along the wire to the grid, staying on the wire
-        const g = Math.abs(dy) < 1e-6 ? [E.snap(q[0]), w.a[1]] : Math.abs(dx) < 1e-6 ? [w.a[0], E.snap(q[1])] : q;
+        if (Math.abs(dx) > 1e-6 && Math.abs(dy) > 1e-6) continue;   // never onto a slanted line: that gives odd angles
+        const g = Math.abs(dy) < 1e-6 ? [E.snap(q[0]), w.a[1]] : [w.a[0], E.snap(q[1])];
         best = { p: g, on: 'wiremid' };
       }
     }
@@ -1316,19 +1317,60 @@
     view.redraw();
     renderStatus();
   }
+  // Which way the next leg leaves the last point when nothing says otherwise (a tap with no pointer
+  // movement): out along a pin, sheet pin or label, or at right angles to the leg it follows.
+  function leadAt(w) {
+    const n = w.anchors.length, p = w.anchors[n - 1];
+    if (n >= 2) { const pts = wirePolyline(w.anchors, w.flips), a = pts[pts.length - 2], b = pts[pts.length - 1]; return Math.abs(a[1] - b[1]) < 1e-6 ? 'v' : 'h'; }
+    const sh = state.inst && state.inst.sheet;
+    if (sh && p) {
+      for (const x of sh.symbols) for (const q of K.symbolPins(x)) if (E.same(q.pos, p) && q.dir) return Math.abs(q.dir[1]) > 0.5 ? 'v' : 'h';
+      for (const x of sh.sheets) for (const q of x.pins) if (E.same(q.p, p)) return q.side === 'top' || q.side === 'bottom' ? 'v' : 'h';
+      const l = sh.labels.find((q) => E.same(q.p, p)); if (l && (l.angle === 90 || l.angle === 270)) return 'v';
+    }
+    return 'h';
+  }
+  // Like KiCad: the corner goes the way the pointer first heads off from the last point (move back
+  // over the point to choose again); / or FLIP swaps it.
+  function trackLead(p) {
+    const w = state.wire, a = w.anchors[w.anchors.length - 1];
+    if (!a || w.leadLock) return;
+    const dx = Math.abs(p[0] - a[0]), dy = Math.abs(p[1] - a[1]), g = E.snapGrid();
+    if (dx < g * 0.5 && dy < g * 0.5) w.lead = null;
+    else if (!w.lead && Math.max(dx, dy) >= g) w.lead = dx >= dy ? 'h' : 'v';
+  }
+  function previewWire(s) {
+    const w = state.wire;
+    trackLead(s.p);
+    const lead = w.lead || leadAt(w);
+    view.overlay = { pts: wirePolyline(w.anchors.concat([s.p]), w.flips.concat([lead === 'v'])), dots: w.anchors.slice(), ring: s.on ? s.p : null };
+    view.redraw();
+  }
   // Mouse users see the wire follow the pointer (KiCad style)
   function hoverWire(wp) {
     if (state.mode !== 'wire' || !state.wire.anchors.length) return;
-    const w = state.wire, s = snapPoint(wp, 'mouse');
-    view.overlay = { pts: wirePolyline(w.anchors.concat([s.p]), w.flips.concat([w.flips[w.flips.length - 1] || false])), dots: w.anchors.slice(), ring: s.on ? s.p : null };
-    view.redraw();
+    previewWire(snapPoint(wp, 'mouse'));
+  }
+  // On a touch screen, press and drag draws the next leg with the finger, then lift to place it.
+  function wireDragFrom(wp, type) {
+    if (state.mode !== 'wire' || type === 'mouse' || !state.inst) return null;
+    const w = state.wire;
+    let started = false;
+    if (!w.anchors.length) { const s0 = snapPoint(wp, type); w.anchors.push(s0.p); w.flips.push(false); w.lead = null; w.leadLock = false; started = true; }
+    return {
+      move: (d) => previewWire(snapPoint([wp[0] + d[0], wp[1] + d[1]], type)),
+      end: (d) => wireTap([wp[0] + d[0], wp[1] + d[1]], type),
+      cancel: () => { if (started) { w.anchors.pop(); w.flips.pop(); } updateWireOverlay(); }
+    };
   }
   function wireTap(wp, type) {
     const s = snapPoint(wp, type);
     const w = state.wire;
     if (w.anchors.length && E.same(w.anchors[w.anchors.length - 1], s.p)) { finishWire(); return; }
-    // Same bend as the preview the pointer was showing
-    w.anchors.push(s.p); w.flips.push(w.flips.length ? !!w.flips[w.flips.length - 1] : false);
+    // The corner goes the way the preview showed it
+    const lead = w.anchors.length ? (w.lead || leadAt(w)) : 'h';
+    w.anchors.push(s.p); w.flips.push(lead === 'v');
+    w.lead = null; w.leadLock = false;
     updateWireOverlay(s.on ? s.p : null);
     // Landing on something that conducts ends the wire, like KiCad.
     if (w.anchors.length > 1 && s.on && s.on !== 'label') finishWire();
@@ -1345,7 +1387,12 @@
     updateWireOverlay();
   }
   function wireBack() { const w = state.wire; w.anchors.pop(); w.flips.pop(); updateWireOverlay(); }
-  function wireFlip() { const w = state.wire; if (w.anchors.length > 1) { w.flips[w.flips.length - 1] = !w.flips[w.flips.length - 1]; updateWireOverlay(); } }
+  function wireFlip() {
+    const w = state.wire;
+    // While the pointer is showing the next leg, swap its corner (KiCad's /); otherwise the last leg's.
+    if (w.anchors.length && w.lead) { w.lead = w.lead === 'h' ? 'v' : 'h'; w.leadLock = true; if (state.mouse) hoverWire(state.mouse); return; }
+    if (w.anchors.length > 1) { w.flips[w.flips.length - 1] = !w.flips[w.flips.length - 1]; updateWireOverlay(); }
+  }
 
   // ---- label tool
   function labelTap(wp, type) {
@@ -1776,7 +1823,7 @@
       setIco('i-wire');
       const what = wireIsBus(state.wire.anchors) ? 'bus' : 'wire';
       t1.textContent = n ? 'Drawing ' + what : what[0].toUpperCase() + what.slice(1);
-      t2.textContent = n ? 'Tap corners · tap a pin or wire to finish' : 'Tap a pin, wire end or empty grid to start';
+      t2.textContent = n ? 'Tap or drag to the next corner · tap a pin or wire, or the last point again, to finish' : 'Tap a pin, wire end or grid point to start (or press there and drag)';
       const L = [];
       if (n > 1) L.push({ label: 'FINISH', icon: 'i-check', primary: true, run: finishWire });
       if (n > 1) L.push({ label: 'FLIP', icon: 'i-flip', run: wireFlip });
@@ -4629,6 +4676,8 @@
   // ---- Wire angle (KiCad: Shift+Space cycles 90°, 45° and free angle)
   var POSTURES = ['90', '45', 'free'];
   state.wirePosture = POSTURES.includes(Store.pref('wirePosture')) ? Store.pref('wirePosture') : '90';
+  // Wires start at right angles again for everyone once (KiCad's default); 45° and any angle stay one tap away.
+  if (!Store.pref('posture268')) { Store.pref('posture268', true); state.wirePosture = '90'; Store.pref('wirePosture', '90'); }
   function cyclePosture() {
     state.wirePosture = POSTURES[(POSTURES.indexOf(state.wirePosture) + 1) % POSTURES.length];
     Store.pref('wirePosture', state.wirePosture);
