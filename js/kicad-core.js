@@ -1083,7 +1083,7 @@
   }
 
   const api = {
-    find, findAll, onSegment, key, tokSpan,
+    find, findAll, onSegment, key, tokSpan, boolTok,
     parseSexpr, parseSchematic, buildProject, symbolPins, libItemsFor, symTransform, tf, tfInv,
     markupRuns, plainText, resolveVars, unescape, unitLetter, expandBusKeyed, expandBus, isBusName, naturalCmp, basename, dirname, joinPath, PAPER
   };

@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '2.7.0';
+  const VERSION = '2.8.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -405,6 +405,7 @@
   // ------------------------------------------------------------------ selection
   function onCanvasTap(wp, type) {
     if (!state.project) return;
+    state.tapPoint = wp;
     if (state.mode === 'wire') { wireTap(wp, type); return; }
     if (state.mode === 'label') { labelTap(wp, type); return; }
     if (state.mode === 'draw') { drawTap(wp, type); return; }
@@ -1483,8 +1484,9 @@
     for (const p of sym.props) {
       if (p.name === 'Reference' || p.name.startsWith('ki_')) continue;
       const inp = h('input', { class: 'input', value: p.value, spellcheck: 'false' });
-      inputs.push([p.name, inp, p.value]);
-      rows.push(h('div', { class: 'fieldrow' }, h('label', { text: p.name }), inp));
+      const vis = h('input', { type: 'checkbox', checked: !(p.fx && p.fx.hide), title: 'Show on the drawing', 'aria-label': 'Show ' + p.name + ' on the drawing' });
+      inputs.push([p.name, inp, p.value, vis, !(p.fx && p.fx.hide)]);
+      rows.push(h('div', { class: 'fieldrow' }, h('label', { text: p.name }), h('div', { style: 'display:flex;gap:8px;align-items:center' }, inp, h('label', { class: 'check', style: 'margin:0;white-space:nowrap' }, vis, 'Show'))));
     }
     const dnp = h('input', { type: 'checkbox', checked: sym.dnp });
     const newRows = h('div', { class: 'fieldlist' });
@@ -1504,7 +1506,15 @@
       const changes = { fields, add, dnp: dnp.checked !== sym.dnp ? dnp.checked : undefined, ref: newRef && newRef !== ref ? newRef : undefined };
       if (changes.ref && state.index.parts.some((p) => p.ref === changes.ref)) { banner('err', `${changes.ref} is already used in this project.`); return; }
       closeDialog();
-      run('Edit ' + ref, () => E.setSymbolFields(sh, sym, inst, changes));
+      const shows = inputs.filter(([, , , vis, was]) => vis.checked !== was).map(([name, , , vis]) => [name, vis.checked]);
+      run('Edit ' + ref, () => {
+        let r = E.setSymbolFields(sh, sym, inst, changes);
+        for (const [name, show] of shows) {
+          const s2 = E.reparse(sh, r), sy = s2.symbols.find((x) => x.uuid === sym.uuid), pr = sy && sy.props.find((x) => x.name === name);
+          if (pr) r = E.setTextProps(s2, pr.src, { hide: !show });
+        }
+        return r;
+      });
     };
     openDialog('EDIT ' + ref, [...rows, h('label', { class: 'check' }, dnp, 'Do not populate (DNP)'), newRows,
       h('button', { class: 'btn small', type: 'button', onclick: addRow }, icon('i-plus'), 'ADD FIELD')],
@@ -1635,12 +1645,14 @@
         A.push({ label: 'RENAME', icon: 'i-edit', run: () => labelDialog({ rename: o }) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'label ' + o.text }) });
         A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate label', () => E.rotateLabel(sh, o)) });
+        A.push({ label: 'STYLE', icon: 'i-style', run: () => labelStyleDialog(o) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete label ' + o.text, () => E.deleteItems(sh, [{ type: 'label', label: o }]), { anchor: null }) });
       } else if (it && it.type === 'wire' && o) {
         const wno = state.A && state.A.wireNo[s.net.id];
         A.splice(ta.length, 0, { label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) });
         if (wno && !s.net.named) A.push({ label: 'FIX NO.', icon: 'i-number', run: () => fixWireNumber(o, wno) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'wire', uuid: uuidOf(o), name: 'wire' }) });
+        A.push({ label: 'BREAK', icon: 'i-cut', run: () => breakAtTap(o) });
         // A run of plain wire that joins buses (or bus-named pins and labels) should be a bus.
         // Turn this run of wire into a bus (always offered; it's what a run joining buses should be).
         const runW = sh.wires.filter((w) => w.group === o.group);
@@ -1675,13 +1687,14 @@
       if (o) {
         const name = graphicName(s.it, o);
         if (s.it[0] === 'U') A.push({ label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) }, { label: 'UNFOLD', icon: 'i-tee', run: () => unfoldDialog(o) });
-        if (s.it[0] === 'T') A.push({ label: 'EDIT', icon: 'i-edit', run: () => textDialog({ edit: o }) });
+        if ((s.it[0] === 'T' || s.it[0] === 'B') && o.src) A.push({ label: 'EDIT', icon: 'i-edit', run: () => textDialog({ edit: o }) });
         else if (s.it[0] === 'G') A.push({ label: 'STYLE', icon: 'i-style', run: () => styleDialog(o) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'graphic', kind: s.it[0], uuid: uuidOf(o), name: name.toLowerCase() }) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + name.toLowerCase(), () => E.deleteNode(sh, o.src), { anchor: null }) });
         if (!uuidOf(o) || /^[UE]/.test(s.it)) { const mi = A.findIndex((x) => x.label === 'MOVE'); if (mi >= 0) A.splice(mi, 1); }
         // A bus piece moves like a wire: it slides sideways and the lines joined to it follow.
         if (s.it[0] === 'U' && uuidOf(o)) A.splice(A.findIndex((x) => x.label === 'DELETE'), 0, { label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'bus', uuid: uuidOf(o), name: 'bus' }) },
+          { label: 'BREAK', icon: 'i-cut', run: () => breakAtTap(o) },
           { label: 'MAKE WIRE', icon: 'i-wire', run: () => run('Make wire', () => E.setLineKind(sh, sh.buses.filter((b) => b.group === o.group), false), { anchor: null }) });
       }
     }
@@ -2117,7 +2130,7 @@
 
   // ================================================================== DRAW mode: parts and shapes
   // PART places a symbol from the library; LINE, RECT, CIRCLE, ARC and TEXT add KiCad graphics.
-  const DRAW_TOOLS = [['part', 'PART', 'i-part'], ['line', 'LINE', 'i-line'], ['rect', 'RECT', 'i-rect'], ['circle', 'CIRCLE', 'i-circle'], ['arc', 'ARC', 'i-arc'], ['text', 'TEXT', 'i-text']];
+  const DRAW_TOOLS = [['part', 'PART', 'i-part'], ['line', 'LINE', 'i-line'], ['rect', 'RECT', 'i-rect'], ['circle', 'CIRCLE', 'i-circle'], ['arc', 'ARC', 'i-arc'], ['text', 'TEXT', 'i-text'], ['textbox', 'TEXT BOX', 'i-rect']];
   const COLOURS = { default: null, red: [200, 0, 0, 1], blue: [0, 0, 194, 1], green: [0, 132, 0, 1], black: [0, 0, 0, 1] };
   function drawStyle() { return Object.assign({ width: 0, type: 'default', fill: 'none', colour: 'default' }, Store.pref('drawStyle') || {}); }
   const styleFor = (st) => ({ width: st.width, type: st.type, fill: st.fill, color: COLOURS[st.colour] || null });
@@ -2176,6 +2189,7 @@
     }
     d.pts.push(p);
     if (d.tool === 'sheet' && d.pts.length === 2) { const [a, b] = d.pts; d.pts = []; if (Math.abs(a[0] - b[0]) < 5 || Math.abs(a[1] - b[1]) < 5) { toast('Drag out a bigger box: tap two opposite corners.'); drawOverlay(); return; } drawOverlay(); sheetDialog(a, b); return; }
+    if (d.tool === 'textbox' && d.pts.length === 2) { const [a, b] = d.pts; d.pts = []; drawOverlay(); if (Math.abs(a[0] - b[0]) < 2 || Math.abs(a[1] - b[1]) < 2) { toast('Tap two opposite corners of the box.'); return; } textDialog({ box: [a, b] }); return; }
     if (d.tool === 'rect' && d.pts.length === 2) { const [a, b] = d.pts; d.pts = []; if (a[0] === b[0] || a[1] === b[1]) { toast('Tap two opposite corners.'); drawOverlay(); return; } run('Add rectangle', () => E.addGraphic(sh, 'rect', { a, b }, st), { anchor: null }); }
     else if (d.tool === 'circle' && d.pts.length === 2) { const [c, q] = d.pts; d.pts = []; run('Add circle', () => E.addGraphic(sh, 'circle', { c, r: Math.hypot(q[0] - c[0], q[1] - c[1]) }, st), { anchor: null }); }
     else if (d.tool === 'arc' && d.pts.length === 3) { const [a, m, b] = d.pts; d.pts = []; const cross = (m[0] - a[0]) * (b[1] - a[1]) - (m[1] - a[1]) * (b[0] - a[0]); if (Math.abs(cross) < 1e-6) { toast('The three points are in a line; tap a middle point off the line.'); drawOverlay(); return; } run('Add arc', () => E.addGraphic(sh, 'arc', { a, m, b }, st), { anchor: null }); }
@@ -2251,8 +2265,20 @@
     const txt = h('textarea', { class: 'input', id: 'txtValue', rows: 3, spellcheck: 'true' });
     txt.value = ed ? K.unescape(ed.s) : '';
     const body = [h('div', { class: 'field' }, h('label', { for: 'txtValue', text: 'Text' }), txt)];
-    let size, bold, italic, ang, colour;
-    if (!ed) {
+    let size, bold, italic, ang, colour, just;
+    if (ed) {
+      // KiCad's Text Properties: size, bold, italic, direction and justification
+      const fx = ed.fx || {}, cur = String(+(fx.h || 1.27).toFixed(2));
+      const sizes = [['1.27', 'SMALL'], ['2', 'MEDIUM'], ['2.54', 'LARGE'], ['3.81', 'TITLE']];
+      if (!sizes.some(([v]) => v === cur)) sizes.push([cur, cur + ' mm']);
+      size = seg('Size', sizes, cur);
+      ang = seg('Direction', [['0', 'ACROSS'], ['90', 'UP']], String(ed.a === 90 || ed.a === 270 ? 90 : 0));
+      just = seg('Justify', [['left', 'LEFT'], ['center', 'CENTRE'], ['right', 'RIGHT']], fx.ha || 'center');
+      bold = h('input', { type: 'checkbox', checked: !!fx.bold });
+      italic = h('input', { type: 'checkbox', checked: !!fx.italic });
+      body.push(h('div', { class: 'field' }, h('label', { text: 'Size' }), size.el), h('div', { class: 'field' }, h('label', { text: 'Direction' }), ang.el),
+        h('div', { class: 'field' }, h('label', { text: 'Justify' }), just.el), h('label', { class: 'check' }, bold, 'Bold'), h('label', { class: 'check' }, italic, 'Italic'));
+    } else {
       const last = Store.pref('textStyle') || {};
       size = seg('Size', [['1.27', 'SMALL'], ['2', 'MEDIUM'], ['2.54', 'LARGE'], ['3.81', 'TITLE']], last.size || '1.27');
       ang = seg('Direction', [['0', 'ACROSS'], ['90', 'UP']], last.angle || '0');
@@ -2268,14 +2294,23 @@
       if (!v) { txt.focus(); return; }
       closeDialog();
       const sh = state.inst.sheet;
-      if (ed) run('Edit text', () => E.editText(sh, ed, v));
-      else {
+      if (ed) run('Edit text', () => {
+        let r = v !== K.unescape(ed.s) ? E.editText(sh, ed, v) : null, s2 = r ? E.reparse(sh, r) : sh;
+        const all = s2.texts.concat(s2.textBoxes), node = all.find((x) => x.src && uuidOf(x) === uuidOf(ed)) || (r ? null : ed);
+        if (node) r = E.setTextProps(s2, node.src, { size: +size.get(), bold: bold.checked, italic: italic.checked, justify: just.get(), angle: o.box || ed.size ? undefined : +ang.get() });
+        return r;
+      });
+      else if (o.box) {
+        const ts = { size: size.get(), bold: bold.checked, italic: italic.checked, colour: colour.get() };
+        Store.pref('textStyle', Object.assign({}, Store.pref('textStyle') || {}, ts));
+        run('Add text box', () => E.addGraphic(sh, 'textbox', { a: o.box[0], b: o.box[1], text: v, size: +ts.size, bold: ts.bold, italic: ts.italic }, styleFor(Object.assign(drawStyle(), { colour: ts.colour }))), { anchor: null });
+      } else {
         const ts = { size: size.get(), angle: ang.get(), bold: bold.checked, italic: italic.checked, colour: colour.get() };
         Store.pref('textStyle', ts);
         run('Add text', () => E.addGraphic(sh, 'text', { p: o.p, text: v, size: +ts.size, angle: +ts.angle, bold: ts.bold, italic: ts.italic }, styleFor(Object.assign(drawStyle(), { colour: ts.colour }))), { anchor: null });
       }
     };
-    openDialog(ed ? 'EDIT TEXT' : 'ADD TEXT', body, [{ label: 'CANCEL', run: closeDialog }, { label: ed ? 'SAVE' : 'ADD', primary: true, run: go }]);
+    openDialog(ed ? 'EDIT TEXT' : o.box ? 'ADD TEXT BOX' : 'ADD TEXT', body, [{ label: 'CANCEL', run: closeDialog }, { label: ed ? 'SAVE' : 'ADD', primary: true, run: go }]);
     setTimeout(() => txt.focus(), 50);
   }
 
@@ -3041,7 +3076,7 @@
     ];
     if (tab === 'draw') return [
       { title: 'Shapes', tools: [drawToolBtn('line', 'Line', 'i-line'), drawToolBtn('rect', 'Rectangle', 'i-rect'), drawToolBtn('circle', 'Circle', 'i-circle'), drawToolBtn('arc', 'Arc', 'i-arc')] },
-      { title: 'Text', tools: [drawToolBtn('text', 'Text', 'i-text')] },
+      { title: 'Text', tools: [drawToolBtn('text', 'Text', 'i-text'), drawToolBtn('textbox', 'Text box', 'i-rect')] },
       { title: 'Style', tools: [{ label: 'Line style', icon: 'i-style', disabled: !P, run: () => { const g = state.sel && state.sel.type === 'graphic' && state.sel.it[0] === 'G' ? graphicObj(state.sel.it) : null; styleDialog(g); } }] }
     ];
     if (tab === 'analyse') {
@@ -3052,6 +3087,8 @@
           { label: 'Fields table', icon: 'i-report', disabled: !P, run: fieldsTable },
           { label: 'Measure', icon: 'i-line', disabled: !P, on: state.mode === 'measure', run: () => state.mode === 'measure' ? setMode('select') : startMeasure() },
           { label: 'Swap', icon: 'i-sync', disabled: !(s && s.type === 'multi'), run: swapSel }, { label: 'Autoplace', icon: 'i-text', disabled: !(s && s.type === 'symbol'), run: autoplaceSel },
+          { label: 'Align to grid', icon: 'i-more', disabled: !(s && (s.type === 'symbol' || s.type === 'multi' || (s.type === 'net' && s.item && s.item.type === 'label'))), run: alignSelToGrid },
+          { label: 'Cleanup', icon: 'i-sync', disabled: !P, run: cleanupThisSheet },
           { label: 'Snap ' + E.snapGrid() + ' mm', icon: 'i-more', disabled: !P, run: () => { const i = GRIDS.indexOf(E.snapGrid()); stepGrid(i === GRIDS.length - 1 ? -i : 1); renderRibbon(); } }] },
         { title: 'Check & report', tools: [tabBtn('check', 'Design check', 'i-alert'), tabBtn('reports', 'Reports', 'i-report'), tabBtn('install', 'Install log', 'i-install'), tabBtn('compare', 'Compare', 'i-compare')] },
         { title: 'Output', tools: [{ label: 'Print / PDF', icon: 'i-print', disabled: !P, run: printDialog }] }
@@ -4372,6 +4409,76 @@
       h('div', { class: 'field' }, h('label', { for: 'npWhere', text: 'Save to' }), where), dirRow, ...f.els],
       [{ label: 'CANCEL', run: closeDialog }, { label: 'CREATE', primary: true, run: go }]);
     setTimeout(() => name.focus(), 50);
+  }
+  // ---- KiCad's label properties, break wire, align to grid and cleanup
+  function labelStyleDialog(l) {
+    const fx = l.fx || {}, cur = String(+(fx.h || 1.27).toFixed(2));
+    const sizes = [['1.27', 'SMALL'], ['1.524', 'MEDIUM'], ['2.54', 'LARGE']];
+    if (!sizes.some(([v]) => v === cur)) sizes.push([cur, cur + ' mm']);
+    const size = seg('Size', sizes, cur);
+    const bold = h('input', { type: 'checkbox', checked: !!fx.bold }), italic = h('input', { type: 'checkbox', checked: !!fx.italic });
+    const hasShape = l.kind === 'global' || l.kind === 'hier';
+    const shape = hasShape ? seg('Shape', [['input', 'INPUT'], ['output', 'OUTPUT'], ['bidirectional', 'BIDIR'], ['tri_state', 'TRI-STATE'], ['passive', 'PASSIVE']], l.shape || 'bidirectional') : null;
+    openDialog('LABEL ' + l.text, [h('div', { class: 'field' }, h('label', { text: 'Text size' }), size.el), h('label', { class: 'check' }, bold, 'Bold'), h('label', { class: 'check' }, italic, 'Italic'),
+      hasShape ? h('div', { class: 'field' }, h('label', { text: 'Shape' }), shape.el) : null],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE', primary: true, run: () => {
+        closeDialog();
+        const sh = state.inst.sheet;
+        run('Style label ' + l.text, () => {
+          let r = E.setTextProps(sh, l.src, { size: +size.get(), bold: bold.checked, italic: italic.checked });
+          if (hasShape && shape.get() !== l.shape) { const s2 = E.reparse(sh, r); const l2 = s2.labels.find((x) => uuidOf(x) === uuidOf(l)); if (l2) r = E.setLabelShape(s2, l2, shape.get()); }
+          return r;
+        });
+      } }]);
+  }
+  function breakAtTap(w) {
+    const p0 = state.tapPoint, sh = state.inst.sheet;
+    if (!p0) { toast('Tap the wire where it should break, then BREAK.'); return; }
+    const dx = w.b[0] - w.a[0], dy = w.b[1] - w.a[1], l2 = dx * dx + dy * dy;
+    let t = l2 ? ((p0[0] - w.a[0]) * dx + (p0[1] - w.a[1]) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+    let p = [w.a[0] + t * dx, w.a[1] + t * dy];
+    if (Math.abs(dy) < 1e-6) p = [E.snap(p[0]), w.a[1]]; else if (Math.abs(dx) < 1e-6) p = [w.a[0], E.snap(p[1])];
+    run('Break wire', () => E.breakLine(sh, w, p));
+  }
+  // Edit → Align Elements to Grid: parts (by their pins), labels, junctions and no-connects move onto the grid; wires follow.
+  function alignSelToGrid() {
+    const s = state.sel, sh0 = state.inst && state.inst.sheet;
+    if (!s || !sh0) return;
+    let items = [];
+    if (s.type === 'symbol') items = [{ type: 'symbol', sym: sh0.symbols[s.si] }];
+    else if (s.type === 'multi') items = multiResolve(s.m).items.filter((it) => it.type === 'symbol' || it.type === 'label');
+    else if (s.type === 'net' && s.item && s.item.type === 'label') items = [{ type: 'label', label: itemObj(s.item) }];
+    if (!items.length) { toast('Select parts or labels to align.'); return; }
+    const anchor = (it) => it.type === 'symbol' ? ((K.symbolPins(it.sym)[0] || {}).pos || it.sym.p) : it.label.p;
+    const keyOf = (it) => it.type === 'symbol' ? it.sym.uuid : uuidOf(it.label);
+    let moved = 0;
+    const r0 = run('Align to grid', () => {
+      let sh = sh0, r = null;
+      for (const it0 of items) {
+        const k = keyOf(it0);
+        const it = it0.type === 'symbol' ? { type: 'symbol', sym: sh.symbols.find((x) => x.uuid === k) } : { type: 'label', label: sh.labels.find((x) => uuidOf(x) === k) };
+        if (!(it.sym || it.label)) continue;
+        const a = anchor(it), d = [E.snap(a[0]) - a[0], E.snap(a[1]) - a[1]];
+        if (Math.abs(d[0]) < 1e-6 && Math.abs(d[1]) < 1e-6) continue;
+        r = E.moveItems(sh, [it], d, { keepWires: true }); sh = E.reparse(sh, r); moved++;
+      }
+      if (!r) throw new Error('Everything selected is already on the ' + E.snapGrid() + ' mm grid.');
+      return r;
+    }, { checkMerges: true });
+    if (r0) toast(`Moved ${moved} item${moved === 1 ? '' : 's'} onto the ${E.snapGrid()} mm grid.`);
+  }
+  function cleanupThisSheet() {
+    const sh = state.inst && state.inst.sheet;
+    if (!sh) return;
+    const c = E.cleanupSheet(sh);
+    if (!c.result) { toast('Nothing to tidy on this sheet.'); return; }
+    run('Cleanup', () => c.result, { anchor: null });
+    const n = c.counts, parts = [];
+    if (n.merged) parts.push(`${n.merged} wire piece${n.merged === 1 ? '' : 's'} joined`);
+    if (n.dup) parts.push(`${n.dup} duplicate wire${n.dup === 1 ? '' : 's'} removed`);
+    if (n.zero) parts.push(`${n.zero} zero-length wire${n.zero === 1 ? '' : 's'} removed`);
+    if (n.junctions) parts.push(`${n.junctions} unneeded junction${n.junctions === 1 ? '' : 's'} removed`);
+    toast('Cleanup: ' + parts.join(', ') + '.');
   }
   function childOf(inst, idx) { const sheet = inst.sheet.sheets[idx]; return inst.children.find((c) => c.sheetSym === sheet); }
   // Pins for every sheet port (hierarchical label) in the sub-sheet that has no pin yet: inputs left, the rest right.

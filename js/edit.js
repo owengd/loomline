@@ -1110,6 +1110,14 @@
       const font = ['\t\t(font', `\t\t\t(size ${sz} ${sz})`].concat(g.bold ? ['\t\t\t(bold yes)'] : []).concat(g.italic ? ['\t\t\t(italic yes)'] : []).concat(style && style.color ? [`\t\t\t(color ${style.color.join(' ')})`] : []).concat(['\t\t)']);
       L = [`(text ${qstr(g.text)}`].concat(!sheet.version || sheet.version >= 20231120 ? ['\t(exclude_from_sim no)'] : [])
         .concat([`\t(at ${fnum(g.p[0])} ${fnum(g.p[1])} ${g.angle || 0})`, '\t(effects', ...font, '\t\t(justify left bottom)', '\t)', `\t(uuid ${qstr(uuid())})`, ')']);
+    } else if (kind === 'textbox') {
+      if (!g.text) throw new Error('Type some text.');
+      const x = Math.min(g.a[0], g.b[0]), y = Math.min(g.a[1], g.b[1]), w = Math.abs(g.b[0] - g.a[0]), hh = Math.abs(g.b[1] - g.a[1]);
+      if (w < 1 || hh < 1) throw new Error('Drag out a bigger box.');
+      const sz = fnum(g.size || 1.27), m = fnum(0.9525);
+      const font = ['\t\t(font', `\t\t\t(size ${sz} ${sz})`].concat(g.bold ? ['\t\t\t(bold yes)'] : []).concat(g.italic ? ['\t\t\t(italic yes)'] : []).concat(style && style.color ? [`\t\t\t(color ${style.color.join(' ')})`] : []).concat(['\t\t)']);
+      L = [`(text_box ${qstr(g.text)}`, '\t(exclude_from_sim no)', `\t(at ${fnum(x)} ${fnum(y)} 0)`, `\t(size ${fnum(w)} ${fnum(hh)})`, `\t(margins ${m} ${m} ${m} ${m})`,
+        ...strokeLines(Object.assign({}, style, { width: style && style.width || 0, type: style && style.type || 'solid' })), ...fillLines(style), '\t(effects', ...font, '\t\t(justify left top)', '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
     } else throw new Error('Unknown shape ' + kind);
     if (sheet.version && sheet.version < 20231120) L = L.map((l) => l.replace(/\(bold yes\)/, 'bold').replace(/\(italic yes\)/, 'italic'));
     const sp = new Splicer(sheet.text);
@@ -1274,6 +1282,148 @@
     const lines = [busEntryLines(p, e), wireLines(b, end), labelLines('local', member, end, vertical ? 'right' : 'bottom')];
     sp.insert(insertPoint(sheet), lines.map((l) => block(l, '\t')).join(''));
     return { path: sheet.path, text: sp.apply() };
+  }
+
+  // ------------------------------------------------------------------ text properties, break, align, cleanup
+  // Remove a child node (with the whitespace before it) or a bare atom like `hide` / `bold`.
+  function dropChild(sp, text, parent, key) {
+    for (let k = 1; k < parent.length; k++) {
+      const c = parent[k];
+      if (Array.isArray(c) && c[0] === key && c.s !== undefined) { let st = c.s; while (st > 0 && /[ \t\n]/.test(text[st - 1])) st--; sp.replace(st, c.e, ''); return true; }
+      if (c === key) { const t = K.tokSpan(text, parent, k); if (t) { let st = t[0]; while (st > 0 && /[ \t\n]/.test(text[st - 1])) st--; sp.replace(st, t[1], ''); return true; } }
+    }
+    return false;
+  }
+  /**
+   * KiCad's text properties for a text, text box, label or field: o.size (mm), o.bold, o.italic,
+   * o.justify ('left'|'center'|'right'), o.angle (0/90/180/270), o.hide. Undefined keys are left alone.
+   */
+  function setTextProps(sheet, node, o) {
+    const text = sheet.text, sp = new Splicer(text);
+    const newFmt = !sheet.version || sheet.version >= 20231120;
+    let eff = K.find(node, 'effects');
+    if (!eff) {
+      const at = K.find(node, 'at') || K.find(node, 'size');
+      const L = ['(effects', `\t(font`, `\t\t(size ${fnum(o.size || 1.27)} ${fnum(o.size || 1.27)})`].concat(o.bold ? ['\t\t(bold yes)'] : []).concat(o.italic ? ['\t\t(italic yes)'] : []).concat(['\t)']).concat(o.hide ? ['\t(hide yes)'] : []).concat([')']);
+      const ind = indentAt(text, (at || node).s);
+      sp.insert((at || node).e, '\n' + L.map((l) => ind + l).join('\n'));
+      if (o.angle !== undefined && K.find(node, 'at')) setTok(sp, K.find(node, 'at'), 3, String(o.angle));
+      return { path: sheet.path, text: sp.apply() };
+    }
+    const font = K.find(eff, 'font');
+    if (font) {
+      const size = K.find(font, 'size');
+      if (o.size !== undefined && size) { setTok(sp, size, 1, fnum(o.size)); setTok(sp, size, 2, fnum(o.size)); }
+      for (const key of ['bold', 'italic']) {
+        if (o[key] === undefined) continue;
+        const cur = K.boolTok ? K.boolTok(font, key) : false;
+        const node2 = font.find((c) => Array.isArray(c) && c[0] === key);
+        if (node2 && node2.s !== undefined) { if (node2.length > 1) setTok(sp, node2, 1, o[key] ? 'yes' : 'no'); else if (!o[key]) dropChild(sp, text, font, key); }
+        else if (font.includes(key)) { if (!o[key]) dropChild(sp, text, font, key); }
+        else if (o[key] && !cur) { const after = size || font; sp.insert(after.e, newFmt ? ` (${key} yes)` : ' ' + key); }
+      }
+    }
+    if (o.justify !== undefined) {
+      const j = K.find(eff, 'justify');
+      const keepV = j ? j.slice(1).filter((t) => t === 'top' || t === 'bottom' || t === 'mirror') : [];
+      const toks = (o.justify === 'center' ? [] : [o.justify]).concat(keepV);
+      if (j && j.s !== undefined) { if (toks.length) sp.replace(j.s, j.e, '(justify ' + toks.join(' ') + ')'); else dropChild(sp, text, eff, 'justify'); }
+      else if (toks.length) sp.insert((font || eff).e, ' (justify ' + toks.join(' ') + ')');
+    }
+    if (o.hide !== undefined) {
+      const hidden = (K.boolTok && (K.boolTok(eff, 'hide') || K.boolTok(node, 'hide')));
+      if (!o.hide && hidden) { dropChild(sp, text, eff, 'hide'); dropChild(sp, text, node, 'hide'); }
+      if (o.hide && !hidden) {
+        if (sheet.version >= 20250114) sp.insert(eff.s, '(hide yes)\n' + indentAt(text, eff.s));
+        else sp.insert(eff.e - 1, newFmt ? ' (hide yes)' : ' hide');
+      }
+    }
+    if (o.angle !== undefined) { const a = K.find(node, 'at'); if (a && a.length > 3) setTok(sp, a, 3, String(o.angle)); }
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** A global or hierarchical label's shape: input, output, bidirectional, tri_state or passive. */
+  function setLabelShape(sheet, label, shape) {
+    const sp = new Splicer(sheet.text);
+    const sn = K.find(label.src, 'shape');
+    if (!sn) throw new Error('Only global labels and sheet ports have a shape.');
+    setTok(sp, sn, 1, shape);
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** KiCad's Break Wire: split a wire (or bus) in two at p, both halves keeping its look. */
+  function breakLine(sheet, w, p) {
+    if (!interior(p, w)) throw new Error('Tap a point part way along the wire, not at its end.');
+    if (K.findAll(K.find(w.src, 'pts'), 'xy').length !== 2) throw new Error('That wire has several points; move it once and try again.');
+    const sp = new Splicer(sheet.text);
+    const xys = K.findAll(K.find(w.src, 'pts'), 'xy');
+    setXY(sp, xys[1], p[0], p[1]);
+    const bus = sheet.buses.includes(w);
+    sp.insert(insertPoint(sheet), block(bus ? busLines(p, w.b, w.st) : wireLines(p, w.b, null, w.st), '\t'));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /**
+   * KiCad's Cleanup: drops zero-length and duplicate wires and buses, joins straight runs split
+   * where nothing else connects (same look), and removes junctions where fewer than three things meet.
+   * Returns { result, counts }.
+   */
+  function cleanupSheet(sheet) {
+    const text = sheet.text, sp = new Splicer(text);
+    const gone = new Set(), counts = { zero: 0, dup: 0, merged: 0, junctions: 0 }, finalLines = [];
+    const kill = (n) => { if (gone.has(n)) return; gone.add(n); const r = nodeRange(text, n); sp.replace(r[0], r[1], ''); };
+    const twoPt = (w) => K.findAll(K.find(w.src, 'pts'), 'xy').length === 2;
+    const conn = connectionPoints(sheet).filter((c) => c.kind !== 'wire');
+    const busy = (p) => conn.some((c) => same(c.p, p)) || sheet.noConnects.some((n) => same(n.p, p));
+    const sameSt = (a, b) => JSON.stringify(a.st) === JSON.stringify(b.st);
+    for (const list of [sheet.wires, sheet.buses]) {
+      const live = list.filter((w) => twoPt(w));
+      for (const w of live) if (same(w.a, w.b)) { kill(w.src); counts.zero++; }
+      const seen = [];
+      for (const w of live) {
+        if (gone.has(w.src)) continue;
+        if (seen.some((o) => (same(o.a, w.a) && same(o.b, w.b)) || (same(o.a, w.b) && same(o.b, w.a)))) { kill(w.src); counts.dup++; continue; }
+        seen.push(w);
+      }
+      // join straight runs: repeat until nothing changes, working on plain coordinates
+      let segs = seen.filter((w) => !gone.has(w.src)).map((w) => ({ a: w.a.slice(), b: w.b.slice(), st: w.st, src: w.src, orig: w }));
+      const all = () => segs.concat(list.filter((w) => !twoPt(w)).map((w) => ({ a: w.a, b: w.b, src: w.src })), (list === sheet.wires ? sheet.buses : sheet.wires).map((w) => ({ a: w.a, b: w.b })));
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const s1 of segs) {
+          for (const end of ['a', 'b']) {
+            const p = s1[end];
+            const at = all().filter((o) => same(o.a, p) || same(o.b, p));
+            if (at.length !== 2 || busy(p) || all().some((o) => K.onSegment(p, o.a, o.b) && !same(o.a, p) && !same(o.b, p))) continue;
+            const s2 = at.find((o) => o !== s1);
+            if (!segs.includes(s2) || !sameSt(s1, s2)) continue;
+            const far = same(s2.a, p) ? s2.b : s2.a, near = end === 'a' ? s1.b : s1.a;
+            const cross = (p[0] - near[0]) * (far[1] - p[1]) - (p[1] - near[1]) * (far[0] - p[0]);
+            const dot = (p[0] - near[0]) * (far[0] - p[0]) + (p[1] - near[1]) * (far[1] - p[1]);
+            if (Math.abs(cross) > 1e-6 || dot <= 0) continue;
+            s1[end] = far.slice(); s1.changed = true;
+            kill(s2.src); segs = segs.filter((x) => x !== s2); counts.merged++;
+            changed = true; break;
+          }
+          if (changed) break;
+        }
+      }
+      for (const s1 of segs) if (s1.changed) { const xys = K.findAll(K.find(s1.src, 'pts'), 'xy'); setXY(sp, xys[0], s1.a[0], s1.a[1]); setXY(sp, xys[1], s1.b[0], s1.b[1]); }
+      finalLines.push(...segs.map((x) => ({ a: x.a, b: x.b })), ...list.filter((w) => !twoPt(w)).map((w) => ({ a: w.a, b: w.b })));
+    }
+    // junctions: need three or more wire ends / pins / mid-wire touches, of wires that remain
+    const jseen = [];
+    for (const j of sheet.junctions) {
+      if (jseen.some((q) => same(q, j.p))) { kill(j.src); counts.junctions++; continue; }
+      jseen.push(j.p);
+      let n = 0;
+      for (const w of finalLines) { if (same(w.a, j.p) || same(w.b, j.p)) n++; else if (interior(j.p, w)) n += 2; }
+      for (const x of sheet.symbols) for (const pin of K.symbolPins(x)) if (same(pin.pos, j.p)) n++;
+      for (const x of sheet.sheets) for (const pin of x.pins) if (same(pin.p, j.p)) n++;
+      for (const e of sheet.entries) if (same(e.a, j.p) || same(e.b, j.p)) n++;
+      if (n < 3) { kill(j.src); counts.junctions++; }
+    }
+    // merged runs keep their own ends, so a run that was joined got its far end above
+    const total = counts.zero + counts.dup + counts.merged + counts.junctions;
+    return { result: total ? { path: sheet.path, text: sp.apply() } : null, counts };
   }
 
   // ------------------------------------------------------------------ page settings and projects
@@ -1611,7 +1761,7 @@
     reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
     setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,
-    addBusSegs, addBusEntry, setLineKind, PAPER_SIZES, pageSettingsOf, setPageSettings, setSheetProps, newProjectFiles, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
+    addBusSegs, addBusEntry, setLineKind, setTextProps, setLabelShape, breakLine, cleanupSheet, PAPER_SIZES, pageSettingsOf, setPageSettings, setSheetProps, newProjectFiles, simplifyPolyline, unfoldFromBus, addSheet, addSheetPins, sheetPinSpots, newSheetText,
     PIN_TYPES, parsePinLines, boxSymbol, symbolLibText
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KiEdit;
