@@ -129,6 +129,10 @@ edit to the schematic text, so the rest of the file stays exactly as KiCad wrote
 | Show or hide a part's fields | Select a part → **EDIT**: each field has a **Show** tick box (KiCad's "Visible") |
 | Break a wire | Tap the wire where it should split → **BREAK** (KiCad's Break Wire). Buses too |
 | Align to grid | Select parts or labels (or a box-selected group) → Analyse → **Align to grid**: each moves onto the snap grid (parts by their pins) and the wires follow |
+| Table | Draw → **Table**: rows, columns, sizes and a bold header row, then tap the top-left corner. Tap a cell → **EDIT** to type in it; **MOVE** and **DELETE** act on the whole table (KiCad 8 tables) |
+| Picture | Draw → **Image**: choose a picture (PNG, JPEG, GIF, WebP), then tap where its centre goes. It's stored in the schematic as a PNG, like KiCad. Tap it → **SIZE** to scale it, **MOVE** or **DELETE** |
+| Slice wires | Draw → **Slice**: tap the two ends of a cut line; every wire and bus it crosses is split there (KiCad 9's Slice) |
+| Edit many things at once | Box select, then **EDIT ALL**: set a field (for example Footprint, MPN or Loom) on every selected part, show or hide that field, and set the text size and bold of the selected labels and text (KiCad's Edit Text & Graphic Properties) |
 | Tidy a sheet | Analyse → **Cleanup** (KiCad's Cleanup Schematic): joins straight wires split where nothing else connects, removes duplicate and zero-length wires and junctions that join fewer than three things. Connections never change |
 | Edit reference, value or other fields | Select a part → **EDIT**. **ADD FIELD** adds a new one; DNP is a tick box |
 | Move | Select a part, label or wire → **MOVE**, drag, then **DONE**. Attached wires stretch to follow |

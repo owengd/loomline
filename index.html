@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="fonts/ibm-plex-sans-condensed-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/ibm-plex-mono-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=2.8.0">
+<link rel="stylesheet" href="css/app.css?v=2.9.0">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -56,6 +56,7 @@
     <symbol id="i-arc" viewBox="0 0 24 24"><path d="M4.5 17a8 8 0 0 1 15 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
     <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6.5V5h14v1.5M12 5v14M9 19h6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.2 7.6 20 17M8.2 16.4 20 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="M5 17l5-5 3.5 3.5L16 13l3.5 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
     <symbol id="i-style" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16" stroke="currentColor" stroke-width="1.6"/><path d="M4 17h16" stroke="currentColor" stroke-width="3.4" stroke-dasharray="3 2"/></symbol>
     <symbol id="i-part" viewBox="0 0 24 24"><rect x="7" y="5" width="10" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 9h4M3 15h4M17 9h4M17 15h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 9v6M9 12h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -108,7 +109,7 @@
     <button class="ib" id="btnProjects" aria-label="Projects" title="Projects"><svg><use href="#i-back"/></svg></button>
     <svg class="app-mark" aria-hidden="true"><use href="#i-mark"/></svg>
     <button class="title-btn" id="btnTitle" aria-label="Project and revision">
-      <span class="ptitle" id="projName">LOOMLINE</span>
+      <span style="display:flex;align-items:baseline;gap:6px;max-width:100%;min-width:0"><span class="ptitle" id="projName">LOOMLINE</span><span id="appVer" title="Loomline version" style="font:11px var(--ui);opacity:.65;white-space:nowrap;flex:none"></span></span>
       <span class="prev" id="projRev">No project open</span>
     </button>
     <div class="rb-tabs" id="rbTabs" role="tablist" aria-label="Tool tabs"></div>
@@ -213,15 +214,15 @@
 
 <input type="file" id="fileInput" multiple hidden>
 
-<script src="js/kicad-core.js?v=2.8.0"></script>
-<script src="js/render.js?v=2.8.0"></script>
-<script src="js/storage.js?v=2.8.0"></script>
-<script src="js/zip.js?v=2.8.0"></script>
-<script src="js/edit.js?v=2.8.0"></script>
-<script src="js/loom.js?v=2.8.0"></script>
-<script src="js/cables.js?v=2.8.0"></script>
-<script src="js/harness.js?v=2.8.0"></script>
-<script src="js/github.js?v=2.8.0"></script>
-<script src="js/app.js?v=2.8.0"></script>
+<script src="js/kicad-core.js?v=2.9.0"></script>
+<script src="js/render.js?v=2.9.0"></script>
+<script src="js/storage.js?v=2.9.0"></script>
+<script src="js/zip.js?v=2.9.0"></script>
+<script src="js/edit.js?v=2.9.0"></script>
+<script src="js/loom.js?v=2.9.0"></script>
+<script src="js/cables.js?v=2.9.0"></script>
+<script src="js/harness.js?v=2.9.0"></script>
+<script src="js/github.js?v=2.9.0"></script>
+<script src="js/app.js?v=2.9.0"></script>
 </body>
 </html>
