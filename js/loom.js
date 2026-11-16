@@ -126,7 +126,7 @@
     const numeric = (s) => /^\d+$/.test(s || '');
     A.wires.sort((x, y) => (numeric(y.no) - numeric(x.no)) || ncmp(x.no || '', y.no || '') || ncmp(x.a.ref, y.a.ref) || ncmp(x.a.number, y.a.number));
 
-    A.issues = check(P, A);
+    A.issues = root.Setup ? root.Setup.applySeverities(check(P, A), P) : check(P, A);
     return A;
   }
 
@@ -324,6 +324,92 @@
       const missing = [];
       for (let k = 1; k <= u.n; k++) if (!u.have.has(k)) missing.push(K.unitLetter(k));
       if (missing.length) add('warn', 'unit', `${ref} has unit${missing.length === 1 ? '' : 's'} ${missing.join(', ')} not placed`, u.inst, u.sym.p, { ref, si: u.si });
+    }
+    // ---- more of KiCad's ERC rules
+    const nonPart = (sym, ref) => !sym.lib || sym.lib.power || ref.startsWith('#');
+    // Input pins whose net has nothing to drive it (KiCad: pin_not_driven)
+    const driverTypes = new Set(['output', 'bidirectional', 'tri_state', 'passive', 'power_out', 'open_collector', 'open_emitter', 'unspecified', 'free']);
+    for (const net of P.nets) {
+      if (net.bus || net.hasPower || net.noConnect || net.pins.length < 2) continue;
+      const ins = net.pins.filter((p) => p.type === 'input' && !P.instances[p.inst].orphan);
+      if (!ins.length || net.pins.some((p) => driverTypes.has(p.type))) continue;
+      const p = ins[0], inst = P.instances[p.inst];
+      add('error', 'notdriven', `${p.ref} pin ${p.number}${p.name && p.name !== '~' && p.name !== p.number ? ' (' + plain(p.name) + ')' : ''} is an input with nothing driving ${plain(net.name)}`, inst, A.pinPos(p), { ref: p.ref, net: net.id });
+    }
+    const labelUses = new Map();   // lower-case name -> {names:Set, kinds:Set, first}
+    const sheetsSeen = new Set();
+    for (const inst of P.instances) {
+      if (inst.orphan) continue;
+      const sh = inst.sheet, once = !sheetsSeen.has(sh);
+      sheetsSeen.add(sh);
+      for (const l of sh.labels) {
+        if (l.kind !== 'local' && l.kind !== 'global') continue;
+        const nm = plain(l.text); if (!nm) continue;
+        const k = nm.toLowerCase();
+        if (!labelUses.has(k)) labelUses.set(k, { names: new Set(), kinds: new Map(), first: { inst, p: l.p } });
+        const u = labelUses.get(k); u.names.add(nm);
+        if (!u.kinds.has(l.kind + ':' + nm)) u.kinds.set(l.kind + ':' + nm, { inst, p: l.p });
+      }
+      if (!once) continue;
+      // No-connect flags on nothing (KiCad: no_connect_dangling)
+      for (const n of sh.noConnects) {
+        const items = sh.groups[n.group] ? sh.groups[n.group].items : [];
+        if (items.length <= 1) add('warn', 'ncdangle', 'No-connect flag is not on a pin', inst, n.p);
+      }
+      // Four or more wires meeting at a junction (KiCad: four_way_junction)
+      for (const j of sh.junctions) {
+        let c = 0;
+        for (const w of sh.wires) {
+          if (w.bus) continue;
+          const atEnd = (q) => Math.abs(q[0] - j.p[0]) < 1e-3 && Math.abs(q[1] - j.p[1]) < 1e-3;
+          if (atEnd(w.a) || atEnd(w.b)) c++; else if (K.onSegment(j.p, w.a, w.b)) c += 2;
+        }
+        if (c >= 4) add('warn', 'junction4', 'Four wires meet at this junction; easy to misread as a crossing', inst, j.p);
+      }
+      // Two sheets with the same name in one sheet (KiCad: duplicate_sheet_names)
+      const sn = new Map();
+      for (const s2 of sh.sheets) { const k = plain(s2.name); if (sn.has(k)) add('error', 'dupsheet', `Two sheets here are called ${k}`, inst, s2.p || [0, 0]); else sn.set(k, s2); }
+      // Text variables with no value (KiCad: unresolved_variable)
+      const ctx = { inst, project: P, pageCount: P.pageCount, projectName: P.name };
+      const unres = (str, c, p) => {
+        if (!str || str.indexOf('${') < 0) return;
+        const r = K.resolveVars(str, c);
+        const m = /\$\{([^}]+)\}/.exec(r || '');
+        if (m) add('warn', 'unresolved', `Text variable \${${m[1]}} has no value`, inst, p);
+      };
+      for (const t of sh.texts) unres(t.s, ctx, t.p);
+      for (const t of sh.textBoxes) unres(t.s, ctx, t.p);
+      for (const l of sh.labels) unres(l.text, ctx, l.p);
+      sh.symbols.forEach((sym, si) => {
+        const c2 = Object.assign({ sym, ref: inst.refs[si].ref }, ctx);
+        for (const f of sym.props) if (!(f.fx && f.fx.hide) && f.name !== 'Intersheetrefs') unres(f.value, c2, f.p || sym.p);
+      });
+    }
+    for (const u of labelUses.values()) {
+      // Labels that differ only in case (KiCad: similar_labels)
+      if (u.names.size > 1) add('warn', 'similar', `Labels ${Array.from(u.names).slice(0, 3).join(' and ')} differ only in upper/lower case, so they are different nets`, u.first.inst, u.first.p);
+      // The same name as a local and a global label (KiCad: same_local_global_label)
+      for (const nm of u.names) {
+        const loc = u.kinds.get('local:' + nm), glob = u.kinds.get('global:' + nm);
+        if (loc && glob) add('warn', 'localglobal', `${nm} is both a local and a global label; they are not joined`, loc.inst, loc.p);
+      }
+    }
+    // Units of one part with different values or footprints (KiCad: unit_value_mismatch, different_unit_footprint)
+    for (const e of A.parts.values()) {
+      if (e.units.length < 2 || !(e.sym.lib && e.sym.lib.unitCount > 1)) continue;
+      for (const [code, field, what] of [['unitval', 'Value', 'values'], ['unitfp', 'Footprint', 'footprints']]) {
+        const vals = Array.from(new Set(e.units.map((u) => prop(u.sym, field)).filter((v) => v && v !== '~')));
+        if (vals.length > 1) add('error', code, `${e.ref} has units with different ${what} (${vals.slice(0, 3).join(', ')})`, e.units[1].inst, e.units[1].sym.p, { ref: e.ref, si: e.units[1].si });
+      }
+    }
+    // Net classes from net class flags (KiCad: conflicting_netclasses, undefined_netclass)
+    if (root.Setup) {
+      try {
+        const nc = root.Setup.netClassMap(P);
+        const known = new Set(nc.settings.classes.map((c) => c.name));
+        for (const c of nc.conflicts) add('error', 'netclass', `${plain(P.nets[c.net].name)} has two net classes: ${c.names.join(' and ')}`, c.inst, c.p, { net: c.net });
+        for (const [nid, f] of nc.fromLabel) if (!known.has(f.name)) add('error', 'netclassundef', `Net class ${f.name} on ${plain(P.nets[nid].name)} isn't defined in Schematic setup`, f.inst, f.p, { net: nid });
+      } catch (err) { /* no settings */ }
     }
     // E-bus budget: terminals' stated consumption against the couplers' and power terminals' supply
     try {

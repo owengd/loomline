@@ -987,7 +987,7 @@
       net.members = Array.from(seen, ([name, id]) => ({ name, net: id }));
     }
     return {
-      name: projectName, rootPath, files: paths, sheetsByPath, instances, instSorted, root: rootInst, nets, errors, textVars, pageCount, aliases
+      name: projectName, rootPath, files: paths, sheetsByPath, instances, instSorted, root: rootInst, nets, errors, textVars, pageCount, aliases, pro, proPath
     };
   }
 

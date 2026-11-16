@@ -885,6 +885,7 @@
       }
       const an = this.annot;
       const gcol = an && an.groupColor && an.groupColor.size ? an.groupColor : null;
+      const ccol = an && an.classColor && an.classColor.size ? an.classColor : null;
       if (an && an.symMarks && an.symMarks.size) {
         ctx.globalAlpha = 1;
         for (const sy of S.syms) {
@@ -906,7 +907,8 @@
         if (anyHl && isHl(s)) { later.push(s); continue; }
         ctx.globalAlpha = s.role === 'frame' ? Math.min(1, dim + 0.3) : dim;
         const gc = gcol && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? gcol.get(s.g) : null;
-        ctx.strokeStyle = gc || col(s);
+        const cc = !gc && ccol && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? ccol.get(s.g) : null;
+        ctx.strokeStyle = gc || cc || col(s);
         ctx.lineWidth = gc ? Math.max(s.w * 1.6, 2 * px) : Math.max(s.w, (s.role === 'bus' ? 2 : 1.1) * px);
         this._dash(s.dash, px);
         if (isPrev(s)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); this._path(s.p, false); ctx.stroke(); ctx.restore(); continue; }
@@ -1139,8 +1141,9 @@
     const gcol = !mono && an && an.groupColor && an.groupColor.size ? an.groupColor : null;
     for (const s of S.strokes) {
       const gc = gcol && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? gcol.get(s.g) : null;
+      const cc = !gc && !mono && an && an.classColor && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? an.classColor.get(s.g) : null;
       const w = Math.max(s.w, s.role === 'bus' ? 0.3 : 0.12) * (gc ? 1.6 : 1);
-      out.push(`<path d="${pts(s.p)}" stroke="${C(gc || s.color || P[s.role] || P.note)}" stroke-width="${f3(w)}"${dashes(s.dash, s.w)}/>`);
+      out.push(`<path d="${pts(s.p)}" stroke="${C(gc || cc || s.color || P[s.role] || P.note)}" stroke-width="${f3(w)}"${dashes(s.dash, s.w)}/>`);
     }
     for (const c of S.circles) {
       const r = Math.max(c.r, 0.05);

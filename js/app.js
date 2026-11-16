@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '3.1.0';
+  const VERSION = '3.2.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1123,6 +1123,7 @@
     const view0 = { scale: view.scale, ox: view.ox, oy: view.oy };
     const project = K.buildProject(state.files);
     state.project = project;
+    E.setDefaults(Setup.drawing(project));
     state.index = buildIndex(project);
     analyzeNow();
     if (state.compare) state.compare.diff = Loom.diff(state.compare.P0, state.compare.A0, project, state.A);
@@ -1661,6 +1662,8 @@
       const ta = traceActions(s);
       A.unshift(...ta);
       if (it && it.type === 'label' && o && o.kind === 'directive') {
+        const isNc = o.props.some((x) => /^(net ?class|netclass)$/i.test(x.name));
+        if (isNc) A.push({ label: 'NET CLASS', icon: 'i-tag', run: () => netClassFlagDialog(null, o) });
         A.push({ label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) });
         if (Loom.isCableFlag(o)) A.push({ label: 'FLIP SIDE', icon: 'i-flip', run: () => run('Flip cable tag', () => { const f = Loom.cableFields(o); f.Cable_Label = Loom.cableLabel(f); return E.setCableFields(sh, o, f, E.cableSideOf(o) === 'a' ? 'b' : 'a'); }) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'cable flag' }) });
@@ -1677,6 +1680,7 @@
         if (wno && !s.net.named) A.push({ label: 'FIX NO.', icon: 'i-number', run: () => fixWireNumber(o, wno) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'wire', uuid: uuidOf(o), name: 'wire' }) });
         A.push({ label: 'BREAK', icon: 'i-cut', run: () => breakAtTap(o) });
+        A.push({ label: 'NET CLASS', icon: 'i-tag', run: () => netClassFlagDialog(o) });
         // A run of plain wire that joins buses (or bus-named pins and labels) should be a bus.
         // Turn this run of wire into a bus (always offered; it's what a run joining buses should be).
         const runW = sh.wires.filter((w) => w.group === o.group);
@@ -3101,7 +3105,8 @@
     if (tab === 'home') return [
       { title: 'Project', tools: [
         { label: 'New project', icon: 'i-plus', run: newProjectDialog },
-        { label: 'Page settings', icon: 'i-props', disabled: !P, run: pageSettingsDialog }] },
+        { label: 'Page settings', icon: 'i-props', disabled: !P, run: pageSettingsDialog },
+        { label: 'Schematic setup', icon: 'i-props', disabled: !P, run: () => schematicSetupDialog() }] },
       { title: 'Select', tools: [
         { label: 'Select', icon: 'i-hand', on: state.mode === 'select' || state.mode === 'move', run: () => setMode('select') },
         { label: 'Box select', icon: 'i-box', on: state.mode === 'box', run: startBox },
@@ -3158,6 +3163,7 @@
           { label: 'Cleanup', icon: 'i-sync', disabled: !P, run: cleanupThisSheet },
           { label: 'Snap ' + E.snapGrid() + ' mm', icon: 'i-more', disabled: !P, run: () => { const i = GRIDS.indexOf(E.snapGrid()); stepGrid(i === GRIDS.length - 1 ? -i : 1); renderRibbon(); } }] },
         { title: 'Check & report', tools: [tabBtn('check', 'Design check', 'i-alert'), tabBtn('reports', 'Reports', 'i-report'), tabBtn('install', 'Install log', 'i-install'), tabBtn('compare', 'Compare', 'i-compare')] },
+        { title: 'Outputs', tools: [{ label: 'BOM', icon: 'i-download', disabled: !P, run: bomDialog }, { label: 'Netlist', icon: 'i-download', disabled: !P, run: exportNetlistFile }] },
         { title: 'Output', tools: [{ label: 'Print / PDF', icon: 'i-print', disabled: !P, run: printDialog }] }
       ];
     }
@@ -3216,6 +3222,7 @@
 
   function analyzeNow() {
     try { state.A = Loom.analyze(state.project); } catch (e) { console.error(e); state.A = null; }
+    try { state.nc = Setup.netClassMap(state.project); } catch (e) { console.error(e); state.nc = null; }
     if (state.A && state.kicadErc && state.kicadErc.project === state.project.name) state.A.issues = state.A.issues.concat(kicadIssues(state.kicadErc));
     renderCheckBadge();
   }
@@ -3258,7 +3265,9 @@
   }
   // Kinds of problem that can be hidden from the check (some drawings never use no-connect flags)
   const CHECK_KINDS = { pin: 'Unconnected pins', nc: 'No-connect flag on a connected net', dangling: 'Loose wire ends', label: 'Labels with no pins', global1: 'Global labels used once', annotate: 'Not annotated', value: 'Missing values', dupref: 'Duplicate references', drive: 'Outputs driving each other', sheetpin: 'Sheet pins with no label', hier: 'Labels with no sheet pin', ebus: 'E-bus power',
-    duppin: 'Same pin number on different nets', names: 'Two names on one wire or bus', busname: 'Bus names KiCad won\u2019t join', lbldangle: 'Labels not on a wire', buswire: 'Wires or pins touching a bus', power: 'Power inputs with no source', unit: 'Units not placed', grid: 'Off the connection grid' };
+    duppin: 'Same pin number on different nets', names: 'Two names on one wire or bus', busname: 'Bus names KiCad won\u2019t join', lbldangle: 'Labels not on a wire', buswire: 'Wires or pins touching a bus', power: 'Power inputs with no source', unit: 'Units not placed', grid: 'Off the connection grid',
+    notdriven: 'Inputs with nothing driving them', ncdangle: 'No-connect flags not on a pin', junction4: 'Four wires at one junction', dupsheet: 'Duplicate sheet names', unresolved: 'Text variables with no value',
+    similar: 'Labels differing only in case', localglobal: 'Same name as local and global label', unitval: 'Units with different values', unitfp: 'Units with different footprints', netclass: 'Two net classes on one net', netclassundef: 'Undefined net classes' };
   const checkHide = new Set(Store.pref('checkHide') || ['grid']);   // off-grid is noisy on older drawings; on request
   const shownIssues = () => (state.A ? state.A.issues.filter((i) => !checkHide.has(i.code)) : []);
   function toggleCheckKind(code) {
@@ -3285,7 +3294,13 @@
   function annotFor(inst, S, opt) {
     const P = state.project, A = state.A;
     const d = opt.dark ? 1 : 0;
-    const an = { groupColor: new Map(), symMarks: new Map(), tags: [], markers: [] };
+    const an = { groupColor: new Map(), classColor: new Map(), symMarks: new Map(), tags: [], markers: [] };
+    // Net class colours (Schematic setup → Net classes), under any other colouring
+    if (state.nc) {
+      const css = new Map();
+      for (const c of state.nc.settings.classes) { const v = Setup.cssColor(c.schematic_color); if (v) css.set(c.name, v); }
+      if (css.size) for (let g = 0; g < inst.netOf.length; g++) { const v = css.get(state.nc.classOf(inst.netOf[g])); if (v) an.classColor.set(g, v); }
+    }
     if (opt.wireNos) {
       const best = new Map();
       for (const s of S.strokes) {
@@ -3353,6 +3368,9 @@
       { label: 'Grid dots', icon: view.showGrid ? 'i-check' : 'i-none', checked: view.showGrid, run: () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); } },
       { sep: true },
       { label: 'Print / export sheets', icon: 'i-print', run: printDialog },
+      { label: 'Bill of materials (BOM)', icon: 'i-download', run: bomDialog },
+      { label: 'KiCad netlist (.net)', icon: 'i-download', run: exportNetlistFile },
+      { label: 'Schematic setup', icon: 'i-props', run: () => schematicSetupDialog() },
       { label: 'Reports', icon: 'i-report', run: () => showTab('reports', true) },
       { label: 'Build looms', icon: 'i-cable', run: () => showTab('build', true) },
       { label: 'Compare revisions', icon: 'i-compare', run: () => showTab('compare', true) }
@@ -3412,7 +3430,8 @@
     body.append(section('KiCad ERC report', er ? er.file : 'none loaded',
       h('p', { class: 'hint', text: er ? `From KiCad ${er.kicad}${er.date ? ', run ' + er.date : ''}. Its results are listed with the app's own, marked “KiCad:”. They don't update as you edit: run ERC in KiCad again and load the new report.` : 'In KiCad: Inspect → Electrical Rules Checker → Run ERC → Save… as .json, then load the file here to see KiCad\u2019s results on the drawing.' }),
       h('div', { class: 'actions' }, ercFile, h('button', { class: 'btn small', onclick: () => ercFile.click() }, icon('i-file'), er ? 'LOAD A NEWER REPORT' : 'LOAD KICAD REPORT'), er ? h('button', { class: 'btn small', onclick: clearKicadErc }, icon('i-close'), 'CLEAR') : null)));
-    body.append(h('p', { class: 'hint', text: 'Checks as you edit, using KiCad\u2019s ERC rules for: unconnected pins, wire ends that touch nothing, labels that reach no pins or sit on no wire, two names on one wire, bus names KiCad won\u2019t join, wires meeting a bus without an entry, the same pin number on different nets, power inputs with no source, unplaced units, sheet pins without a hierarchical label, duplicate or unannotated references, missing values and outputs driving each other. Load KiCad\u2019s own report to see everything KiCad found.' }));
+    body.append(h('p', { class: 'hint', text: 'Checks as you edit, using KiCad\u2019s ERC rules for: unconnected pins, wire ends that touch nothing, labels that reach no pins or sit on no wire, two names on one wire, bus names KiCad won\u2019t join, wires meeting a bus without an entry, the same pin number on different nets, power inputs with no source, unplaced units, sheet pins without a hierarchical label, duplicate or unannotated references, missing values, outputs driving each other, inputs nothing drives, no-connect flags on nothing, labels differing only in case, local and global labels with one name, units with different values or footprints, duplicate sheet names, text variables with no value and net class conflicts. Set how each is reported in Schematic setup → ERC. Load KiCad\u2019s own report to see everything KiCad found.' }),
+      h('button', { class: 'btn small', onclick: () => schematicSetupDialog('erc') }, icon('i-props'), 'ERC SEVERITIES'));
   }
   function pickIssue(is, zoom) {
     const inst = state.project.instances[is.inst];
@@ -4403,6 +4422,227 @@
     };
     return { els, read };
   }
+  // ================================================================== Schematic setup (KiCad: File → Schematic Setup)
+  // Formatting, text variables, bus aliases, net classes and ERC severities, kept where KiCad keeps them.
+  function schematicSetupDialog(startTab) {
+    const P = state.project; if (!P) return;
+    const S = Setup;
+    let tab = startTab || Store.pref('setupTab') || 'format';
+    // ---- formatting
+    const d = S.drawing(P);
+    const mm = (v) => String(Math.round(v * 1000) / 1000);
+    const numIn = (id, v, step) => h('input', { class: 'input', id, type: 'number', step: step || '0.01', min: '0', value: mm(v), inputmode: 'decimal' });
+    const fText = numIn('suText', d.textSize), fLine = numIn('suLine', d.lineWidth), fPin = numIn('suPin', d.pinSymbolSize);
+    const fJunc = h('select', { class: 'input', id: 'suJunc' }, ...S.JUNCTION_SIZES.map((n, i) => h('option', { value: String(i), text: n, selected: i === d.junction })));
+    const fX = h('input', { type: 'checkbox', checked: d.xrefShow }), fXs = h('input', { type: 'checkbox', checked: d.xrefShort });
+    const fXp = h('input', { class: 'input', id: 'suXp', value: d.xrefPrefix, style: 'max-width:6em' }), fXq = h('input', { class: 'input', id: 'suXq', value: d.xrefSuffix, style: 'max-width:6em' });
+    const fmtPanel = h('div', { class: 'su-panel' },
+      h('p', { class: 'hint', text: 'Sizes in mm. New labels, text and sheet pins use the default text size; KiCad uses these settings too.' }),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'suText', text: 'Default text size' }), fText),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'suLine', text: 'Default line width' }), fLine),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'suPin', text: 'Pin symbol size' }), fPin),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'suJunc', text: 'Junction dot size' }), fJunc),
+      h('label', { class: 'check' }, fX, 'Show inter-sheet references on global labels'),
+      h('label', { class: 'check' }, fXs, 'Abbreviated (first and last page only)'),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'suXp', text: 'Prefix / suffix' }), h('div', { class: 'row-inline' }, fXp, fXq)));
+    // ---- simple editable lists
+    const listEditor = (rows, cols, addLabel, blank) => {
+      const box = h('div', { class: 'su-list' });
+      const draw = () => {
+        box.replaceChildren();
+        rows.forEach((r, i) => {
+          const line = h('div', { class: 'su-row' });
+          for (const c of cols) line.append(c.make(r, i));
+          line.append(h('button', { class: 'ib', type: 'button', 'aria-label': 'Remove', disabled: blank.fixed && blank.fixed(r), onclick: () => { rows.splice(i, 1); draw(); } }, icon('i-close')));
+          box.append(line);
+        });
+        box.append(h('button', { class: 'btn small', type: 'button', onclick: () => { rows.push(blank.make()); draw(); const last = box.querySelectorAll('.su-row input'); const x = last[last.length - (cols.length > 1 ? cols.length : 1)]; if (x) x.focus(); } }, icon('i-plus'), addLabel));
+      };
+      draw();
+      return { el: box, redraw: draw };
+    };
+    const txt = (key, ph, extra) => (r) => h('input', Object.assign({ class: 'input', value: r[key] || '', placeholder: ph, spellcheck: 'false', autocomplete: 'off', oninput: (e) => { r[key] = e.target.value; } }, extra || {}));
+    // ---- text variables
+    const vars = Object.entries(S.textVars(P)).map(([name, value]) => ({ name, value }));
+    const varList = listEditor(vars, [{ make: txt('name', 'NAME', { autocapitalize: 'characters' }) }, { make: txt('value', 'value') }], 'ADD VARIABLE', { make: () => ({ name: '', value: '' }) });
+    const varPanel = h('div', { class: 'su-panel' }, h('p', { class: 'hint' }, 'Use them in any text, field or title block as ', h('code', { text: '${NAME}' }), '. Also available: ${TITLE}, ${REVISION}, ${ISSUE_DATE}, ${COMPANY}, ${SHEETNAME}, ${#} and ${##}.'), varList.el);
+    // ---- bus aliases
+    const aliases = S.busAliases(P).map((a) => ({ name: a.name, members: a.members.join(' ') }));
+    const aliasList = listEditor(aliases, [{ make: txt('name', 'ALIAS', { autocapitalize: 'characters' }) }, { make: txt('members', 'members, e.g. CAN_H CAN_L GND') }], 'ADD ALIAS', { make: () => ({ name: '', members: '' }) });
+    const aliasPanel = h('div', { class: 'su-panel' }, h('p', { class: 'hint' }, 'A bus alias names a set of signals. Label a bus ', h('code', { text: '{ALIAS}' }), ' or ', h('code', { text: 'PREFIX{ALIAS}' }), ' to carry them. Members are separated by spaces and can be vector buses such as D[0..7].'), aliasList.el);
+    // ---- net classes
+    const ncs = S.netClassSettings(P);
+    const classes = ncs.classes.map((c) => Object.assign({}, c, { was: c.name, colour: S.hexOf(c.schematic_color) }));
+    const patterns = ncs.patterns.map((p) => Object.assign({}, p));
+    const MILmm = (v) => mm((+v || 0) * S.MIL);
+    const classSel = (r) => h('select', { class: 'input', onchange: (e) => { r.netclass = e.target.value; } }, ...classes.map((c) => h('option', { value: c.name, text: c.name || '(unnamed)', selected: c.name === r.netclass })));
+    let patList = null;
+    const classList = listEditor(classes, [
+      { make: (r) => h('input', { class: 'input', value: r.name, placeholder: 'Class name', disabled: r.was === 'Default', oninput: (e) => { r.name = e.target.value; } , onchange: () => patList && patList.redraw() }) },
+      { make: (r) => h('label', { class: 'su-col', title: 'Wire colour on the drawing' }, h('input', { type: 'color', value: r.colour || '#000000', class: r.colour ? '' : 'unset', 'aria-label': 'Wire colour', oninput: (e) => { r.colour = e.target.value; e.target.classList.remove('unset'); } }), h('button', { class: 'btn small', type: 'button', onclick: (e) => { r.colour = ''; const c = e.currentTarget.closest('.su-col').querySelector('input'); c.value = '#000000'; c.classList.add('unset'); } }, 'NONE')) },
+      { make: (r) => h('input', { class: 'input su-num', type: 'number', step: '0.01', min: '0', title: 'Wire width (mm)', value: MILmm(r.wire_width), oninput: (e) => { r.wire_width = Math.round(+e.target.value / S.MIL * 100) / 100; } }) },
+      { make: (r) => h('select', { class: 'input su-num', title: 'Line style', onchange: (e) => { r.line_style = +e.target.value; } }, ...['Solid', 'Dash', 'Dot', 'Dash-dot', 'Dash-dot-dot'].map((n, i) => h('option', { value: String(i), text: n, selected: (r.line_style || 0) === i }))) },
+      { make: (r) => h('input', { class: 'input su-num', type: 'number', step: '0.01', min: '0', title: 'PCB clearance (mm)', value: mm(r.clearance || 0), oninput: (e) => { r.clearance = +e.target.value; } }) },
+      { make: (r) => h('input', { class: 'input su-num', type: 'number', step: '0.01', min: '0', title: 'PCB track width (mm)', value: mm(r.track_width || 0), oninput: (e) => { r.track_width = +e.target.value; } }) }
+    ], 'ADD NET CLASS', { make: () => ({ name: '', colour: '', wire_width: 6, bus_width: 12, line_style: 0, clearance: 0.2, track_width: 0.2 }), fixed: (r) => r.was === 'Default' });
+    patList = listEditor(patterns, [{ make: txt('pattern', 'Net name pattern, e.g. *CAN* or +24V') }, { make: classSel }], 'ADD PATTERN', { make: () => ({ pattern: '', netclass: 'Default' }) });
+    const ncPanel = h('div', { class: 'su-panel' },
+      h('p', { class: 'hint', text: 'Columns: name, wire colour, wire width, line style, PCB clearance and track width (mm). Wires show their class colour. The PCB values go to the board through the netlist.' }),
+      h('div', { class: 'su-row su-head nc-head' }, ...['Name', 'Colour', 'Wire width', 'Line style', 'Clearance', 'Track width'].map((t) => h('span', { text: t }))),
+      classList.el,
+      h('h3', { class: 'su-h', text: 'Assignments' }),
+      h('p', { class: 'hint', text: 'Nets whose name matches a pattern (* = anything, ? = one character) join that class. A net class flag on a wire (select the wire, then NET CLASS) overrides the patterns.' }),
+      patList.el);
+    // ---- ERC severities
+    const rs = S.ercSeverities(P);
+    const sevSel = {};
+    const ruleRows = [];
+    const seenRule = new Set();
+    for (const [code, rule, title] of S.ERC_RULES) {
+      if (seenRule.has(rule)) continue; seenRule.add(rule);
+      const cur = rs[rule] || S.KICAD_DEFAULTS[rule] || '';
+      const sel = h('select', { class: 'input su-num' }, ...[['', 'Default'], ['error', 'Error'], ['warning', 'Warning'], ['ignore', 'Ignore']].map(([v, l]) => h('option', { value: v, text: l, selected: v === cur })));
+      sevSel[rule] = sel;
+      ruleRows.push(h('div', { class: 'fieldrow su-erc' }, h('label', { text: title + (rule.startsWith('loomline_') ? ' (Loomline)' : '') }), sel));
+    }
+    const ercPanel = h('div', { class: 'su-panel' }, h('p', { class: 'hint', text: 'How each design check is reported, the same settings as KiCad’s ERC. Ignore hides it everywhere, including the Design check report. KiCad’s pin conflict table isn’t editable here.' }), ...ruleRows);
+    // ---- tabs
+    const panels = { format: fmtPanel, vars: varPanel, alias: aliasPanel, nc: ncPanel, erc: ercPanel };
+    const holder = h('div');
+    const tabs = seg('Section', [['format', 'FORMAT'], ['vars', 'VARIABLES'], ['alias', 'BUS ALIASES'], ['nc', 'NET CLASSES'], ['erc', 'ERC']], panels[tab] ? tab : 'format', (v) => { tab = v; Store.pref('setupTab', v); holder.replaceChildren(panels[v]); });
+    const go = () => {
+      let cur = P;
+      const out = [];
+      const step = (fn) => {
+        const r = [].concat(fn(cur));
+        for (const x of r) {
+          if (/\.kicad_pro$/i.test(x.path)) cur = Object.assign({}, cur, { pro: JSON.parse(x.text), proPath: x.path });
+          const i = out.findIndex((o) => o.path === x.path);
+          if (i >= 0) out[i] = x; else out.push(x);
+        }
+      };
+      try {
+        const num = (el, name) => { const v = +el.value; if (!(v > 0)) throw new Error(name + ' must be more than 0.'); return v; };
+        step((p) => S.setDrawing(p, { textSize: num(fText, 'Text size'), lineWidth: num(fLine, 'Line width'), pinSymbolSize: num(fPin, 'Pin symbol size'), junction: +fJunc.value, xrefShow: fX.checked, xrefShort: fXs.checked, xrefPrefix: fXp.value, xrefSuffix: fXq.value }));
+        const vv = {};
+        for (const v of vars) { const n = v.name.trim(); if (!n) continue; if (vv[n] !== undefined) throw new Error(`Variable ${n} is listed twice.`); vv[n] = v.value; }
+        step((p) => S.setTextVars(p, vv));
+        const al = aliases.filter((a) => a.name.trim()).map((a) => ({ name: a.name.trim(), members: a.members.split(/[\s,]+/).filter(Boolean) }));
+        const before = JSON.stringify(S.busAliases(P).map((a) => [a.name, a.members]));
+        if (JSON.stringify(al.map((a) => [a.name, a.members])) !== before) step((p) => S.setBusAliases(Object.assign({}, P, { pro: p.pro }), al));
+        const cls = classes.map((c) => { const o = Object.assign({}, c, { name: c.name.trim(), schematic_color: S.kicadColor(c.colour) }); delete o.colour; return o; });
+        // a renamed class keeps its patterns
+        for (const c of cls) if (c.was && c.was !== c.name) for (const p of patterns) if (p.netclass === c.was) p.netclass = c.name;
+        step((p) => S.setNetClasses(p, cls, patterns));
+        const sev = {};
+        for (const [rule, sel] of Object.entries(sevSel)) if (sel.value) sev[rule] = sel.value; else if (rs[rule]) sev[rule] = S.KICAD_DEFAULTS[rule] || (rule.startsWith('loomline_') ? undefined : 'error');
+        for (const k of Object.keys(sev)) if (sev[k] === undefined) delete sev[k];
+        step((p) => S.setErcSeverities(p, sev));
+      } catch (e) { banner('err', e.message); return; }
+      closeDialog();
+      run('Schematic setup', () => out);
+    };
+    const dlg = openDialog('SCHEMATIC SETUP', [tabs.el, holder], [{ label: 'CANCEL', run: closeDialog }, { label: 'APPLY', primary: true, run: go }]);
+    dlg.querySelector('.dialog').classList.add('wide');
+    holder.replaceChildren(panels[tabs.get()]);
+  }
+  // ---- net class flag on a wire, or change the class on an existing one
+  function netClassFlagDialog(w, flag) {
+    const P = state.project, sh = state.inst.sheet;
+    const ncs = Setup.netClassSettings(P);
+    const cur = flag ? ((flag.props.find((x) => /^(net ?class|netclass)$/i.test(x.name)) || {}).value || '') : '';
+    const sel = h('select', { class: 'input', id: 'ncSel' }, ...ncs.classes.map((c) => h('option', { value: c.name, text: c.name, selected: c.name === cur })));
+    const go = () => {
+      const name = sel.value; closeDialog();
+      if (flag) { run('Net class ' + name, () => E.setNetClassOfFlag(sh, flag, name)); return; }
+      const p0 = state.tapPoint || w.a;
+      const dx = w.b[0] - w.a[0], dy = w.b[1] - w.a[1], l2 = dx * dx + dy * dy;
+      let t = l2 ? ((p0[0] - w.a[0]) * dx + (p0[1] - w.a[1]) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+      let p = [w.a[0] + t * dx, w.a[1] + t * dy];
+      if (Math.abs(dy) < 1e-6) p = [E.snap(p[0]), w.a[1]]; else if (Math.abs(dx) < 1e-6) p = [w.a[0], E.snap(p[1])];
+      run('Net class ' + name, () => E.addNetClassFlag(sh, w, p, name));
+    };
+    openDialog(flag ? 'NET CLASS FLAG' : 'ADD NET CLASS FLAG', [
+      h('p', { class: 'hint', text: 'Puts this net in a class (as KiCad’s net class flag does), whatever its name. Add or change classes in Schematic setup.' }),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'ncSel', text: 'Net class' }), sel),
+      h('button', { class: 'btn small', type: 'button', onclick: () => { closeDialog(); schematicSetupDialog('nc'); } }, icon('i-props'), 'NET CLASSES…')],
+      [{ label: 'CANCEL', run: closeDialog }, { label: flag ? 'SAVE' : 'ADD', primary: true, run: go }]);
+  }
+
+  // ================================================================== outputs: KiCad netlist and BOM
+  function projectBase() { return K.basename(state.project.rootPath || 'schematic').replace(/\.kicad_sch$/i, ''); }
+  function exportNetlistFile() {
+    const P = state.project, A = state.A; if (!P || !A) return;
+    try {
+      const nc = state.nc || Setup.netClassMap(P);
+      const text = Setup.exportNetlist(P, A, { tool: 'Loomline ' + VERSION, netClasses: nc });
+      download(projectBase() + '.net', text, 'text/plain');
+      const n = (text.match(/^\s+\(net \(code/mg) || []).length, c = (text.match(/^\s+\(comp \(ref/mg) || []).length;
+      toast(`Downloaded ${projectBase()}.net: ${c} parts, ${n} nets. In KiCad's PCB editor: File → Import → Netlist.`);
+    } catch (e) { console.error(e); banner('err', 'Could not make the netlist: ' + e.message); }
+  }
+  function bomDialog() {
+    const P = state.project, A = state.A; if (!P || !A) return;
+    const S = Setup;
+    const saved = S.bomSettings(P);
+    const st = JSON.parse(JSON.stringify(saved.settings)), fmt = JSON.parse(JSON.stringify(saved.format));
+    // every field in the project, in the saved order first
+    const have = new Set(st.fields_ordered.map((f) => f.name));
+    for (const n of S.bomFields(P)) if (!have.has(n)) st.fields_ordered.push({ name: n, label: n === S.QTY ? 'Qty' : n === S.DNP ? 'DNP' : n === S.ITEM ? '#' : n, show: false, group_by: false });
+    const fieldBox = h('div', { class: 'su-list' });
+    const prev = h('div', { class: 'bom-prev' });
+    const drawPrev = () => {
+      const t = S.bomTable(P, A, st, fmt);
+      const rows = t.rows.slice(0, 8);
+      prev.replaceChildren(h('p', { class: 'hint', text: `${t.rows.length} row${t.rows.length === 1 ? '' : 's'} for ${t.parts} part${t.parts === 1 ? '' : 's'}${t.rows.length > 8 ? '; first 8 shown' : ''}.` }),
+        h('div', { class: 'bom-scroll' }, h('table', { class: 'rtable' }, h('thead', {}, h('tr', {}, ...t.cols.map((c) => h('th', { text: c })))), h('tbody', {}, ...rows.map((r) => h('tr', {}, ...r.map((v) => h('td', { text: String(v).length > 60 ? String(v).slice(0, 57) + '…' : v }))))))));
+    };
+    const drawFields = () => {
+      fieldBox.replaceChildren(h('div', { class: 'bom-row su-head' }, h('span', { text: '' }), h('span', { text: 'Field (tick to show)' }), h('span', { text: 'Column title' }), h('span', { text: 'Group' }), h('span', { text: 'Order' })));
+      st.fields_ordered.forEach((f, i) => {
+        const nm = S.isQty(f.name) ? 'Quantity' : f.name === S.DNP ? 'Do not populate' : f.name === S.ITEM ? 'Item number' : f.name;
+        fieldBox.append(h('div', { class: 'bom-row' },
+          h('input', { type: 'checkbox', checked: f.show, 'aria-label': 'Show ' + nm, onchange: (e) => { f.show = e.target.checked; drawPrev(); } }),
+          h('span', { class: 'su-name', text: nm }),
+          h('input', { class: 'input', value: f.label || '', 'aria-label': 'Column title for ' + nm, oninput: (e) => { f.label = e.target.value; drawPrev(); } }),
+          h('input', { type: 'checkbox', checked: f.group_by, disabled: f.name === 'Reference' || S.isQty(f.name) || f.name === S.ITEM, 'aria-label': 'Group by ' + nm, onchange: (e) => { f.group_by = e.target.checked; drawPrev(); } }),
+          h('span', { class: 'su-move' },
+            h('button', { class: 'ib', type: 'button', 'aria-label': 'Move up', disabled: i === 0, onclick: () => { st.fields_ordered.splice(i - 1, 0, st.fields_ordered.splice(i, 1)[0]); drawFields(); drawPrev(); } }, '↑'),
+            h('button', { class: 'ib', type: 'button', 'aria-label': 'Move down', disabled: i === st.fields_ordered.length - 1, onclick: () => { st.fields_ordered.splice(i + 1, 0, st.fields_ordered.splice(i, 1)[0]); drawFields(); drawPrev(); } }, '↓'))));
+      });
+    };
+    const chk = (label, key) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!st[key], onchange: (e) => { st[key] = e.target.checked; drawPrev(); } }), label);
+    const sortSel = h('select', { class: 'input', id: 'bomSort', onchange: () => { st.sort_field = sortSel.value; drawPrev(); } }, ...st.fields_ordered.map((f) => h('option', { value: f.name, text: S.isQty(f.name) ? 'Quantity' : f.name === S.DNP ? 'DNP' : f.name === S.ITEM ? 'Item number' : f.name, selected: f.name === st.sort_field })));
+    const dirSel = seg('Order', [['1', 'A → Z'], ['0', 'Z → A']], st.sort_asc ? '1' : '0', (v) => { st.sort_asc = v === '1'; drawPrev(); });
+    const filt = h('input', { class: 'input', id: 'bomFilt', value: st.filter_string || '', placeholder: 'only references or values containing…', oninput: (e) => { st.filter_string = e.target.value; drawPrev(); } });
+    const delim = h('select', { class: 'input', id: 'bomDelim', onchange: () => { fmt.field_delimiter = delim.value; fmt.name = delim.value === '\\t' ? 'TSV' : delim.value === ';' ? 'CSV (semicolon)' : 'CSV'; } }, ...[[',', 'Comma (CSV)'], [';', 'Semicolon'], ['\\t', 'Tab (TSV)']].map(([v, l]) => h('option', { value: v, text: l, selected: fmt.field_delimiter === v })));
+    const ranges = h('input', { type: 'checkbox', checked: !!fmt.ref_range_delimiter, onchange: (e) => { fmt.ref_range_delimiter = e.target.checked ? '-' : ''; drawPrev(); } });
+    drawFields(); drawPrev();
+    const save = () => run('BOM settings', () => S.setBomSettings(P, st, fmt));
+    const go = () => {
+      const t = S.bomTable(P, A, st, fmt);
+      const ext = fmt.field_delimiter === '\\t' ? 'tsv' : 'csv';
+      download(projectBase() + ' BOM.' + ext, '﻿' + S.bomText(t, fmt), ext === 'tsv' ? 'text/tab-separated-values;charset=utf-8' : 'text/csv;charset=utf-8');
+      toast(`Downloaded the BOM: ${t.rows.length} rows.`);
+      const changed = JSON.stringify([st, fmt]) !== JSON.stringify([saved.settings, saved.format]);
+      closeDialog();
+      if (changed) save();
+    };
+    const dlg = openDialog('BILL OF MATERIALS', [
+      h('p', { class: 'hint', text: 'Choose the columns and how parts are grouped, as in KiCad’s Symbol Fields Table export. The settings are saved in the project file, so KiCad and the next export use them too.' }),
+      fieldBox,
+      chk('Group parts with the same values in the ticked “Group by” fields', 'group_symbols'),
+      chk('Leave out parts marked Do not populate', 'exclude_dnp'),
+      chk('Include parts excluded from the BOM', 'include_excluded_from_bom'),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'bomSort', text: 'Sort by' }), h('div', { class: 'row-inline' }, sortSel, dirSel.el)),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'bomFilt', text: 'Filter' }), filt),
+      h('div', { class: 'fieldrow' }, h('label', { for: 'bomDelim', text: 'Separator' }), delim),
+      h('label', { class: 'check' }, ranges, 'Shorten reference runs (R1, R2, R3 → R1-R3)'),
+      prev],
+      [{ label: 'CANCEL', run: closeDialog }, { label: 'SAVE SETTINGS', run: () => { closeDialog(); save(); } }, { label: 'EXPORT', primary: true, run: go }]);
+    dlg.querySelector('.dialog').classList.add('wide');
+  }
+
   function pageSettingsDialog() {
     if (!state.project || !state.inst) return;
     const sh = state.inst.sheet, f = pageFields(E.pageSettingsOf(sh));
@@ -5437,5 +5677,5 @@
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__tracer = { state, view, selectNet, selectSymbol, showInstance, openProject, snapPoint: (w) => snapPoint(w, 'touch'), armStencil, stencilById, copySel, startPaste, selectAll, setMode, multiResolve, undo };
+  window.__tracer = { state, view, run, selectNet, selectSymbol, showInstance, openProject, snapPoint: (w) => snapPoint(w, 'touch'), armStencil, stencilById, copySel, startPaste, selectAll, setMode, multiResolve, undo };
 })();

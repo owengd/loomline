@@ -96,13 +96,17 @@
     if (kind === 'local') return right ? '(justify right bottom)' : '(justify left bottom)';
     return right ? '(justify right)' : '(justify left)';
   }
+  // Defaults from Schematic setup (the project's formatting): text size of new labels, text and sheet pins.
+  let defText = 1.27;
+  function setDefaults(o) { if (o && o.textSize > 0) defText = Math.round(o.textSize * 10000) / 10000; }
+  function defaults() { return { textSize: defText }; }
   function labelLines(kind, name, p, spin, shape) {
     const head = { local: 'label', global: 'global_label', hier: 'hierarchical_label' }[kind];
     const lines = [`(${head} ${qstr(name)}`];
     if (kind !== 'local') lines.push(`\t(shape ${shape || (kind === 'hier' ? 'input' : 'bidirectional')})`);
     lines.push(`\t(at ${fnum(p[0])} ${fnum(p[1])} ${SPIN_ANGLE[spin] || 0})`);
     if (kind === 'global') lines.push('\t(fields_autoplaced yes)');
-    lines.push('\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', '\t\t' + justifyFor(kind, spin), '\t)', `\t(uuid ${qstr(uuid())})`);
+    lines.push('\t(effects', '\t\t(font', `\t\t\t(size ${fnum(defText)} ${fnum(defText)})`, '\t\t)', '\t\t' + justifyFor(kind, spin), '\t)', `\t(uuid ${qstr(uuid())})`);
     if (kind === 'global') {
       const off = spin === 'left' ? -5 : spin === 'right' ? 5 : 0;
       lines.push(`\t(property "Intersheetrefs" "\${INTERSHEET_REFS}"`, `\t\t(at ${fnum(p[0] + off)} ${fnum(p[1])} 0)`, '\t\t(effects', '\t\t\t(font', '\t\t\t\t(size 1.27 1.27)', '\t\t\t)', '\t\t\t' + justifyFor('global', spin), '\t\t\t(hide yes)', '\t\t)', '\t)');
@@ -1222,7 +1226,7 @@
       L = ['(arc', `\t(start ${fnum(g.a[0])} ${fnum(g.a[1])})`, `\t(mid ${fnum(g.m[0])} ${fnum(g.m[1])})`, `\t(end ${fnum(g.b[0])} ${fnum(g.b[1])})`, ...strokeLines(style), ...fillLines({ fill: 'none' }), `\t(uuid ${qstr(uuid())})`, ')'];
     } else if (kind === 'text') {
       if (!g.text) throw new Error('Type some text.');
-      const sz = fnum(g.size || 1.27);
+      const sz = fnum(g.size || defText);
       const font = ['\t\t(font', `\t\t\t(size ${sz} ${sz})`].concat(g.bold ? ['\t\t\t(bold yes)'] : []).concat(g.italic ? ['\t\t\t(italic yes)'] : []).concat(style && style.color ? [`\t\t\t(color ${style.color.join(' ')})`] : []).concat(['\t\t)']);
       L = [`(text ${qstr(g.text)}`].concat(!sheet.version || sheet.version >= 20231120 ? ['\t(exclude_from_sim no)'] : [])
         .concat([`\t(at ${fnum(g.p[0])} ${fnum(g.p[1])} ${g.angle || 0})`, '\t(effects', ...font, '\t\t(justify left bottom)', '\t)', `\t(uuid ${qstr(uuid())})`, ')']);
@@ -1319,6 +1323,32 @@
       out.push(wireLines(p, w.b, null, w.st));
     }
     sp.insert(insertPoint(sheet), out.map((l) => block(l, '\t')).join(''));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Adds a net class flag (KiCad's directive label with a Netclass field) on wire or bus w at p. */
+  function addNetClassFlag(sheet, w, p, className, side) {
+    if (!className) throw new Error('Choose a net class.');
+    const v8 = !sheet.version || sheet.version >= 20231120;
+    const vertical = Math.abs(w.a[0] - w.b[0]) < 1e-3;
+    const sd = side || 'a';
+    const at = cableTextAt(p, vertical, sd);
+    const field = cableFieldLines('Netclass', className, at, vertical ? 90 : 0, false, v8);
+    const sp = new Splicer(sheet.text);
+    sp.insert(insertPoint(sheet), block(cableFlagLines(p, vertical, {}, v8, null, field, sd), '\t'));
+    return { path: sheet.path, text: sp.apply() };
+  }
+  /** Changes the class a net class flag sets (adds the field when the flag has none). */
+  function setNetClassOfFlag(sheet, label, className) {
+    const text = sheet.text;
+    const f = label.props.find((x) => /^(net ?class|netclass)$/i.test(x.name));
+    const sp = new Splicer(text);
+    if (f) setTok(sp, f.src, 2, qstr(className));
+    else {
+      const vertical = label.angle === 90 || label.angle === 270;
+      const v8 = !sheet.version || sheet.version >= 20231120;
+      const lines = cableFieldLines('Netclass', className, cableTextAt(label.p, vertical, cableSideOf(label)), vertical ? 90 : 0, false, v8);
+      sp.insert(label.src.e - 1, '\t' + block(lines, indentAt(text, label.src.s) + '\t').trimStart() + indentAt(text, label.src.s));
+    }
     return { path: sheet.path, text: sp.apply() };
   }
   /** Rewrites an existing cable flag with new values (and the in-line layout); other fields it has are kept. */
@@ -1698,7 +1728,7 @@
   function sheetPinLines(name, shape, p, side) {
     const ang = { right: 0, top: 90, left: 180, bottom: 270 }[side] ?? 180;   // ?? not ||: right is 0
     const just = side === 'right' || side === 'bottom' ? 'right' : 'left';
-    return [`(pin ${qstr(name)} ${shape || 'input'}`, `\t(at ${fnum(p[0])} ${fnum(p[1])} ${ang})`, '\t(effects', '\t\t(font', '\t\t\t(size 1.27 1.27)', '\t\t)', `\t\t(justify ${just})`, '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
+    return [`(pin ${qstr(name)} ${shape || 'input'}`, `\t(at ${fnum(p[0])} ${fnum(p[1])} ${ang})`, '\t(effects', '\t\t(font', `\t\t\t(size ${fnum(defText)} ${fnum(defText)})`, '\t\t)', `\t\t(justify ${just})`, '\t)', `\t(uuid ${qstr(uuid())})`, ')'];
   }
   /**
    * Add a hierarchical sheet to parent at o.p (top-left) with o.size, named o.name, using file o.file
@@ -1935,7 +1965,7 @@
   root.KiEdit = {
     CABLE_FIELDS, addCableFlag, setCableFields, cableSideOf, cableTextAt,
     GRID, snap, same, fnum, qstr, uuid, connectionPoints,
-    setSymbolFields, setFieldMany, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, addWires, addWireSegs, addLabel, addNoConnect, addJunction, nextReference,
+    setSymbolFields, setFieldMany, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, setDefaults, defaults, addWires, addWireSegs, addNetClassFlag, setNetClassOfFlag, addLabel, addNoConnect, addJunction, nextReference,
     reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
     setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,
