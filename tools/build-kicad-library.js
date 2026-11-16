@@ -18,6 +18,34 @@ const LIBS = {
   'Semiconductors': ['Diode', 'Diode_Bridge', 'LED', 'Transistor_BJT', 'Transistor_FET', 'Transistor_IGBT'],
   'Drawing': ['Mechanical', 'Graphic']
 };
+// The rest of KiCad's library. These go into their own files (split so no single download is
+// large) and are only fetched when a part from them is opened. A category can span several files.
+const MORE = [
+  ['Power & protection', 'power-ics', ['Regulator_Switching', 'Regulator_Controller', 'Regulator_Current', 'Regulator_SwitchedCapacitor', 'Power_Supervisor', 'Reference_Voltage', 'Reference_Current', 'Driver_FET', 'Driver_LED', 'Driver_TEC', 'Driver_Haptic']],
+  ['Connectors', 'connectors-more', ['Connector_Generic_MountingPin', 'Connector_Generic_Shielded']],
+  ['Semiconductors', 'semiconductors-more', ['Transistor_FET_Other', 'Transistor_Array', 'Transistor_Power_Module', 'Diode_Laser', 'Valve']],
+  ['Sensors', 'sensors-more', ['Sensor_Audio', 'Sensor_Energy', 'Sensor_Gas', 'Sensor_Optical', 'Sensor_Touch']],
+  ['Analog & audio', 'analog', ['Amplifier_Audio', 'Amplifier_Buffer', 'Amplifier_Current', 'Amplifier_Difference', 'Amplifier_Instrumentation', 'Amplifier_Video', 'Analog', 'Analog_ADC', 'Analog_DAC', 'Analog_Switch', 'Comparator', 'Potentiometer_Digital', 'Filter', 'Isolator_Analog']],
+  ['Interfaces', 'interfaces', ['Interface', 'Interface_Expansion', 'Interface_HDMI', 'Interface_HID', 'Interface_LineDriver', 'Interface_Optical', 'Interface_Telecom', 'Interface_UART', 'Interface_USB', 'Logic_LevelTranslator']],
+  ['Displays & LEDs', 'displays', ['Display_Graphic', 'Driver_Display', 'Video']],
+  ['RF & wireless', 'rf', ['RF', 'RF_AM_FM', 'RF_Amplifier', 'RF_Bluetooth', 'RF_Filter', 'RF_GSM', 'RF_Mixer', 'RF_NFC', 'RF_RFID', 'RF_Switch', 'RF_WiFi', 'RF_ZigBee']],
+  ['Logic & memory', 'logic', ['74xx', '74xGxx', '74xx_IEEE', '4xxx', '4xxx_IEEE', 'Buffer', 'Logic_Programmable', 'Oscillator', 'Timer_PLL', 'Timer_RTC', 'Security']],
+  ['Logic & memory', 'memory', ['Memory_EEPROM', 'Memory_EPROM', 'Memory_Flash', 'Memory_NVRAM', 'Memory_RAM', 'Memory_ROM', 'Memory_UniqueID']],
+  ['Microcontrollers', 'mcu', 'MCU_'],
+  ['Processors & FPGAs', 'cpu-fpga', ['CPU', 'CPU_NXP_6800', 'CPU_NXP_68000', 'CPU_NXP_IMX', 'CPU_PowerPC', 'DSP_AnalogDevices', 'DSP_Freescale', 'DSP_Microchip_DSPIC33', 'DSP_Motorola', 'DSP_Texas', 'GPU', 'CPLD_Altera', 'CPLD_Microchip', 'CPLD_Renesas', 'CPLD_Xilinx', 'FPGA_']],
+  ['Drawing', 'drawing-more', ['Auxiliary_Items']],
+  ['Simulation (SPICE)', 'simulation', ['Simulation_SPICE']]
+];
+// A prefix ending in '_' takes every library that starts with it (and isn't listed elsewhere).
+const listed = new Set([].concat(...Object.values(LIBS), ...MORE.map((m) => m[2]).filter(Array.isArray)));
+const allLibs = fs.readdirSync(src).filter((f) => f.endsWith('.kicad_sym')).map((f) => f.slice(0, -10)).sort();
+for (const m of MORE) {
+  const expand = (x) => (x.endsWith('_') ? allLibs.filter((l) => l.startsWith(x) && !listed.has(l) && !(x === 'MCU_' && l === 'MCU_Module')) : [x]);
+  m[2] = [].concat(...(Array.isArray(m[2]) ? m[2] : [m[2]]).map(expand));
+}
+const left = allLibs.filter((l) => !listed.has(l) && !MORE.some((m) => m[2].includes(l)));
+if (left.length) console.warn('Not in any category: ' + left.join(', '));
+const CHUNK = 6e6; // characters of JSON per file before starting the next one (~1 MB gzipped)
 // Collapse whitespace outside strings; KiCad reads it back the same.
 function minify(t) {
   let o = '', i = 0, inStr = false, ws = false;
@@ -39,7 +67,11 @@ const bundles = {};
 // GitHub's web uploader stalls on some gzip files; these bundles are stored as plain JSON
 // (GitHub Pages still compresses them on the way to the tablet).
 const PLAIN = new Set(['semiconductors', 'signals-comms']);
-for (const [cat, libs] of Object.entries(LIBS)) for (const lib of libs) {
+const jobs = [];
+for (const [cat, libs] of Object.entries(LIBS)) for (const lib of libs) jobs.push([cat, null, lib]);
+for (const [cat, base, libs] of MORE) for (const lib of libs) jobs.push([cat, base, lib]);
+const chunkOf = {}; // base -> [number, size]
+for (const [cat, base, lib] of jobs) {
   const text = fs.readFileSync(path.join(src, lib + '.kicad_sym'), 'utf8');
   const root = K.parseSexpr(text, true);
   const version = (K.find(root, 'version') || [])[1];
@@ -59,7 +91,13 @@ for (const [cat, libs] of Object.entries(LIBS)) for (const lib of libs) {
   }
   // Derived symbols take units and pins from their parent
   for (const [name, i] of Object.entries(info)) if (i.ext && info[i.ext]) { i.units = info[i.ext].units; i.pins = info[i.ext].pins; if (!i.ref) i.ref = info[i.ext].ref; }
-  const file = cat.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  let file = cat.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (base) {
+    const size = JSON.stringify(syms).length, c = chunkOf[base] = chunkOf[base] || [1, 0];
+    if (c[1] && c[1] + size > CHUNK) { c[0]++; c[1] = 0; }
+    c[1] += size;
+    file = base + '-' + c[0];
+  }
   (bundles[file] = bundles[file] || {})[lib] = { version, symbols: syms };
   const li = index.libs.length;
   index.libs.push({ name: lib, cat, file: file + (PLAIN.has(file) ? '.json' : '.json.gz'), n: Object.keys(syms).length });
