@@ -369,7 +369,10 @@ Everything snaps to the 1.27 mm grid. A placed part gets the next free reference
 and its symbol is copied into the schematic file, the same way KiCad does it, so the file
 opens in KiCad with nothing else to install. For a part with several units (a dual op-amp, a
 relay with separate coil and contacts), select it and tap **ADD UNIT** to place the next one.
-The part library is downloaded once and then works offline. See `library/README.md` for where
+The part library has the whole KiCad 9 symbol library (over 22,000 parts, from relays and
+connectors to microcontrollers, logic, FPGAs and SPICE sources) plus Loomline's own libraries.
+The search list is downloaded once; each group of parts is fetched the first time you open one,
+then works offline. See `library/README.md` for where
 it comes from and its licence.
 
 ## 10. Keyboard (KiCad hotkeys)
