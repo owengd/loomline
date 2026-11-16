@@ -297,6 +297,16 @@ on one bus; use one name or numbered buses such as `A[1..4]`), labels on no wire
 meeting a bus without a bus entry, power inputs with no source, unplaced units, and ends off the
 1.27 mm grid (hidden until you tick it). Each kind can be hidden.
 
+It also checks: inputs that nothing drives, no-connect flags that sit on nothing, labels that differ
+only in upper/lower case, a name used as both a local and a global label, units of one part with
+different values or footprints, two sheets with one name, text variables with no value, and net
+class flags that clash or name a class that doesn't exist. Four wires at one junction can be checked
+too (off by default, as in KiCad).
+
+**ERC severities:** Home → **Schematic setup** → ERC (or **ERC SEVERITIES** in CHECK) sets each rule
+to Error, Warning or Ignore. The settings go in the `.kicad_pro` under KiCad's own rule names, so a
+project set up in KiCad is checked the same way here, and the reverse.
+
 **KiCad's own report:** in KiCad, Inspect → Electrical Rules Checker → Run ERC → Save… as `.json`,
 then in CHECK use **LOAD KICAD REPORT**. KiCad's results join the list (marked "KiCad:", one kind per
 KiCad test) and are marked on the drawing; they're kept on the device until you clear them or load
@@ -432,6 +442,24 @@ Most of these are on the ribbon too, so they work by touch.
 - **Design blocks** (Insert → Blocks, or Shift+B): save a selection (say a standard M12 sensor drop) by
   name and place it on any sheet of any project; parts get fresh references. Export the blocks to a file to
   share them with the team, and import them on another device.
+- **Schematic setup** (Home → Project → Schematic setup, as KiCad's File → Schematic Setup). Saved in the
+  `.kicad_pro` exactly where KiCad keeps them, so KiCad reads them too (a project without one gets one):
+  - **Format**: default text size (new labels, text and sheet pins use it), line width, pin symbol size,
+    junction dot size, and inter-sheet references on global labels.
+  - **Variables**: project text variables. Type `${NAME}` in any text, field or title block.
+  - **Bus aliases**: a name for a set of signals, e.g. `CAN` = `CAN_H CAN_L GND`; label a bus `{CAN}` or
+    `ENG{CAN}`. Kept in the top sheet in KiCad 8 format.
+  - **Net classes**: name, wire colour on the drawing, wire width, line style, and the PCB clearance and
+    track width; plus patterns (`*CAN*`, `+24V`) that put nets in a class. To put one net in a class
+    whatever its name, tap a wire → **NET CLASS** to add a net class flag (KiCad's directive label).
+  - **ERC**: severities, see Design check.
+- **Bill of materials** (Analyse → Outputs → BOM): KiCad's Symbol Fields Table export. Choose and order the
+  columns, rename their titles, group by any fields, leave out DNP parts, filter, sort, comma, semicolon
+  or tab separated, and shorten reference runs (R1-R4). The settings are saved in the project file
+  (KiCad's own BOM settings), so the next export, and KiCad, use them.
+- **KiCad netlist** (Analyse → Outputs → Netlist): downloads `<project>.net` in KiCad's S-expression
+  format (components with footprints and fields, library parts, nets with their class). In KiCad's PCB
+  editor use File → Import → Netlist to build or update the board from it.
 - **Print, PDF and SVG** (Analyse → Output → Print / PDF, the layers menu, or Ctrl+P): this sheet or all
   of them, in colour or black and white, with or without wire numbers and cross-references. PRINT / PDF
   opens the system print dialog (choose a printer or Save as PDF); each sheet gets its own page at its
@@ -458,6 +486,7 @@ index.html            app shell
 css/app.css           styles
 js/kicad-core.js      S-expression parser, schematic model, hierarchy and net connectivity
 js/render.js          canvas renderer, gestures, hit-testing
+js/setup.js           schematic setup (.kicad_pro settings), net classes, ERC severities, KiCad netlist and BOM export
 js/github.js          GitHub REST access and project discovery
 js/storage.js         IndexedDB cache for downloaded files
 js/zip.js             ZIP reader for "Download ZIP" archives, and writer for edited files
@@ -473,6 +502,7 @@ samples/              KiCad's complex_hierarchy demo (GPL-3.0, see NOTICE.md); s
 test/compare-pcb.js   node test: compares schematic nets with the pad nets in .kicad_pcb files
 test/edit-test.js     node test: applies edits, re-parses and checks connectivity
 test/library-test.js  node test: places library parts and draws shapes, then re-parses
+test/setup-test.js    node test: schematic setup settings, bus aliases, net classes, new ERC rules, netlist and BOM
 test/loom-test.js     node test: wire numbers, wire list, checks and self-compare on every demo project
 test/stencil-test.js  node test: stencils on wires, parts dropped in series, copy and paste, group move
 test/trace-test.js    node test: step-by-step tracing
