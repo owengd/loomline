@@ -800,7 +800,9 @@
 
     // ---------------------------------------------------- drawing
     _drawNow() {
-      const ctx = this.ctx, S = this.scene, P = this.pal;
+      const ctx = this.ctx, P = this.pal;
+      // System layers: the sheet's own drawing can be shown, faded, or cut down to its outline graphics
+      const S = this.baseMode === 'outline' && this.scene ? this._outlineScene(this.scene) : this.scene;
       const dpr = this.dpr;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = P.bg;
@@ -937,6 +939,9 @@
       }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       for (const t of texts) { ctx.globalAlpha = t.role === 'frameText' ? Math.min(1, dim + 0.3) : dim; this._text(t, col(t), false, isPrev(t) ? pv.d : null); }
+      // system layers on top (other sheets drawn at the same coordinates)
+      if (this.baseMode === 'fade') { ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * this.ox, dpr * this.oy); ctx.globalAlpha = this.dark ? 0.7 : 0.62; ctx.fillStyle = P.paper; ctx.fillRect(S.page[0], S.page[1], S.page[2], S.page[3]); ctx.globalAlpha = 1; ctx.setTransform(1, 0, 0, 1, 0, 0); }
+      if (this.overlays && this.overlays.length) for (const ov of this.overlays) this._paintLayer(ov.scene, view, px, sc, dpr);
 
       // highlighted items on top
       if (later.length) {
@@ -1058,6 +1063,29 @@
       ctx.moveTo(p[0], p[1]);
       for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i], p[i + 1]);
       if (close) ctx.closePath();
+    }
+    // The parts of a scene that are the drawing's outline (graphics and frame), for "outline only"
+    _outlineScene(S) {
+      if (this._olSrc === S) return this._olScene;
+      const keep = (o) => o.role === 'note' || o.role === 'frame' || o.role === 'frameText';
+      this._olSrc = S;
+      this._olScene = Object.assign({}, S, { strokes: S.strokes.filter((o) => keep(o) && o.sym < 0 && o.sheet < 0), fills: S.fills.filter((o) => o.role === 'note' && o.sym < 0), circles: S.circles.filter((o) => o.role === 'note' && o.sym < 0), texts: S.texts.filter((o) => o.role === 'frameText'), syms: [], sheets: [], images: S.images, hitLabels: [] });
+      return this._olScene;
+    }
+    // Another sheet's drawing over this one (system layers), not selectable
+    _paintLayer(S, view, px, sc, dpr) {
+      const ctx = this.ctx, P = this.pal;
+      const vis = (b) => !b || !(b[2] < view[0] || b[0] > view[2] || b[3] < view[1] || b[1] > view[3]);
+      const col = (o) => o.color || P[o.role] || P.note;
+      ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * this.ox, dpr * this.oy);
+      ctx.globalAlpha = 1;
+      for (const f of S.fills) { if (!vis(f.bb)) continue; ctx.fillStyle = f.color || P[f.role] || P.bodyfill; ctx.globalAlpha = f.role === 'bodyfill' ? 0.55 : 1; this._path(f.p, true); ctx.fill(); }
+      ctx.globalAlpha = 1;
+      for (const st of S.strokes) { if (!vis(st.bb)) continue; ctx.strokeStyle = col(st); ctx.lineWidth = Math.max(st.w, (st.role === 'bus' ? 2 : 1.1) * px); this._dash(st.dash, px); this._path(st.p, false); ctx.stroke(); }
+      ctx.setLineDash([]);
+      for (const c of S.circles) { if (!vis(c.bb)) continue; this._circle(c, P, px, false); }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      for (const t of S.texts) { if (!vis(t.bb)) continue; this._text(t, col(t), false, null); }
     }
     _circle(c, P, px, net) {
       const ctx = this.ctx;

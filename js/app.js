@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '3.3.0';
+  const VERSION = '3.4.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -360,6 +360,29 @@
     }
     return s;
   }
+  // ---- System layers: child sheets with a Layer field are drawn over their parent at the same coordinates,
+  // and can be turned on and off (KiCad has no schematic layers; each layer is its own sheet there).
+  const layerOf = (child) => { const f = child.sheetSym && child.sheetSym.props.find((p) => /^layer$/i.test(p.name)); return f && f.value ? K.unescape(f.value) : null; };
+  function layerSheets(inst) { return inst ? inst.children.filter((c) => layerOf(c)) : []; }
+  const layerKey = () => 'layers:' + ((state.source && state.source.key) || (state.project && state.project.name) || '');
+  function layerPrefs() { return Object.assign({ on: {}, base: 'show' }, Store.pref(layerKey()) || {}); }
+  function setLayerPrefs(lp) { Store.pref(layerKey(), lp); applyLayers(); renderRibbon(); }
+  function applyLayers() {
+    const inst = state.inst, L = layerSheets(inst), lp = layerPrefs();
+    const on = L.filter((c) => lp.on[layerOf(c)]);
+    view.overlays = on.map((c) => ({ name: layerOf(c), scene: sceneFor(c) }));
+    view.baseMode = L.length ? lp.base : 'show';
+    view.redraw();
+  }
+  function layerMenuItems() {
+    const L = layerSheets(state.inst); if (!L.length) return [];
+    const lp = layerPrefs();
+    const items = [{ sep: true }];
+    for (const c of L) { const n = layerOf(c); items.push({ label: 'Layer: ' + n, icon: lp.on[n] ? 'i-check' : 'i-none', checked: !!lp.on[n], run: () => { lp.on[n] = !lp.on[n]; setLayerPrefs(lp); } }); }
+    const BASE = { show: 'This sheet: shown', fade: 'This sheet: faded', outline: 'This sheet: outline only' };
+    items.push({ label: BASE[lp.base], icon: 'i-layers', run: () => { lp.base = lp.base === 'show' ? 'fade' : lp.base === 'fade' ? 'outline' : 'show'; setLayerPrefs(lp); toast(BASE[lp.base]); } });
+    return items;
+  }
   function showInstance(inst, keepView) {
     if (!inst) return;
     if (state.inst && inst !== state.inst && !state._navSkip && state.navBack && state.project && state.project.instances.includes(state.inst)) { state.navBack.push(state.inst.namePath); if (state.navBack.length > 50) state.navBack.shift(); state.navFwd = []; }
@@ -370,6 +393,7 @@
     const v = state.views.get(inst.idx);
     view.setScene(scene, true);
     if (keepView && same) { /* keep */ } else if (v) { view.scale = v.scale; view.ox = v.ox; view.oy = v.oy; } else view.fit();
+    applyLayers();
     applyHighlight();
     $('sheetPage').textContent = inst.page + '/' + state.project.pageCount;
     $('sheetName').textContent = inst.parent ? inst.name : (inst.orphan ? inst.name : 'Root');
@@ -3184,6 +3208,7 @@
     if (tab === 'view') return [
       { title: 'On the drawing', tools: [show2('wireNos', 'Wire nos.', 'i-number'), show2('xrefs', 'Cross-refs', 'i-link'), show2('markers', 'Check marks', 'i-alert'), show2('install', 'Install', 'i-install'),
         { label: 'Grid', icon: 'i-more', on: view.showGrid, run: () => { view.showGrid = !view.showGrid; Store.pref('grid', view.showGrid); view.redraw(); renderScale(); renderRibbon(); } }] },
+      ...(layerSheets(state.inst).length ? [{ title: 'System layers', tools: layerSheets(state.inst).map((c) => { const n = layerOf(c), lp = layerPrefs(); return { label: n, icon: 'i-layers', on: !!lp.on[n], run: () => { lp.on[n] = !lp.on[n]; setLayerPrefs(lp); } }; }).concat([{ label: { show: 'Sheet: shown', fade: 'Sheet: faded', outline: 'Sheet: outline' }[layerPrefs().base], icon: 'i-dim', run: () => { const lp = layerPrefs(); lp.base = lp.base === 'show' ? 'fade' : lp.base === 'fade' ? 'outline' : 'show'; setLayerPrefs(lp); } }]) }] : []),
       { title: 'Tracing', tools: [
         { label: 'In steps', icon: 'i-steps', on: traceStep, run: () => { setTraceStep(!traceStep); renderRibbon(); } },
         { label: 'Stop at conn.', icon: 'i-steps', on: traceBy === 'conn', run: () => { traceBy = traceBy === 'conn' ? 'section' : 'conn'; Store.pref('traceBy', traceBy); renderRibbon(); } },
@@ -3382,7 +3407,8 @@
       { label: 'Schematic setup', icon: 'i-props', run: () => schematicSetupDialog() },
       { label: 'Reports', icon: 'i-report', run: () => showTab('reports', true) },
       { label: 'Build looms', icon: 'i-cable', run: () => showTab('build', true) },
-      { label: 'Compare revisions', icon: 'i-compare', run: () => showTab('compare', true) }
+      { label: 'Compare revisions', icon: 'i-compare', run: () => showTab('compare', true) },
+      ...layerMenuItems()
     ]);
   });
 
