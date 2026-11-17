@@ -125,6 +125,21 @@ ok('sheet still parses with balanced brackets', !P.errors.length);
   ok('field list has user fields', S.bomFields(P).includes('Footprint') && S.bomFields(P).includes(S.QTY));
 }
 
+// ---- net class stroke and pin conflict table
+{
+  ok('default class has no special stroke', S.classStroke(S.DEFAULT_CLASS) === null);
+  const st = S.classStroke({ wire_width: 12, bus_width: 12, line_style: 1 });
+  ok('class width and dash', Math.abs(st.wire - 0.3048) < 1e-6 && st.dash === 'dash');
+  const out = (ref) => ({ ref, number: '1', type: 'output' });
+  ok('two outputs are an error', S.pinConflict([out('U1'), out('U2')], S.DEFAULT_PIN_MAP).sev === 2);
+  ok('output and input are fine', S.pinConflict([out('U1'), { ref: 'U2', number: '1', type: 'input' }], S.DEFAULT_PIN_MAP) === null);
+  ok('unspecified pins warn', S.pinConflict([{ ref: 'U1', number: '1', type: 'unspecified' }, { ref: 'U2', number: '1', type: 'passive' }], S.DEFAULT_PIN_MAP).sev === 1);
+  const m = S.pinMap(P); m[1][1] = 0;
+  apply(S.setPinMap(P, m)); P = K.buildProject(files);
+  ok('pin map saved and read back', S.pinMap(P)[1][1] === 0 && P.pro.erc.pin_map.length === 12);
+  ok('changed map clears output-output', S.pinConflict([out('U1'), out('U2')], S.pinMap(P)) === null);
+}
+
 // ---- project with no .kicad_pro: settings create one
 {
   const only = files.filter((f) => /\.kicad_sch$/.test(f.path));
