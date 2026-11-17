@@ -468,6 +468,11 @@ Most of these are on the ribbon too, so they work by touch.
 - **KiCad netlist** (Analyse → Outputs → Netlist): downloads `<project>.net` in KiCad's S-expression
   format (components with footprints and fields, library parts, nets with their class). In KiCad's PCB
   editor use File → Import → Netlist to build or update the board from it.
+- **System layers** (View → System layers, or the layers menu): KiCad schematics have no layers, so each system
+  (CIS, ILS…) is its own sheet drawn at the same coordinates as the sheet above it, over the same boat outline.
+  A sheet whose sheet symbol has a **Layer** field is a layer: switch each one on to draw it over the parent
+  sheet, and show the parent itself in full, faded, or as its outline only. Layers are for viewing; to edit one,
+  open its sheet. In KiCad each layer is an ordinary page, and the systems join through global labels.
 - **Print, PDF and SVG** (Analyse → Output → Print / PDF, the layers menu, or Ctrl+P): this sheet or all
   of them, in colour or black and white, with or without wire numbers and cross-references. PRINT / PDF
   opens the system print dialog (choose a printer or Save as PDF); each sheet gets its own page at its
