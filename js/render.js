@@ -76,7 +76,7 @@
     const stroke = (pts, w, role, o) => {
       if (pts.length < 2) return;
       o = o || {};
-      S.strokes.push({ p: flat(pts), w: w > 0 ? w : (role === 'bus' ? BUS : LINE), role, g: o.g === undefined ? -1 : o.g, sym: o.sym === undefined ? -1 : o.sym, sheet: o.sheet === undefined ? -1 : o.sheet, dash: o.dash || null, color: o.color || null, bb: minmax(pts), closed: !!o.closed, kind: o.kind || '', it: o.it || curIt });
+      S.strokes.push({ p: flat(pts), w: w > 0 ? w : (role === 'bus' ? BUS : LINE), own: w > 0, role, g: o.g === undefined ? -1 : o.g, sym: o.sym === undefined ? -1 : o.sym, sheet: o.sheet === undefined ? -1 : o.sheet, dash: o.dash || null, color: o.color || null, bb: minmax(pts), closed: !!o.closed, kind: o.kind || '', it: o.it || curIt });
     };
     const fillPoly = (pts, role, o) => {
       o = o || {};
@@ -886,6 +886,7 @@
       const an = this.annot;
       const gcol = an && an.groupColor && an.groupColor.size ? an.groupColor : null;
       const ccol = an && an.classColor && an.classColor.size ? an.classColor : null;
+      const cstyle = an && an.classStyle && an.classStyle.size ? an.classStyle : null;
       if (an && an.symMarks && an.symMarks.size) {
         ctx.globalAlpha = 1;
         for (const sy of S.syms) {
@@ -908,9 +909,12 @@
         ctx.globalAlpha = s.role === 'frame' ? Math.min(1, dim + 0.3) : dim;
         const gc = gcol && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? gcol.get(s.g) : null;
         const cc = !gc && ccol && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? ccol.get(s.g) : null;
+        // Net class width and line style apply to wires and buses drawn with KiCad's default stroke
+        const cs = cstyle && s.g >= 0 && (s.kind === 'wire' || s.kind === 'bus') ? cstyle.get(s.g) : null;
+        const sw = cs && !s.own ? (s.role === 'bus' ? cs.bus : cs.wire) || s.w : s.w;
         ctx.strokeStyle = gc || cc || col(s);
-        ctx.lineWidth = gc ? Math.max(s.w * 1.6, 2 * px) : Math.max(s.w, (s.role === 'bus' ? 2 : 1.1) * px);
-        this._dash(s.dash, px);
+        ctx.lineWidth = gc ? Math.max(sw * 1.6, 2 * px) : Math.max(sw, (s.role === 'bus' ? 2 : 1.1) * px);
+        this._dash(s.dash || (cs && cs.dash) || null, px);
         if (isPrev(s)) { ctx.save(); ctx.translate(pv.d[0], pv.d[1]); this._path(s.p, false); ctx.stroke(); ctx.restore(); continue; }
         this._path(s.p, false);
         ctx.stroke();
@@ -1142,8 +1146,10 @@
     for (const s of S.strokes) {
       const gc = gcol && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? gcol.get(s.g) : null;
       const cc = !gc && !mono && an && an.classColor && s.g >= 0 && (s.role === 'wire' || s.role === 'bus') ? an.classColor.get(s.g) : null;
-      const w = Math.max(s.w, s.role === 'bus' ? 0.3 : 0.12) * (gc ? 1.6 : 1);
-      out.push(`<path d="${pts(s.p)}" stroke="${C(gc || cc || s.color || P[s.role] || P.note)}" stroke-width="${f3(w)}"${dashes(s.dash, s.w)}/>`);
+      const cs = an && an.classStyle && s.g >= 0 && (s.kind === 'wire' || s.kind === 'bus') ? an.classStyle.get(s.g) : null;
+      const sw = cs && !s.own ? (s.role === 'bus' ? cs.bus : cs.wire) || s.w : s.w;
+      const w = Math.max(sw, s.role === 'bus' ? 0.3 : 0.12) * (gc ? 1.6 : 1);
+      out.push(`<path d="${pts(s.p)}" stroke="${C(gc || cc || s.color || P[s.role] || P.note)}" stroke-width="${f3(w)}"${dashes(s.dash || (cs && cs.dash) || null, sw)}/>`);
     }
     for (const c of S.circles) {
       const r = Math.max(c.r, 0.05);

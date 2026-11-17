@@ -170,13 +170,25 @@
         }
       });
     }
+    const pmap = root.Setup ? root.Setup.pinMap(P) : null;
     for (const net of P.nets) {
       if (net.bus) continue;
-      const drivers = net.pins.filter((p) => outTypes.has(p.type));
-      const outs = drivers.filter((p) => p.type === 'output');
-      if (drivers.length > 1 && (outs.length > 1 || drivers.length > outs.length && outs.length)) {
-        const p = drivers[1], inst = P.instances[p.inst];
-        add('error', 'drive', `${drivers.slice(0, 3).map((d) => d.ref + '.' + d.number).join(', ')} all drive ${plain(net.name)}`, inst, A.pinPos(p), { net: net.id });
+      if (pmap) {
+        // KiCad's pin conflict table (Schematic setup → ERC)
+        const pins = net.pins.filter((p) => !P.instances[p.inst].orphan);
+        const c = pins.length > 1 ? root.Setup.pinConflict(pins, pmap) : null;
+        if (c) {
+          const nm = root.Setup.PIN_TYPE_NAMES;
+          const pt = (p) => p.ref + ' pin ' + p.number;
+          add(c.sev === 2 ? 'error' : 'warn', 'drive', `${pt(c.a)} (${nm[c.ta].toLowerCase()}) and ${pt(c.b)} (${nm[c.tb].toLowerCase()}) conflict on ${plain(net.name)}`, P.instances[c.b.inst], A.pinPos(c.b), { net: net.id });
+        }
+      } else {
+        const drivers = net.pins.filter((p) => outTypes.has(p.type));
+        const outs = drivers.filter((p) => p.type === 'output');
+        if (drivers.length > 1 && (outs.length > 1 || drivers.length > outs.length && outs.length)) {
+          const p = drivers[1], inst = P.instances[p.inst];
+          add('error', 'drive', `${drivers.slice(0, 3).map((d) => d.ref + '.' + d.number).join(', ')} all drive ${plain(net.name)}`, inst, A.pinPos(p), { net: net.id });
+        }
       }
       if (net.noConnect && net.pins.length > 1) {
         const inst = P.instances[net.inst.keys().next().value];

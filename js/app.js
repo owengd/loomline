@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '3.2.0';
+  const VERSION = '3.3.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1653,6 +1653,7 @@
       if (missing.length) A.push({ label: 'ADD UNIT', icon: 'i-plus', run: () => addMissingUnit(s.inst, s.si, missing[0]) });
       A.push({ label: 'CHANGE', icon: 'i-part', run: () => openPartPicker(null, { change: { inst: s.inst, si: s.si, uuid: sym.uuid, ref } }) });
       A.push({ label: 'UPDATE', icon: 'i-sync', run: () => updateFromLibrary(sym.libName || sym.libId) });
+      A.push({ label: 'EDIT SYMBOL', icon: 'i-pin', run: () => editPlacedSymbol(s.inst, s.si) });
       A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete ' + ref, () => E.deleteItems(sh, [{ type: 'symbol', sym }]), { anchor: null }) });
       A.push({ label: 'MIRROR ↔', icon: 'i-mirror', run: () => run('Mirror ' + ref, () => E.transformSymbol(sh, sym, 'mirrorY'), { checkMerges: true }) });
       A.push({ label: 'MIRROR ↕', icon: 'i-mirror', run: () => run('Mirror ' + ref, () => E.transformSymbol(sh, sym, 'mirrorX'), { checkMerges: true }) });
@@ -2434,18 +2435,19 @@
     opts = opts || {};
     closePicker();
     const recent = Store.pref('recentParts') || [];
-    const q = h('input', { class: 'input', type: 'search', placeholder: 'Search 10,000 parts: relay, pushbutton, fuse, Conn_01x04…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+    const q = h('input', { class: 'input', type: 'search', placeholder: 'Search 22,000 parts: relay, pushbutton, fuse, Conn_01x04…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
     const cats = h('div', { class: 'chips catbar' });
     const list = h('div', { class: 'rows plist' });
     const canvas = h('canvas', { class: 'pcanvas' });
     const info = h('div', { class: 'pinfo' }, h('p', { class: 'hint', text: 'Pick a part to see it here.' }));
     const place = h('button', { class: 'btn primary', disabled: true }, icon('i-part'), opts.change ? 'CHANGE TO THIS' : 'PLACE');
+    const copyBtn = h('button', { class: 'btn', disabled: true, title: 'Open a copy in the symbol editor, to change it and keep it in My parts', onclick: () => { if (!chosen) return; const e2 = chosen; closePicker(); editLibraryCopy(e2).catch((err) => banner('err', err.message)); } }, icon('i-pin'), 'EDIT A COPY');
     const wrap = h('div', { class: 'picker-wrap', id: 'pickerWrap', role: 'dialog', 'aria-label': 'Add a part' },
       h('div', { class: 'report-head' }, h('div', { class: 'titles' }, h('b', { text: opts.change ? 'CHANGE ' + opts.change.ref + ' TO…' : 'ADD A PART' }), h('small', { id: 'pickCount', text: 'Loading the library…' })),
         h('button', { class: 'ib', 'aria-label': 'Close', onclick: closePicker }, icon('i-close'))),
       h('div', { class: 'picker-body' },
         h('div', { class: 'pick-left' }, q, cats, list),
-        h('div', { class: 'pick-right' }, h('div', { class: 'pprev' }, canvas), info, h('div', { class: 'actions' }, place))));
+        h('div', { class: 'pick-right' }, h('div', { class: 'pprev' }, canvas), info, h('div', { class: 'actions' }, opts.change ? null : copyBtn, place))));
     document.body.append(wrap);
     let pv = null, chosen = null, cat = state.pickCat || 'All';
     const show = async (row) => {
@@ -2462,7 +2464,7 @@
         const sy = scene.syms[0];
         requestAnimationFrame(() => { pv.resize(); pv.fit(sy ? sy.bb : scene.page, 16); });
         chosen = entry;
-        place.disabled = false;
+        place.disabled = false; copyBtn.disabled = false;
         // A part with several units (a relay's coil and contacts, a quad gate…): choose which one to place
         const unitSeg = units.length > 1 && !opts.change ? seg('Unit', units.map((u) => [String(u), 'UNIT ' + K.unitLetter(u)]), String(units[0]), (v) => { if (chosen) chosen.unit = +v; }) : null;
         if (unitSeg) chosen.unit = units[0];
@@ -3130,7 +3132,7 @@
         { label: 'Stencils', icon: 'i-stencil', on: dockOpen, run: () => setDock(!dockOpen) },
         { label: 'Add part', icon: 'i-part', disabled: !P, run: openPartPicker }] },
       { title: 'Hierarchy', tools: [{ label: 'New sheet', icon: 'i-hier', disabled: !P, on: state.mode === 'draw' && state.draw && state.draw.tool === 'sheet', run: startSheetTool }] },
-      { title: 'Make', tools: [{ label: 'My parts', icon: 'i-chip', disabled: !P, run: (e) => myPartsMenu(e.currentTarget) }, { label: 'Blocks', icon: 'i-box', disabled: !P, run: (e) => blocksMenu(e.currentTarget) }] },
+      { title: 'Make', tools: [{ label: 'Symbol editor', icon: 'i-pin', disabled: !P, run: () => symbolEditor() }, { label: 'My parts', icon: 'i-chip', disabled: !P, run: (e) => myPartsMenu(e.currentTarget) }, { label: 'Blocks', icon: 'i-box', disabled: !P, run: (e) => blocksMenu(e.currentTarget) }] },
       { title: 'Connect', tools: [stencilBtn('l-net'), stencilBtn('l-glob'), stencilBtn('l-hier'),
         { label: 'Power', icon: 'i-power', disabled: !P, run: (e) => openMenu(e.currentTarget, PART_GROUPS[0].parts.map((k) => { const n = k.split(':')[1]; return { label: n, icon: 'i-power', run: () => armStencil({ kind: 'part', lib: 'power', name: n }) }; })) }] },
       { title: 'Annotate', tools: [stencilBtn('l-text'), stencilBtn('l-cable', 'Cable tag')] }
@@ -3264,7 +3266,7 @@
     Store.get(ercKey()).then((r) => { if (r && state.project && state.project.name === name && r.project === name) { state.kicadErc = r; analyzeNow(); updateAnnot(); } }).catch(() => {});
   }
   // Kinds of problem that can be hidden from the check (some drawings never use no-connect flags)
-  const CHECK_KINDS = { pin: 'Unconnected pins', nc: 'No-connect flag on a connected net', dangling: 'Loose wire ends', label: 'Labels with no pins', global1: 'Global labels used once', annotate: 'Not annotated', value: 'Missing values', dupref: 'Duplicate references', drive: 'Outputs driving each other', sheetpin: 'Sheet pins with no label', hier: 'Labels with no sheet pin', ebus: 'E-bus power',
+  const CHECK_KINDS = { pin: 'Unconnected pins', nc: 'No-connect flag on a connected net', dangling: 'Loose wire ends', label: 'Labels with no pins', global1: 'Global labels used once', annotate: 'Not annotated', value: 'Missing values', dupref: 'Duplicate references', drive: 'Pin conflicts', sheetpin: 'Sheet pins with no label', hier: 'Labels with no sheet pin', ebus: 'E-bus power',
     duppin: 'Same pin number on different nets', names: 'Two names on one wire or bus', busname: 'Bus names KiCad won\u2019t join', lbldangle: 'Labels not on a wire', buswire: 'Wires or pins touching a bus', power: 'Power inputs with no source', unit: 'Units not placed', grid: 'Off the connection grid',
     notdriven: 'Inputs with nothing driving them', ncdangle: 'No-connect flags not on a pin', junction4: 'Four wires at one junction', dupsheet: 'Duplicate sheet names', unresolved: 'Text variables with no value',
     similar: 'Labels differing only in case', localglobal: 'Same name as local and global label', unitval: 'Units with different values', unitfp: 'Units with different footprints', netclass: 'Two net classes on one net', netclassundef: 'Undefined net classes' };
@@ -3294,12 +3296,19 @@
   function annotFor(inst, S, opt) {
     const P = state.project, A = state.A;
     const d = opt.dark ? 1 : 0;
-    const an = { groupColor: new Map(), classColor: new Map(), symMarks: new Map(), tags: [], markers: [] };
-    // Net class colours (Schematic setup → Net classes), under any other colouring
+    const an = { groupColor: new Map(), classColor: new Map(), classStyle: new Map(), symMarks: new Map(), tags: [], markers: [] };
+    // Net class colours, widths and line styles (Schematic setup → Net classes), under any other colouring
     if (state.nc) {
-      const css = new Map();
-      for (const c of state.nc.settings.classes) { const v = Setup.cssColor(c.schematic_color); if (v) css.set(c.name, v); }
-      if (css.size) for (let g = 0; g < inst.netOf.length; g++) { const v = css.get(state.nc.classOf(inst.netOf[g])); if (v) an.classColor.set(g, v); }
+      const css = new Map(), sty = new Map();
+      for (const c of state.nc.settings.classes) {
+        const v = Setup.cssColor(c.schematic_color); if (v) css.set(c.name, v);
+        const st = Setup.classStroke(c); if (st) sty.set(c.name, st);
+      }
+      if (css.size || sty.size) for (let g = 0; g < inst.netOf.length; g++) {
+        const cls = state.nc.classOf(inst.netOf[g]);
+        const v = css.get(cls); if (v) an.classColor.set(g, v);
+        const st = sty.get(cls); if (st) an.classStyle.set(g, st);
+      }
     }
     if (opt.wireNos) {
       const best = new Map();
@@ -3430,7 +3439,7 @@
     body.append(section('KiCad ERC report', er ? er.file : 'none loaded',
       h('p', { class: 'hint', text: er ? `From KiCad ${er.kicad}${er.date ? ', run ' + er.date : ''}. Its results are listed with the app's own, marked “KiCad:”. They don't update as you edit: run ERC in KiCad again and load the new report.` : 'In KiCad: Inspect → Electrical Rules Checker → Run ERC → Save… as .json, then load the file here to see KiCad\u2019s results on the drawing.' }),
       h('div', { class: 'actions' }, ercFile, h('button', { class: 'btn small', onclick: () => ercFile.click() }, icon('i-file'), er ? 'LOAD A NEWER REPORT' : 'LOAD KICAD REPORT'), er ? h('button', { class: 'btn small', onclick: clearKicadErc }, icon('i-close'), 'CLEAR') : null)));
-    body.append(h('p', { class: 'hint', text: 'Checks as you edit, using KiCad\u2019s ERC rules for: unconnected pins, wire ends that touch nothing, labels that reach no pins or sit on no wire, two names on one wire, bus names KiCad won\u2019t join, wires meeting a bus without an entry, the same pin number on different nets, power inputs with no source, unplaced units, sheet pins without a hierarchical label, duplicate or unannotated references, missing values, outputs driving each other, inputs nothing drives, no-connect flags on nothing, labels differing only in case, local and global labels with one name, units with different values or footprints, duplicate sheet names, text variables with no value and net class conflicts. Set how each is reported in Schematic setup → ERC. Load KiCad\u2019s own report to see everything KiCad found.' }),
+    body.append(h('p', { class: 'hint', text: 'Checks as you edit, using KiCad\u2019s ERC rules for: unconnected pins, wire ends that touch nothing, labels that reach no pins or sit on no wire, two names on one wire, bus names KiCad won\u2019t join, wires meeting a bus without an entry, the same pin number on different nets, power inputs with no source, unplaced units, sheet pins without a hierarchical label, duplicate or unannotated references, missing values, pin conflicts (KiCad’s pin conflict table, editable in Schematic setup), inputs nothing drives, no-connect flags on nothing, labels differing only in case, local and global labels with one name, units with different values or footprints, duplicate sheet names, text variables with no value and net class conflicts. Set how each is reported in Schematic setup → ERC. Load KiCad\u2019s own report to see everything KiCad found.' }),
       h('button', { class: 'btn small', onclick: () => schematicSetupDialog('erc') }, icon('i-props'), 'ERC SEVERITIES'));
   }
   function pickIssue(is, zoom) {
@@ -4481,14 +4490,15 @@
       { make: (r) => h('input', { class: 'input', value: r.name, placeholder: 'Class name', disabled: r.was === 'Default', oninput: (e) => { r.name = e.target.value; } , onchange: () => patList && patList.redraw() }) },
       { make: (r) => h('label', { class: 'su-col', title: 'Wire colour on the drawing' }, h('input', { type: 'color', value: r.colour || '#000000', class: r.colour ? '' : 'unset', 'aria-label': 'Wire colour', oninput: (e) => { r.colour = e.target.value; e.target.classList.remove('unset'); } }), h('button', { class: 'btn small', type: 'button', onclick: (e) => { r.colour = ''; const c = e.currentTarget.closest('.su-col').querySelector('input'); c.value = '#000000'; c.classList.add('unset'); } }, 'NONE')) },
       { make: (r) => h('input', { class: 'input su-num', type: 'number', step: '0.01', min: '0', title: 'Wire width (mm)', value: MILmm(r.wire_width), oninput: (e) => { r.wire_width = Math.round(+e.target.value / S.MIL * 100) / 100; } }) },
+      { make: (r) => h('input', { class: 'input su-num', type: 'number', step: '0.01', min: '0', title: 'Bus width (mm)', value: MILmm(r.bus_width || 12), oninput: (e) => { r.bus_width = Math.round(+e.target.value / S.MIL * 100) / 100; } }) },
       { make: (r) => h('select', { class: 'input su-num', title: 'Line style', onchange: (e) => { r.line_style = +e.target.value; } }, ...['Solid', 'Dash', 'Dot', 'Dash-dot', 'Dash-dot-dot'].map((n, i) => h('option', { value: String(i), text: n, selected: (r.line_style || 0) === i }))) },
       { make: (r) => h('input', { class: 'input su-num', type: 'number', step: '0.01', min: '0', title: 'PCB clearance (mm)', value: mm(r.clearance || 0), oninput: (e) => { r.clearance = +e.target.value; } }) },
       { make: (r) => h('input', { class: 'input su-num', type: 'number', step: '0.01', min: '0', title: 'PCB track width (mm)', value: mm(r.track_width || 0), oninput: (e) => { r.track_width = +e.target.value; } }) }
     ], 'ADD NET CLASS', { make: () => ({ name: '', colour: '', wire_width: 6, bus_width: 12, line_style: 0, clearance: 0.2, track_width: 0.2 }), fixed: (r) => r.was === 'Default' });
     patList = listEditor(patterns, [{ make: txt('pattern', 'Net name pattern, e.g. *CAN* or +24V') }, { make: classSel }], 'ADD PATTERN', { make: () => ({ pattern: '', netclass: 'Default' }) });
     const ncPanel = h('div', { class: 'su-panel' },
-      h('p', { class: 'hint', text: 'Columns: name, wire colour, wire width, line style, PCB clearance and track width (mm). Wires show their class colour. The PCB values go to the board through the netlist.' }),
-      h('div', { class: 'su-row su-head nc-head' }, ...['Name', 'Colour', 'Wire width', 'Line style', 'Clearance', 'Track width'].map((t) => h('span', { text: t }))),
+      h('p', { class: 'hint', text: 'Name, wire colour, wire and bus width, line style, and PCB clearance and track width (mm). Wires and buses are drawn in their class colour, width and style unless they have their own. The PCB values go to the board through the netlist.' }),
+      h('div', { class: 'su-row su-head nc-head' }, ...['Name', 'Colour', 'Wire width', 'Bus width', 'Line style', 'Clearance', 'Track width'].map((t) => h('span', { text: t }))),
       classList.el,
       h('h3', { class: 'su-h', text: 'Assignments' }),
       h('p', { class: 'hint', text: 'Nets whose name matches a pattern (* = anything, ? = one character) join that class. A net class flag on a wire (select the wire, then NET CLASS) overrides the patterns.' }),
@@ -4505,7 +4515,22 @@
       sevSel[rule] = sel;
       ruleRows.push(h('div', { class: 'fieldrow su-erc' }, h('label', { text: title + (rule.startsWith('loomline_') ? ' (Loomline)' : '') }), sel));
     }
-    const ercPanel = h('div', { class: 'su-panel' }, h('p', { class: 'hint', text: 'How each design check is reported, the same settings as KiCad’s ERC. Ignore hides it everywhere, including the Design check report. KiCad’s pin conflict table isn’t editable here.' }), ...ruleRows);
+    // ---- pin conflict table: tap a cell to cycle OK → warning → error (kept symmetric, as in KiCad)
+    const pmap = S.pinMap(P);
+    let pmapChanged = false;
+    const PT = S.PIN_TYPE_NAMES;
+    const mapTable = h('table', { class: 'pinmap' });
+    const LBL = ['', 'W', 'E'], CLS = ['ok', 'warn', 'err'], TIP = ['No problem', 'Warning', 'Error'];
+    const drawMap = () => {
+      mapTable.replaceChildren(h('thead', {}, h('tr', {}, h('th', {}), ...PT.map((n) => h('th', { class: 'vert', title: n }, h('span', { text: n }))))),
+        h('tbody', {}, ...PT.map((rn, i) => h('tr', {}, h('th', { text: rn }), ...PT.map((cn, j) => j > i ? h('td', {}) : h('td', {}, h('button', { type: 'button', class: 'pm ' + CLS[pmap[i][j]], title: `${rn} with ${cn}: ${TIP[pmap[i][j]]}`, 'aria-label': `${rn} with ${cn}: ${TIP[pmap[i][j]]}`, text: LBL[pmap[i][j]], onclick: () => { const v = (pmap[i][j] + 1) % 3; pmap[i][j] = v; pmap[j][i] = v; pmapChanged = true; drawMap(); } })))))));
+    };
+    drawMap();
+    const ercPanel = h('div', { class: 'su-panel' }, h('p', { class: 'hint', text: 'How each design check is reported, the same settings as KiCad’s ERC. Ignore hides it everywhere, including the Design check report.' }), ...ruleRows,
+      h('h3', { class: 'su-h', text: 'Pin conflicts' }),
+      h('p', { class: 'hint', text: 'What happens when two kinds of pin share a net (KiCad’s pin conflict map). Tap a square: blank is fine, W a warning, E an error. Set Pin conflicts above to Ignore to turn the whole check off.' }),
+      h('div', { class: 'pinmap-wrap' }, mapTable),
+      h('button', { class: 'btn small', type: 'button', onclick: () => { const d = S.DEFAULT_PIN_MAP; for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) pmap[i][j] = d[i][j]; pmapChanged = true; drawMap(); } }, icon('i-sync'), 'KICAD DEFAULTS'));
     // ---- tabs
     const panels = { format: fmtPanel, vars: varPanel, alias: aliasPanel, nc: ncPanel, erc: ercPanel };
     const holder = h('div');
@@ -4538,6 +4563,7 @@
         for (const [rule, sel] of Object.entries(sevSel)) if (sel.value) sev[rule] = sel.value; else if (rs[rule]) sev[rule] = S.KICAD_DEFAULTS[rule] || (rule.startsWith('loomline_') ? undefined : 'error');
         for (const k of Object.keys(sev)) if (sev[k] === undefined) delete sev[k];
         step((p) => S.setErcSeverities(p, sev));
+        if (pmapChanged) step((p) => S.setPinMap(p, pmap));
       } catch (e) { banner('err', e.message); return; }
       closeDialog();
       run('Schematic setup', () => out);
@@ -4983,108 +5009,441 @@
     let li = idx.libs.findIndex((l) => l.name === MY_LIB);
     if (li < 0) { idx.libs.push({ name: MY_LIB, cat: 'My parts', n: 0, user: true }); li = idx.libs.length - 1; }
     idx.rows = idx.rows.filter((r) => r[0] !== li);
-    for (const [name, m] of Object.entries(mp.meta)) idx.rows.unshift([li, name, m.desc || '', m.kw || '', m.ref || 'U', 1, m.pins || 0, 0]);
+    for (const [name, m] of Object.entries(mp.meta)) idx.rows.unshift([li, name, m.desc || '', m.kw || '', m.ref || 'U', m.units || 1, m.pins || 0, 0]);
     idx.libs[li].n = Object.keys(mp.meta).length;
     idx.hay = idx.rows.map((r) => (r[1] + ' ' + r[2] + ' ' + r[3] + ' ' + idx.libs[r[0]].name).toLowerCase());
     libState.files.set(MY_LIB, { symbols: Object.assign({}, mp.symbols) });
   }
-  function symbolEditor(start) {
+  // ---- Symbol editor (KiCad's Symbol Editor): draw the body, place pins of any type and direction,
+  // several units, De Morgan, alternate pin functions. Parts are kept on this device under My parts.
+  // opts: { model, from: { libId } (editing the definition of a placed part), title }
+  function symbolEditor(opts) {
     if (!state.project) return;
-    // Start from the selected part (its pins and fields), or blank
-    let pre = start || null;
-    if (!pre && state.sel && state.sel.type === 'symbol') {
-      const s = state.sel, sym = s.inst.sheet.symbols[s.si], pins = K.symbolPins(sym);
-      const cx = pins.length ? pins.reduce((a, p) => a + p.pos[0], 0) / pins.length : sym.p[0];
-      pre = { name: (sym.libName || sym.libId.split(':').pop()) + '_copy', ref: (s.inst.refs[s.si].ref.match(/^[A-Za-z#]+/) || ['U'])[0],
-        pins: pins.map((p) => `${p.number} ${p.name && p.name !== '~' ? p.name : '~'} ${p.type || 'passive'} ${p.pos[0] > cx + 0.01 ? 'R' : 'L'}`).join('\n'),
-        fields: Object.fromEntries(sym.props.filter((p) => !['Reference', 'Value'].includes(p.name) && !p.name.startsWith('ki_')).map((p) => [p.name, p.value])) };
-    }
-    pre = pre || { name: '', ref: 'U', pins: '1 +24V power_in L\n2 0V power_in L\n3 IN input L\n4 OUT output R', fields: {} };
-    const inp = (id, ph, v) => h('input', { class: 'input', id, placeholder: ph, value: v || '', autocomplete: 'off', spellcheck: 'false' });
-    const name = inp('seName', 'e.g. VALVE_DRIVER_4CH', pre.name), ref = inp('seRef', 'U', pre.ref);
-    const fp = inp('seFp', 'Footprint (optional)', pre.fields.Footprint), ds = inp('seDs', 'https://… data sheet', pre.fields.Datasheet && pre.fields.Datasheet !== '~' ? pre.fields.Datasheet : '');
-    const mfr = inp('seMfr', 'Manufacturer', pre.fields.Manufacturer), mpn = inp('seMpn', 'Part number (MPN)', pre.fields.MPN), desc = inp('seDesc', 'What it is, for the parts list', pre.fields.Description);
-    const pinsTa = h('textarea', { class: 'input mono se-pins', id: 'sePins', rows: 10, spellcheck: 'false' }); pinsTa.value = pre.pins;
-    const canvas = h('canvas', { class: 'pcanvas' });
-    const msg = h('p', { class: 'hint' });
-    let pv = null, current = null;
-    const build = () => {
-      const pins = E.parsePinLines(pinsTa.value);
-      const nm = (name.value.trim() || 'NEW_PART').replace(/[\s:"]+/g, '_');
-      const fields = { Footprint: fp.value.trim(), Datasheet: ds.value.trim() || '~' };
-      if (desc.value.trim()) fields.Description = desc.value.trim();
-      if (mfr.value.trim()) fields.Manufacturer = mfr.value.trim();
-      if (mpn.value.trim()) fields.MPN = mpn.value.trim();
-      for (const [k, v] of Object.entries(pre.fields || {})) if (!(k in fields) && !['Footprint', 'Datasheet', 'Description', 'Manufacturer', 'MPN'].includes(k) && v) fields[k] = v;
-      const dupes = pins.map((p) => p.num).filter((n, i, a) => a.indexOf(n) !== i);
-      msg.textContent = `${pins.length} pin${pins.length === 1 ? '' : 's'} · ${pins.filter((p) => p.side !== 'R').length} left, ${pins.filter((p) => p.side === 'R').length} right` + (dupes.length ? ` · pin number ${dupes[0]} is used twice` : '');
-      msg.classList.toggle('err-text', !!dupes.length);
-      current = { name: nm, ref: (ref.value.trim() || 'U').replace(/[^A-Za-z#_]/g, '') || 'U', pins, fields, desc: fields.Description || desc.value.trim(), dupes };
-      current.text = E.boxSymbol({ name: nm, ref: current.ref, value: nm, pins, fields, keywords: [mfr.value, mpn.value, desc.value].join(' ').trim() });
-      try {
-        const { scene } = previewScene({ lib: MY_LIB, name: nm, text: current.text, parentText: null });
-        if (!pv) pv = new R.SchematicView(canvas, {});
-        pv.setTheme(view.dark); pv.showGrid = false; pv.setScene(scene, true);
-        const sy = scene.syms[0]; requestAnimationFrame(() => { pv.resize(); pv.fit(sy ? sy.bb : scene.page, 16); });
-      } catch (e) { msg.textContent = e.message; }
+    opts = opts || {};
+    const SE = SymEdit;
+    let m = opts.model ? SE.clone(opts.model) : SE.blank('');
+    const fromLib = opts.from || null;
+    const undoS = [], redoS = [];
+    let tool = 'select', sel = -1, unit = 1, style = 1, allUnits = true, draft = null, lastPin = null, dirty = false;
+    const snapshot = () => { undoS.push(JSON.stringify(m)); if (undoS.length > 100) undoS.shift(); redoS.length = 0; dirty = true; };
+    const vis = (it) => (!it.unit || it.unit === unit || m.units <= 1) && (!m.deMorgan || !it.style || it.style === style) && (m.deMorgan || it.style !== 2);
+    // ---- canvas and view (library coordinates: mm, y up)
+    const canvas = h('canvas', { class: 'sx-canvas', 'aria-label': 'Symbol drawing' });
+    const ctx = canvas.getContext('2d');
+    const V = { s: 12, ox: 0, oy: 0, w: 0, h: 0 };
+    const toS = (p) => [V.ox + p[0] * V.s, V.oy - p[1] * V.s];
+    const toW = (x, y) => [(x - V.ox) / V.s, (V.oy - y) / V.s];
+    const snap = (p) => [Math.round(p[0] / 1.27) * 1.27, Math.round(p[1] / 1.27) * 1.27].map((v) => Math.round(v * 10000) / 10000);
+    const fit = () => {
+      const r = canvas.getBoundingClientRect(); if (!r.width) return;
+      const bb = SE.bbox(m, m.units > 1 ? unit : 0, m.deMorgan ? style : 0);
+      const w = Math.max(10, bb[2] - bb[0] + 10), hh = Math.max(10, bb[3] - bb[1] + 10);
+      V.s = m.items.length ? Math.max(3, Math.min(40, Math.min(r.width / w, r.height / hh))) : Math.max(4, Math.min(r.width, r.height) / 50);
+      V.ox = r.width / 2 - (bb[0] + bb[2]) / 2 * V.s; V.oy = r.height / 2 + (bb[1] + bb[3]) / 2 * V.s;
+      draw();
     };
-    for (const el of [name, ref, fp, ds, mfr, mpn, desc, pinsTa]) el.addEventListener('input', build);
+    const css = getComputedStyle(document.documentElement);
+    const col = (n, d) => (css.getPropertyValue(n) || '').trim() || d;
+    function draw() {
+      const dpr = window.devicePixelRatio || 1, r = canvas.getBoundingClientRect();
+      if (canvas.width !== Math.round(r.width * dpr) || canvas.height !== Math.round(r.height * dpr)) { canvas.width = Math.round(r.width * dpr); canvas.height = Math.round(r.height * dpr); }
+      V.w = r.width; V.h = r.height;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const dark = view.dark;
+      const C = { bg: dark ? '#1d2023' : '#f5f4ef', grid: dark ? '#3a3f44' : '#c9c6bb', body: dark ? '#e06666' : '#a02020', fillBg: dark ? '#4a4228' : '#ffffc2', pin: dark ? '#e06666' : '#a02020', name: dark ? '#7fc7c7' : '#007a7a', num: dark ? '#e06666' : '#a02020', sel: '#2f81f7', draft: '#2f81f7', text: dark ? '#cfd6dc' : '#24292f', axis: dark ? '#55595e' : '#9a968a' };
+      ctx.fillStyle = C.bg; ctx.fillRect(0, 0, V.w, V.h);
+      // grid dots every 1.27 mm (every 2.54 when zoomed out)
+      const step = V.s * 1.27 < 7 ? 2.54 : 1.27;
+      if (V.s * step >= 5) {
+        ctx.fillStyle = C.grid;
+        const a = toW(0, 0), b = toW(V.w, V.h);
+        for (let x = Math.floor(a[0] / step) * step; x <= b[0]; x += step) for (let y = Math.floor(b[1] / step) * step; y <= a[1]; y += step) { const p = toS([x, y]); ctx.fillRect(p[0] - 0.75, p[1] - 0.75, 1.5, 1.5); }
+      }
+      // origin cross (the part's anchor point)
+      const o = toS([0, 0]); ctx.strokeStyle = C.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(o[0] - 8, o[1]); ctx.lineTo(o[0] + 8, o[1]); ctx.moveTo(o[0], o[1] - 8); ctx.lineTo(o[0], o[1] + 8); ctx.stroke();
+      const lw = (w) => Math.max(1.2, (w || 0.254) * V.s);
+      const path = (pts, close) => { ctx.beginPath(); pts.forEach((p, i) => { const s = toS(p); if (i) ctx.lineTo(s[0], s[1]); else ctx.moveTo(s[0], s[1]); }); if (close) ctx.closePath(); };
+      const shape = (it, color) => {
+        ctx.strokeStyle = color; ctx.lineWidth = lw(it.w);
+        let pts, close = false;
+        if (it.t === 'rect') { pts = [it.a, [it.b[0], it.a[1]], it.b, [it.a[0], it.b[1]]]; close = true; }
+        else if (it.t === 'circle') { pts = []; for (let k = 0; k <= 48; k++) pts.push([it.c[0] + it.r * Math.cos(k * Math.PI / 24), it.c[1] + it.r * Math.sin(k * Math.PI / 24)]); close = true; }
+        else if (it.t === 'arc') pts = SE.arcPts(it);
+        else pts = it.pts;
+        path(pts, close);
+        if (it.fill === 'background' || it.fill === 'outline') { ctx.fillStyle = it.fill === 'outline' ? color : C.fillBg; ctx.fill(); }
+        ctx.stroke();
+      };
+      const txt = (s, p, size, color, align, base, angle) => {
+        const q = toS(p); ctx.save(); ctx.translate(q[0], q[1]); if (angle) ctx.rotate(-angle * Math.PI / 180);
+        ctx.fillStyle = color; ctx.font = `${Math.max(7, size * V.s * 1.05)}px var(--ui), 'IBM Plex Sans', sans-serif`; ctx.textAlign = align || 'center'; ctx.textBaseline = base || 'middle';
+        ctx.fillText(s, 0, 0); ctx.restore();
+      };
+      const pinDraw = (it, color) => {
+        const e = SE.pinEnd(it), a = toS(it.p), b = toS(e);
+        ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.2, 0.152 * V.s);
+        if (it.hide) ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.setLineDash([]);
+        ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(a[0], a[1], Math.max(2.5, Math.min(5, 0.25 * V.s)), 0, Math.PI * 2); ctx.stroke();   // the connection end
+        const ang = it.angle || 0, d = ang === 0 ? [1, 0] : ang === 90 ? [0, 1] : ang === 180 ? [-1, 0] : [0, -1];
+        const sh = it.shape || 'line';
+        if (/inverted|low/.test(sh) && sh !== 'clock_low') { const r = 0.635; const c = [e[0] - d[0] * r, e[1] - d[1] * r]; const cs = toS(c); ctx.beginPath(); ctx.arc(cs[0], cs[1], r * V.s, 0, Math.PI * 2); ctx.stroke(); }
+        if (/clock/.test(sh)) { const n = [-d[1], d[0]], k = 0.635; path([[e[0] + n[0] * k, e[1] + n[1] * k], [e[0] + d[0] * k, e[1] + d[1] * k], [e[0] - n[0] * k, e[1] - n[1] * k]]); ctx.stroke(); }
+        const vertical = ang === 90 || ang === 270;
+        const off = m.pinNameOffset === undefined ? 0.508 : m.pinNameOffset;
+        if (!m.hidePinNames && it.name && it.name !== '~') {
+          if (off > 0) { const p = [e[0] + d[0] * off, e[1] + d[1] * off]; txt(it.name, p, 1.27, C.name, d[0] > 0 || d[1] > 0 ? 'left' : 'right', 'middle', vertical ? 90 : 0); }
+          else { const mid = [(it.p[0] + e[0]) / 2, (it.p[1] + e[1]) / 2]; txt(it.name, vertical ? [mid[0] - 0.4, mid[1]] : [mid[0], mid[1] + 0.4], 1.27, C.name, 'center', 'bottom', vertical ? 90 : 0); }
+        }
+        if (!m.hidePinNumbers && it.num) { const mid = [(it.p[0] + e[0]) / 2, (it.p[1] + e[1]) / 2]; txt(it.num, vertical ? [mid[0] - 0.3, mid[1]] : [mid[0], mid[1] + 0.3], 1.0, C.num, 'center', 'bottom', vertical ? 90 : 0); }
+      };
+      // filled bodies first, then outlines, then pins and text
+      const items = m.items.map((it, i) => [it, i]).filter(([it]) => vis(it));
+      for (const [it, i] of items) if (it.t !== 'pin' && it.t !== 'text' && it.t !== 'raw') shape(it, i === sel ? C.sel : C.body);
+      for (const [it, i] of items) if (it.t === 'pin') pinDraw(it, i === sel ? C.sel : C.pin);
+      for (const [it, i] of items) if (it.t === 'text') txt(it.s, it.p, it.size || 1.27, i === sel ? C.sel : C.body, 'center', 'middle', it.angle || 0);
+      // fields
+      const bb = SE.bbox(m);
+      const rp = (m.fieldPos.Reference && m.fieldPos.Reference.p) || [bb[0], bb[3] + 1.27], vp = (m.fieldPos.Value && m.fieldPos.Value.p) || [bb[0], bb[1] - 1.27];
+      txt((m.ref || 'U') + '?', rp, 1.27, C.name, 'left'); txt(m.value || m.name || '', vp, 1.27, C.name, 'left');
+      // the shape being drawn
+      if (draft && draft.pts.length) {
+        const pts = draft.pts.concat(draft.hover ? [draft.hover] : []);
+        ctx.setLineDash([5, 4]);
+        if (draft.t === 'rect' && pts.length >= 2) shape({ t: 'rect', a: pts[0], b: pts[1], w: 0.254, fill: 'none' }, C.draft);
+        else if (draft.t === 'circle' && pts.length >= 2) shape({ t: 'circle', c: pts[0], r: Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]), w: 0.254, fill: 'none' }, C.draft);
+        else if (draft.t === 'arc' && pts.length >= 3) shape({ t: 'arc', a: pts[0], m: pts[1], b: pts[2], w: 0.254 }, C.draft);
+        else { ctx.strokeStyle = C.draft; ctx.lineWidth = 1.5; path(pts); ctx.stroke(); }
+        ctx.setLineDash([]);
+        ctx.fillStyle = C.draft; for (const p of draft.pts) { const s = toS(p); ctx.fillRect(s[0] - 3, s[1] - 3, 6, 6); }
+      }
+      if (draft && draft.hover && !draft.pts.length) { const s = toS(draft.hover); ctx.strokeStyle = C.draft; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(s[0], s[1], 5, 0, Math.PI * 2); ctx.stroke(); }
+    }
+    // ---- pointer handling: tap to use the tool, drag to move the selection or pan, pinch to zoom
+    const ptrs = new Map();
+    let drag = null, pinch = null;
+    const local = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    canvas.addEventListener('pointerdown', (e) => {
+      canvas.setPointerCapture(e.pointerId);
+      ptrs.set(e.pointerId, local(e));
+      if (ptrs.size === 2) { const [a, b] = Array.from(ptrs.values()); pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), s: V.s, c: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], ox: V.ox, oy: V.oy }; drag = null; return; }
+      const [x, y] = local(e), w = toW(x, y);
+      let hit = -1;
+      if (tool === 'select') hit = SE.hitTest(m, w, 10 / V.s, vis);
+      drag = { x, y, start: snap(w), moved: false, hit, panOx: V.ox, panOy: V.oy, item: hit >= 0 && hit === sel ? JSON.stringify(m.items[hit]) : null };
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (ptrs.has(e.pointerId)) ptrs.set(e.pointerId, local(e));
+      const [x, y] = local(e);
+      if (pinch && ptrs.size === 2) {
+        const [a, b] = Array.from(ptrs.values()), d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        const ns = Math.max(2, Math.min(120, pinch.s * d / pinch.d)), c = pinch.c, wpt = [(c[0] - pinch.ox) / pinch.s, (pinch.oy - c[1]) / pinch.s];
+        V.s = ns; V.ox = c[0] - wpt[0] * ns; V.oy = c[1] + wpt[1] * ns; draw(); return;
+      }
+      if (draft) { draft.hover = snap(toW(x, y)); if (!drag) draw(); }
+      if (!drag) return;
+      if (!drag.moved && Math.hypot(x - drag.x, y - drag.y) < 6) return;
+      if (!drag.moved) { drag.moved = true; if (drag.item) snapshot(); }
+      if (drag.item) {
+        const it = JSON.parse(drag.item), w = snap(toW(x, y)), d = [w[0] - drag.start[0], w[1] - drag.start[1]];
+        SE.moveItem(it, d); m.items[sel] = it; draw(); renderProps(true);
+      } else { V.ox = drag.panOx + (x - drag.x); V.oy = drag.panOy + (y - drag.y); draw(); }
+    });
+    const up = (e) => {
+      ptrs.delete(e.pointerId);
+      if (pinch) { if (ptrs.size < 2) pinch = null; drag = null; return; }
+      const d = drag; drag = null;
+      if (!d || d.moved) { if (d && d.item) { renderProps(); } return; }
+      tap(d.start, d.hit);
+    };
+    canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('pointercancel', (e) => { ptrs.delete(e.pointerId); drag = null; pinch = null; });
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const [x, y] = local(e), wpt = toW(x, y), ns = Math.max(2, Math.min(120, V.s * Math.exp(-e.deltaY * 0.0015)));
+      V.s = ns; V.ox = x - wpt[0] * ns; V.oy = y + wpt[1] * ns; draw();
+    }, { passive: false });
+    const newBits = () => ({ unit: allUnits || m.units <= 1 ? 0 : unit, style: m.deMorgan ? style : 1 });
+    function tap(p, hit) {
+      if (tool === 'select') { sel = hit; renderProps(); draw(); return; }
+      if (tool === 'pin') {
+        snapshot();
+        const pins = m.items.filter((i) => i.t === 'pin');
+        const nextNum = String(pins.reduce((a, q) => Math.max(a, parseInt(q.num, 10) || 0), 0) + 1);
+        const it = Object.assign({ t: 'pin', type: lastPin ? lastPin.type : 'passive', shape: 'line', p, angle: lastPin ? lastPin.angle : 0, len: lastPin ? lastPin.len : 2.54, name: '~', num: nextNum, hide: false, alts: [] }, newBits());
+        m.items.push(it); sel = m.items.length - 1; lastPin = it;
+        renderProps(); draw();
+        setTimeout(() => { const n = wrap.querySelector('#sxPinName'); if (n) { n.focus(); n.select(); } }, 30);
+        return;
+      }
+      if (tool === 'text') {
+        snapshot();
+        m.items.push(Object.assign({ t: 'text', s: 'TEXT', p, angle: 0, size: 1.27 }, newBits()));
+        sel = m.items.length - 1; tool = 'select'; renderTools(); renderProps(); draw();
+        setTimeout(() => { const n = wrap.querySelector('#sxText'); if (n) { n.focus(); n.select(); } }, 30);
+        return;
+      }
+      // shapes: collect points
+      if (!draft || draft.t !== tool) draft = { t: tool, pts: [], hover: null };
+      draft.pts.push(p);
+      const need = { rect: 2, circle: 2, arc: 3 }[tool];
+      if (need && draft.pts.length >= need) finishDraft();
+      else { renderHint(); draw(); }
+    }
+    function finishDraft() {
+      if (!draft) return;
+      const P = draft.pts, b = newBits();
+      let it = null;
+      if (draft.t === 'rect' && P.length >= 2 && P[0][0] !== P[1][0] && P[0][1] !== P[1][1]) it = { t: 'rect', a: P[0], b: P[1], w: 0.254, fill: 'background' };
+      else if (draft.t === 'circle' && P.length >= 2) { const r = Math.hypot(P[1][0] - P[0][0], P[1][1] - P[0][1]); if (r > 0) it = { t: 'circle', c: P[0], r: Math.round(r * 10000) / 10000, w: 0.254, fill: 'none' }; }
+      else if (draft.t === 'arc' && P.length >= 3) it = { t: 'arc', a: P[0], m: P[1], b: P[2], w: 0.254, fill: 'none' };
+      else if (draft.t === 'poly' && P.length >= 2) it = { t: 'poly', pts: P, w: 0.254, fill: 'none' };
+      draft = { t: tool, pts: [], hover: null };
+      if (it) { snapshot(); m.items.push(Object.assign(it, b)); sel = m.items.length - 1; }
+      renderHint(); renderProps(); draw();
+    }
+    // ---- actions
+    const doUndo = () => { if (!undoS.length) return; redoS.push(JSON.stringify(m)); m = JSON.parse(undoS.pop()); sel = -1; renderAll(); };
+    const doRedo = () => { if (!redoS.length) return; undoS.push(JSON.stringify(m)); m = JSON.parse(redoS.pop()); sel = -1; renderAll(); };
+    const doDelete = () => { if (sel < 0) return; snapshot(); m.items.splice(sel, 1); sel = -1; renderProps(); draw(); };
+    const doRotate = () => {
+      if (sel < 0) return; snapshot();
+      const it = m.items[sel], c = it.t === 'pin' ? it.p : snap(((b) => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2])(SE.bbox({ items: [it] })));
+      SE.rotateItem(it, c); if (it.t === 'pin') lastPin = it; renderProps(); draw();
+    };
+    const doRepeat = () => {
+      const src = sel >= 0 ? m.items[sel] : lastPin; if (!src) { toast('Select something to repeat.'); return; }
+      snapshot();
+      let it;
+      if (src.t === 'pin') it = SE.nextPin(src);
+      else { it = SE.clone(src); SE.moveItem(it, [0, -2.54]); }
+      m.items.push(it); sel = m.items.length - 1; if (it.t === 'pin') lastPin = it; renderProps(); draw();
+    };
+    const pinTable = () => {
+      const ta = h('textarea', { class: 'input mono se-pins', rows: 10, spellcheck: 'false' });
+      const pins = m.items.filter((i) => i.t === 'pin');
+      ta.value = pins.length ? pins.map((p) => `${p.num} ${p.name || '~'} ${p.type} ${(p.angle || 0) === 180 ? 'R' : 'L'}`).join('\n') : '1 +24V power_in L\n2 0V power_in L\n3 IN input L\n4 OUT output R';
+      openDialog('BOX FROM A PIN LIST', [h('p', { class: 'hint', text: 'One pin per line: number, name, then optional type (passive, input, output, bidir, power_in, power_out, oc, nc) and side (L or R). Paste a pin table from a data sheet. This replaces the drawing with a box and these pins; UNDO brings the old one back.' }), ta],
+        [{ label: 'CANCEL', run: closeDialog }, { label: 'MAKE BOX', primary: true, run: () => { const list = E.parsePinLines(ta.value); if (!list.length) { toast('Type at least one pin.'); return; } closeDialog(); snapshot(); m = SE.boxFrom(m, list, E); m.units = 1; sel = -1; renderAll(); fit(); } }]);
+    };
+    // ---- toolbar
+    const TOOLS = [['select', 'Select', 'i-hand'], ['pin', 'Pin', 'i-pin'], ['rect', 'Rectangle', 'i-rect'], ['circle', 'Circle', 'i-circle'], ['arc', 'Arc', 'i-arc'], ['poly', 'Lines', 'i-line'], ['text', 'Text', 'i-text']];
+    const toolbar = h('div', { class: 'sx-tools', role: 'toolbar', 'aria-label': 'Symbol tools' });
+    function renderTools() {
+      toolbar.replaceChildren(
+        ...TOOLS.map(([id, label, ic]) => h('button', { class: 'sx-tool' + (tool === id ? ' on' : ''), type: 'button', 'aria-pressed': String(tool === id), title: label, onclick: () => { if (draft && draft.t === 'poly' && draft.pts.length >= 2) finishDraft(); tool = id; draft = id === 'select' || id === 'pin' || id === 'text' ? null : { t: id, pts: [], hover: null }; renderTools(); renderHint(); draw(); } }, icon(ic), h('span', { text: label }))),
+        h('span', { class: 'sx-sep' }),
+        ...[['Undo', 'i-undo', doUndo, !undoS.length], ['Redo', 'i-redo', doRedo, !redoS.length], ['Rotate', 'i-rotate', doRotate, sel < 0], ['Repeat', 'i-dup', doRepeat, sel < 0 && !lastPin], ['Delete', 'i-trash', doDelete, sel < 0], ['Fit', 'i-fit', fit, false], ['Pin list', 'i-box', pinTable, false]]
+          .map(([label, ic, fn, dis]) => h('button', { class: 'sx-tool', type: 'button', title: label, disabled: dis, onclick: () => { fn(); renderTools(); } }, icon(ic), h('span', { text: label }))));
+    }
+    const hint = h('div', { class: 'sx-hint' });
+    function renderHint() {
+      const H = { select: 'Tap to select · drag a selected item to move it · drag the background to pan · pinch or scroll to zoom', pin: 'Tap where each pin connects (its outer end). Set its name, number and type on the right; Repeat adds the next one below.', text: 'Tap where the text goes', rect: 'Tap two opposite corners', circle: 'Tap the centre, then a point on the edge', arc: 'Tap the start, a point it passes through, then the end', poly: 'Tap each point, then FINISH' };
+      const kids = [h('span', { text: H[tool] || '' })];
+      if (tool === 'poly' && draft && draft.pts.length >= 2) kids.push(h('button', { class: 'btn small primary', type: 'button', onclick: finishDraft }, 'FINISH'));
+      if (draft && draft.pts.length) kids.push(h('button', { class: 'btn small', type: 'button', onclick: () => { draft.pts = []; renderHint(); draw(); } }, 'CANCEL'));
+      hint.replaceChildren(...kids);
+    }
+    // unit and body style chips
+    const unitBar = h('div', { class: 'sx-units' });
+    function renderUnits() {
+      const kids = [];
+      if (m.units > 1) {
+        kids.push(h('span', { class: 'sx-lbl', text: 'Unit' }));
+        for (let u = 1; u <= m.units; u++) kids.push(h('button', { class: 'chip' + (u === unit ? ' on' : ''), type: 'button', onclick: () => { unit = u; sel = -1; renderAll(); } }, K.unitLetter(u)));
+        kids.push(h('label', { class: 'check sx-mini' }, h('input', { type: 'checkbox', checked: allUnits, onchange: (e) => { allUnits = e.target.checked; } }), 'New items in all units'));
+      }
+      if (m.deMorgan) {
+        kids.push(h('span', { class: 'sx-lbl', text: 'Body' }));
+        for (const [v, l] of [[1, 'Standard'], [2, 'De Morgan']]) kids.push(h('button', { class: 'chip' + (v === style ? ' on' : ''), type: 'button', onclick: () => { style = v; sel = -1; renderAll(); } }, l));
+      }
+      unitBar.replaceChildren(...kids); unitBar.hidden = !kids.length;
+    }
+    // ---- properties panel
+    const props = h('div', { class: 'sx-props' });
+    const numIn = (v, on, o) => h('input', Object.assign({ class: 'input', type: 'number', step: '0.01', value: String(v), inputmode: 'decimal', onchange: (e) => on(parseFloat(e.target.value)) }, o || {}));
+    const row = (label, el) => h('div', { class: 'fieldrow' }, h('label', { text: label }), el);
+    const sel2 = (opts, cur, on) => h('select', { class: 'input', onchange: (e) => on(e.target.value) }, ...opts.map(([v, l]) => h('option', { value: v, text: l, selected: String(v) === String(cur) })));
+    const edit = (fn) => { snapshot(); fn(); draw(); renderTools(); };
+    function renderProps(light) {
+      if (light && sel >= 0) return;   // while dragging: leave the inputs alone
+      const kids = [];
+      const it = sel >= 0 ? m.items[sel] : null;
+      if (it) {
+        const NAMES = { pin: 'Pin', rect: 'Rectangle', circle: 'Circle', arc: 'Arc', poly: 'Lines', text: 'Text', raw: 'Other item' };
+        kids.push(h('h3', { class: 'su-h', text: NAMES[it.t] || 'Item' }));
+        if (it.t === 'pin') {
+          kids.push(row('Name', h('input', { class: 'input', id: 'sxPinName', value: it.name === '~' ? '' : it.name, placeholder: '~ (none)', spellcheck: 'false', autocomplete: 'off', onchange: (e) => edit(() => { it.name = e.target.value.trim() || '~'; }) })));
+          kids.push(row('Number', h('input', { class: 'input', value: it.num, spellcheck: 'false', autocomplete: 'off', onchange: (e) => edit(() => { it.num = e.target.value.trim(); renderProblems(); }) })));
+          kids.push(row('Type', sel2(SE.PIN_TYPES.map((t, i) => [t, SE.PIN_TYPE_NAMES[i]]), it.type, (v) => edit(() => { it.type = v; lastPin = it; }))));
+          kids.push(row('Shape', sel2(SE.PIN_SHAPES.map((t, i) => [t, SE.PIN_SHAPE_NAMES[i]]), it.shape, (v) => edit(() => { it.shape = v; }))));
+          kids.push(row('Points', sel2([[0, 'Right (pin on the left)'], [180, 'Left (pin on the right)'], [270, 'Down (pin on top)'], [90, 'Up (pin underneath)']], it.angle || 0, (v) => edit(() => { it.angle = +v; lastPin = it; }))));
+          kids.push(row('Length (mm)', numIn(it.len, (v) => { if (v >= 0) edit(() => { it.len = v; lastPin = it; }); })));
+          kids.push(row('Position', h('div', { class: 'row-inline' }, numIn(it.p[0], (v) => edit(() => { it.p[0] = v; })), numIn(it.p[1], (v) => edit(() => { it.p[1] = v; })))));
+          kids.push(h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!it.hide, onchange: (e) => edit(() => { it.hide = e.target.checked; }) }), 'Hidden (still connected, e.g. power pins)'));
+          // alternate functions
+          const alts = h('div', { class: 'su-list' });
+          const drawAlts = () => {
+            alts.replaceChildren(...(it.alts || []).map((a, k) => h('div', { class: 'su-row' },
+              h('input', { class: 'input', value: a.name, placeholder: 'Function name', onchange: (e) => edit(() => { a.name = e.target.value.trim(); }) }),
+              sel2(SE.PIN_TYPES.map((t, i) => [t, SE.PIN_TYPE_NAMES[i]]), a.type, (v) => edit(() => { a.type = v; })),
+              h('button', { class: 'ib', type: 'button', 'aria-label': 'Remove', onclick: () => edit(() => { it.alts.splice(k, 1); drawAlts(); }) }, icon('i-close')))),
+              h('button', { class: 'btn small', type: 'button', onclick: () => edit(() => { (it.alts = it.alts || []).push({ name: '', type: it.type, shape: 'line' }); drawAlts(); }) }, icon('i-plus'), 'ADD FUNCTION'));
+          };
+          drawAlts();
+          kids.push(h('h3', { class: 'su-h', text: 'Alternate functions' }), h('p', { class: 'hint', text: 'Other names and types the pin can take (PIN FUNCTION on the drawing), e.g. a GPIO that can be UART_TX.' }), alts);
+        } else if (it.t === 'text') {
+          kids.push(row('Text', h('input', { class: 'input', id: 'sxText', value: it.s, onchange: (e) => edit(() => { it.s = e.target.value; }) })));
+          kids.push(row('Size (mm)', numIn(it.size || 1.27, (v) => { if (v > 0) edit(() => { it.size = v; }); })));
+          kids.push(row('Direction', sel2([[0, 'Across'], [90, 'Up']], it.angle || 0, (v) => edit(() => { it.angle = +v; }))));
+        } else if (it.t !== 'raw') {
+          kids.push(row('Line width (mm)', numIn(it.w || 0, (v) => { if (v >= 0) edit(() => { it.w = v; }); }, { title: '0 = KiCad default' })));
+          kids.push(row('Fill', sel2([['none', 'None'], ['background', 'Body colour'], ['outline', 'Line colour']], it.fill || 'none', (v) => edit(() => { it.fill = v; }))));
+          if (it.t === 'circle') kids.push(row('Radius (mm)', numIn(it.r, (v) => { if (v > 0) edit(() => { it.r = v; }); })));
+        } else kids.push(h('p', { class: 'hint', text: 'An item Loomline doesn’t edit (kept as it is).' }));
+        if (m.units > 1) kids.push(row('Unit', sel2([[0, 'All units']].concat(Array.from({ length: m.units }, (_, k) => [k + 1, 'Unit ' + K.unitLetter(k + 1)])), it.unit || 0, (v) => edit(() => { it.unit = +v; }))));
+        if (m.deMorgan) kids.push(row('Body style', sel2([[0, 'Both'], [1, 'Standard'], [2, 'De Morgan']], it.style || 0, (v) => edit(() => { it.style = +v; }))));
+        kids.push(h('div', { class: 'actions' },
+          h('button', { class: 'btn small', type: 'button', onclick: doRotate }, icon('i-rotate'), 'ROTATE'),
+          h('button', { class: 'btn small', type: 'button', onclick: doRepeat }, icon('i-dup'), it.t === 'pin' ? 'NEXT PIN' : 'COPY'),
+          h('button', { class: 'btn small danger', type: 'button', onclick: doDelete }, icon('i-trash'), 'DELETE'),
+          h('button', { class: 'btn small', type: 'button', onclick: () => { sel = -1; renderProps(); draw(); } }, 'DONE')));
+      } else {
+        kids.push(h('h3', { class: 'su-h', text: 'Part' }));
+        const t = (label, key, ph, after) => row(label, h('input', { class: 'input', value: m[key] || '', placeholder: ph || '', spellcheck: 'false', autocomplete: 'off', onchange: (e) => edit(() => { m[key] = e.target.value.trim(); if (after) after(); }) }));
+        kids.push(t('Name', 'name', 'e.g. VALVE_DRIVER_4CH', () => { if (!m.value) m.value = m.name; updateTitle(); }));
+        kids.push(t('Reference', 'ref', 'U, K, J, F…'));
+        kids.push(t('Value', 'value', 'shown under the part'));
+        const fld = (label, key, ph) => row(label, h('input', { class: 'input', value: (m.fields[key] || '').replace(/^~$/, ''), placeholder: ph || '', spellcheck: 'false', autocomplete: 'off', onchange: (e) => edit(() => { m.fields[key] = e.target.value.trim() || (key === 'Datasheet' ? '~' : ''); }) }));
+        kids.push(fld('Description', 'Description', 'what it is, for the parts list'), fld('Footprint', 'Footprint', 'Library:Footprint'), fld('Data sheet', 'Datasheet', 'https://…'));
+        kids.push(t('Keywords', 'keywords', 'words to find it by'));
+        // other fields
+        const extra = Object.keys(m.fields).filter((k) => !['Description', 'Footprint', 'Datasheet'].includes(k));
+        for (const k of extra) kids.push(h('div', { class: 'su-row' }, h('span', { class: 'su-name', text: k }),
+          h('input', { class: 'input', value: m.fields[k], onchange: (e) => edit(() => { m.fields[k] = e.target.value; }) }),
+          h('button', { class: 'ib', type: 'button', 'aria-label': 'Remove ' + k, onclick: () => edit(() => { delete m.fields[k]; renderProps(); }) }, icon('i-close'))));
+        kids.push(h('button', { class: 'btn small', type: 'button', onclick: () => { const n = (prompt('Field name (e.g. MPN, Manufacturer, Supplier)') || '').trim(); if (n && !(n in m.fields) && !['Reference', 'Value'].includes(n)) edit(() => { m.fields[n] = ''; renderProps(); }); } }, icon('i-plus'), 'ADD FIELD'));
+        kids.push(h('h3', { class: 'su-h', text: 'Units and options' }));
+        kids.push(row('Units', numIn(m.units, (v) => { v = Math.max(1, Math.min(26, Math.round(v || 1))); edit(() => { m.units = v; if (unit > v) unit = v; renderAll(); }); }, { step: '1', min: '1', max: '26' })));
+        const cb = (label, key, after) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!m[key], onchange: (e) => edit(() => { m[key] = e.target.checked; if (after) after(); }) }), label);
+        if (m.units > 1) kids.push(cb('Units are interchangeable (any unit can go anywhere)', 'interchangeable'));
+        kids.push(cb('Has a De Morgan (alternate) body style', 'deMorgan', () => { style = 1; for (const x of m.items) if (m.deMorgan && x.style === undefined) x.style = 1; renderAll(); }));
+        kids.push(cb('Power symbol (like GND or +24V: its value names the net)', 'power'));
+        kids.push(cb('Hide pin names', 'hidePinNames'), cb('Hide pin numbers', 'hidePinNumbers'));
+        kids.push(row('Pin name offset (mm)', numIn(m.pinNameOffset === undefined ? 0.508 : m.pinNameOffset, (v) => { if (v >= 0) edit(() => { m.pinNameOffset = v; }); }, { title: '0 puts names above the pin line' })));
+        kids.push(cb('In the bill of materials', 'inBom'), cb('On the board (PCB)', 'onBoard'));
+      }
+      kids.push(problems);
+      props.replaceChildren(...kids);
+      renderProblems();
+    }
+    const problems = h('div', { class: 'sx-problems' });
+    function renderProblems() {
+      const p = SE.check(m);
+      problems.replaceChildren(...(p.length ? [h('h3', { class: 'su-h', text: 'To fix' }), ...p.map((x) => h('p', { class: 'err-text', text: x }))] : [h('p', { class: 'hint', text: `${SE.pinCount(m)} pin${SE.pinCount(m) === 1 ? '' : 's'}${m.units > 1 ? ', ' + m.units + ' units' : ''}. Ready to save.` })]));
+    }
+    function renderAll() { renderTools(); renderUnits(); renderHint(); renderProps(); draw(); }
+    // ---- save
+    const title = h('b');
+    const updateTitle = () => { title.textContent = (fromLib ? 'EDIT SYMBOL · ' : 'SYMBOL EDITOR · ') + (m.name || 'new part'); };
+    const finalName = () => String(m.name || '').trim().replace(/[\s:"]+/g, '_');
+    const ready = () => {
+      if (draft && draft.t === 'poly' && draft.pts.length >= 2) finishDraft();
+      const p = SE.check(m);
+      if (p.length) { banner('err', p[0]); return false; }
+      m.name = finalName(); if (!m.value) m.value = m.name;
+      return true;
+    };
     const save = async (place) => {
-      build();
-      if (!name.value.trim()) { name.focus(); toast('Give the part a name.'); return; }
-      if (!current.pins.length) { pinsTa.focus(); toast('Add at least one pin.'); return; }
-      if (current.dupes.length) { toast('Two pins have the number ' + current.dupes[0] + '.'); return; }
+      if (!ready()) return;
+      const text = SE.serialize(m);
       const mp = await myParts();
-      mp.symbols[current.name] = current.text;
-      mp.meta[current.name] = { desc: current.desc, kw: [mfr.value, mpn.value].join(' '), ref: current.ref, pins: current.pins.length, at: Date.now() };
+      mp.symbols[m.name] = text;
+      mp.meta[m.name] = { desc: m.fields.Description || '', kw: m.keywords || '', ref: m.ref || 'U', pins: SE.pinCount(m), units: m.units, at: Date.now() };
       await Store.set('myParts', mp);
       const idx = await loadLibIndex(); mergeMyParts(idx, mp);
-      wrap.remove();
-      toast(`Saved ${current.name} to My parts.`);
+      dirty = false; close();
+      toast(`Saved ${m.name} to My parts.`);
       renderDock && renderDock();
-      if (place) armStencil({ kind: 'part', lib: MY_LIB, name: current.name });
+      if (place) armStencil({ kind: 'part', lib: MY_LIB, name: m.name });
     };
-    const download = () => { build(); downloadText(current.name + '.kicad_sym', E.symbolLibText([current.text])); };
-    const field = (label, el) => h('div', { class: 'field' }, h('label', { for: el.id, text: label }), el);
-    const wrap = h('div', { class: 'report-wrap', id: 'symEditor', role: 'dialog', 'aria-label': 'New part' },
-      h('div', { class: 'report-head' }, h('div', { class: 'titles' }, h('b', { text: pre.name ? 'EDIT PART' : 'NEW PART' }), h('small', { text: 'Saved on this device under My parts' })),
-        h('button', { class: 'btn small', onclick: download }, icon('i-download'), '.KICAD_SYM'),
-        h('button', { class: 'btn small', onclick: () => save(false) }, icon('i-save'), 'SAVE'),
-        h('button', { class: 'btn small primary', onclick: () => save(true) }, icon('i-part'), 'SAVE & PLACE'),
-        h('button', { class: 'ib', 'aria-label': 'Close', onclick: () => wrap.remove() }, icon('i-close'))),
-      h('div', { class: 'report-body se-body' },
-        h('div', { class: 'se-form' },
-          h('div', { class: 'se-row' }, field('Part name', name), field('Ref', ref)),
-          field('Pins: one per line — number, name, then optional type and side (L or R)', pinsTa),
-          h('p', { class: 'hint', text: 'Types: passive, input, output, bidir, power_in, power_out, oc, nc. Example: “3 CAN_H bidir R”. Paste a pin table from a data sheet: number and name columns work as they are.' }),
-          field('Description', desc), h('div', { class: 'se-row' }, field('Manufacturer', mfr), field('MPN', mpn)), field('Footprint', fp), field('Data sheet link', ds)),
-        h('div', { class: 'se-prev' }, h('div', { class: 'pprev' }, canvas), msg)));
+    // Editing a placed part's definition: write it back into every sheet that uses it (KiCad: Update symbol in schematic)
+    const applyToSchematic = () => {
+      if (!ready()) return;
+      const libId = fromLib.libId, i = libId.indexOf(':'), nm = i < 0 ? libId : libId.slice(i + 1);
+      const text = SE.serialize(Object.assign({}, m, { name: nm }));
+      const sheets = state.project.instances.map((x) => x.sheet).filter((x, k, a) => a.indexOf(x) === k && x.symbols.some((y) => (y.libName || y.libId) === libId));
+      dirty = false; close();
+      run('Edit symbol ' + nm, () => sheets.map((x) => E.updateLibSymbol(x, libId, { lib: i < 0 ? '' : libId.slice(0, i), name: nm, text, parentText: null })).filter(Boolean), { checkMerges: true });
+      toast(`${nm} changed on ${sheets.length} sheet${sheets.length === 1 ? '' : 's'}. Its library copy isn’t changed: SAVE TO MY PARTS keeps it for other projects.`);
+    };
+    const downloadSym = () => { if (!ready()) return; downloadText(m.name + '.kicad_sym', E.symbolLibText([SE.serialize(m)])); };
+    const onKey = (e) => {
+      if (!document.body.contains(wrap)) return;
+      const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '');
+      e.stopPropagation();
+      if (inField) { if (e.key === 'Escape') e.target.blur(); return; }
+      const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+      if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) doRedo(); else doUndo(); }
+      else if (mod && k === 'y') { e.preventDefault(); doRedo(); }
+      else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); doDelete(); }
+      else if (k === 'r') doRotate();
+      else if (e.key === 'Insert' || k === 'i') doRepeat();
+      else if (k === 'p') { tool = 'pin'; draft = null; renderAll(); }
+      else if (e.key === 'Enter' && draft && draft.t === 'poly') finishDraft();
+      else if (e.key === 'Escape') { if (draft && draft.pts.length) { draft.pts = []; renderHint(); draw(); } else if (sel >= 0) { sel = -1; renderProps(); draw(); } else { tool = 'select'; draft = null; renderAll(); } }
+      else if (k === 'home') fit();
+      renderTools();
+    };
+    const close = () => { if (dirty && !confirm('Close without saving this part?')) return; window.removeEventListener('keydown', onKey, true); window.removeEventListener('resize', onResize); wrap.remove(); };
+    const onResize = () => draw();
+    const wrap = h('div', { class: 'report-wrap sx-wrap', id: 'symEditor', role: 'dialog', 'aria-label': 'Symbol editor' },
+      h('div', { class: 'report-head' }, h('div', { class: 'titles' }, title, h('small', { text: fromLib ? 'A copy of ' + fromLib.libId + ' from this project' : 'Saved on this device under My parts' })),
+        h('button', { class: 'btn small', onclick: downloadSym }, icon('i-download'), '.KICAD_SYM'),
+        fromLib ? h('button', { class: 'btn small', onclick: applyToSchematic }, icon('i-sync'), 'APPLY TO SCHEMATIC') : null,
+        h('button', { class: 'btn small', onclick: () => save(false) }, icon('i-save'), fromLib ? 'SAVE TO MY PARTS' : 'SAVE'),
+        fromLib ? null : h('button', { class: 'btn small primary', onclick: () => save(true) }, icon('i-part'), 'SAVE & PLACE'),
+        h('button', { class: 'ib', 'aria-label': 'Close', onclick: close }, icon('i-close'))),
+      h('div', { class: 'sx-body' }, toolbar, h('div', { class: 'sx-main' }, unitBar, h('div', { class: 'sx-stage' }, canvas), hint), props));
     document.body.append(wrap);
-    build();
-    setTimeout(() => name.focus(), 60);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', onResize);
+    updateTitle();
+    renderAll();
+    requestAnimationFrame(() => { fit(); if (!m.items.length) { tool = 'select'; } });
+    return wrap;
+  }
+  // The definition of a placed part, as the editor gets it (from the sheet's own copy)
+  function placedSymbolModel(inst, si) {
+    const sh = inst.sheet, sym = sh.symbols[si], libId = sym.libName || sym.libId;
+    const ls = K.find(sh.root, 'lib_symbols');
+    const node = ls && K.findAll(ls, 'symbol').find((n) => n[1] === libId);
+    if (!node) throw new Error('This part’s definition is missing from the sheet.');
+    const m = SymEdit.parse(sh.text.slice(node.s, node.e));
+    m.name = libId.split(':').pop();
+    return { model: m, from: { libId } };
+  }
+  function editPlacedSymbol(inst, si) {
+    try { const o = placedSymbolModel(inst, si); symbolEditor(o); } catch (e) { banner('err', e.message); }
+  }
+  async function editLibraryCopy(entry) {
+    const m = SymEdit.parse(entry.text, entry.parentText);
+    m.name = entry.name + '_custom';
+    symbolEditor({ model: m });
   }
   async function myPartsMenu(anchor) {
     const mp = await myParts(), names = Object.keys(mp.meta).sort(K.naturalCmp);
     const items = [{ label: 'New part…', icon: 'i-plus', run: () => symbolEditor() }];
-    if (state.sel && state.sel.type === 'symbol') items.push({ label: 'New part from the selected one…', icon: 'i-copy', run: () => symbolEditor() });
+    if (state.sel && state.sel.type === 'symbol') items.push({ label: 'New part from the selected one…', icon: 'i-copy', run: () => { try { const o = placedSymbolModel(state.sel.inst, state.sel.si); o.model.name += '_custom'; symbolEditor({ model: o.model }); } catch (e) { banner('err', e.message); } } });
     if (names.length) {
       items.push({ sep: true });
       for (const n of names.slice(0, 30)) items.push({ label: 'Place ' + n, icon: 'i-part', run: () => armStencil({ kind: 'part', lib: MY_LIB, name: n }) });
       items.push({ sep: true });
-      items.push({ label: 'Edit a part…', icon: 'i-edit', run: () => pickName('EDIT WHICH PART?', names, async (n) => { const m = (await myParts()); symbolEditor(partToPre(n, m)); }) });
+      items.push({ label: 'Edit a part…', icon: 'i-edit', run: () => pickName('EDIT WHICH PART?', names, async (n) => { const m = (await myParts()); try { symbolEditor({ model: SymEdit.parse(m.symbols[n]) }); } catch (e) { banner('err', e.message); } }) });
       items.push({ label: 'Delete a part…', icon: 'i-trash', run: () => pickName('DELETE WHICH PART?', names, async (n) => { const m = await myParts(); delete m.symbols[n]; delete m.meta[n]; await Store.set('myParts', m); const idx = await loadLibIndex(); mergeMyParts(idx, m); toast('Deleted ' + n + ' from My parts. Sheets that use it keep their copy.'); }) });
       items.push({ label: 'Download all as .kicad_sym', icon: 'i-download', run: () => downloadText('My_Parts.kicad_sym', E.symbolLibText(names.map((n) => mp.symbols[n]))) });
     }
     openMenu(anchor, items);
-  }
-  function partToPre(n, m) {
-    const tree = K.parseSexpr(m.symbols[n]), props = {};
-    for (const p of K.findAll(tree, 'property')) props[p[1]] = p[2];
-    const pins = [];
-    const walk = (node) => { for (const c of node) if (Array.isArray(c)) { if (c[0] === 'pin') { const at = K.find(c, 'at'); pins.push(`${(K.find(c, 'number') || [])[1]} ${(K.find(c, 'name') || [])[1] || '~'} ${c[1]} ${+at[3] === 180 ? 'R' : 'L'}`); } else walk(c); } };
-    walk(tree);
-    const fields = {}; for (const [k, v] of Object.entries(props)) if (!['Reference', 'Value', 'ki_keywords'].includes(k)) fields[k] = v;
-    return { name: n, ref: props.Reference || 'U', pins: pins.join('\n'), fields };
   }
   function pickName(title, names, fn) {
     openDialog(title, [h('div', { class: 'chips unfold' }, ...names.map((n) => h('button', { class: 'chip', onclick: () => { closeDialog(); fn(n); } }, n)))], [{ label: 'CANCEL', run: closeDialog }]);

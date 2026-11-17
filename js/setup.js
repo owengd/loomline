@@ -180,6 +180,13 @@
     }
     return { settings: st, byNet, conflicts, fromLabel, classOf: (nid) => byNet.get(nid) || 'Default' };
   }
+  /** A class's wire/bus width (mm) and dash, or null when it is KiCad's default look. */
+  const DASHES = [null, 'dash', 'dot', 'dash_dot', 'dash_dot_dot'];
+  function classStroke(c) {
+    const w = (+c.wire_width || 6) * MIL, b = (+c.bus_width || 12) * MIL, d = DASHES[+c.line_style || 0] || null;
+    if (Math.abs(w - 6 * MIL) < 1e-6 && Math.abs(b - 12 * MIL) < 1e-6 && !d) return null;
+    return { wire: w, bus: b, dash: d };
+  }
   /** rgba(r, g, b, a) → css, or null when KiCad's "no colour" (alpha 0). */
   function cssColor(s) {
     const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/.exec(s || '');
@@ -203,7 +210,7 @@
     ['pin', 'pin_not_connected', 'Pin not connected'],
     ['notdriven', 'pin_not_driven', 'Input pin not driven by any output'],
     ['power', 'power_pin_not_driven', 'Power input pin not driven'],
-    ['drive', 'pin_to_pin', 'Outputs driving each other (pin conflicts)'],
+    ['drive', 'pin_to_pin', 'Pin conflicts (see the table below)'],
     ['nc', 'no_connect_connected', 'No-connect flag on a connected net'],
     ['ncdangle', 'no_connect_dangling', 'No-connect flag not on a pin'],
     ['dangling', 'unconnected_wire_endpoint', 'Wire end not connected'],
@@ -255,10 +262,52 @@
       const rule = RULE_OF.get(is.code);
       const s = rule && rs[rule];
       if (s === 'ignore') continue;
+      if (is.code === 'drive') { out.push(is); continue; }   // the pin conflict table decides warning or error
       out.push(s === 'error' ? Object.assign({}, is, { sev: 'error' }) : s === 'warning' ? Object.assign({}, is, { sev: 'warn' }) : is);
     }
     const rank = { error: 0, warn: 1 };
     return out.sort((a, b) => rank[a.sev] - rank[b.sev]);
+  }
+
+  // ---------------------------------------------------------------- ERC pin conflict map (KiCad's pin_map)
+  const PIN_TYPES = ['input', 'output', 'bidirectional', 'tri_state', 'passive', 'free', 'unspecified', 'power_in', 'power_out', 'open_collector', 'open_emitter', 'no_connect'];
+  const PIN_TYPE_NAMES = ['Input', 'Output', 'Bidirectional', 'Tri-state', 'Passive', 'Free', 'Unspecified', 'Power input', 'Power output', 'Open collector', 'Open emitter', 'Not connected'];
+  // 0 = OK, 1 = warning, 2 = error; KiCad's default table
+  const DEFAULT_PIN_MAP = [
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2],
+    [0, 2, 0, 1, 0, 0, 1, 0, 2, 2, 2, 2],
+    [0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 2],
+    [0, 1, 0, 0, 0, 0, 1, 1, 2, 1, 1, 2],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+    [1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 2],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 2],
+    [0, 2, 1, 2, 0, 0, 1, 0, 2, 2, 2, 2],
+    [0, 2, 0, 1, 0, 0, 1, 0, 2, 0, 0, 2],
+    [0, 2, 1, 1, 0, 0, 1, 0, 2, 0, 0, 2],
+    [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+  ];
+  function pinMap(P) {
+    const m = P && P.pro && P.pro.erc && P.pro.erc.pin_map;
+    if (Array.isArray(m) && m.length === 12 && m.every((r) => Array.isArray(r) && r.length === 12)) return m.map((r) => r.map((v) => (+v === 1 || +v === 2 ? +v : 0)));
+    return DEFAULT_PIN_MAP.map((r) => r.slice());
+  }
+  function setPinMap(P, m) {
+    return editPro(P, (pro) => { const e = pro.erc = pro.erc || {}; e.pin_map = m.map((r) => r.slice()); if (!e.meta) e.meta = { version: 0 }; });
+  }
+  /** Worst conflict between the pins of one net: { sev: 1|2, a, b } or null. */
+  function pinConflict(pins, map) {
+    const firstOf = new Map();
+    for (const p of pins) { const t = PIN_TYPES.indexOf(p.type || 'unspecified'); const k = t < 0 ? 6 : t; if (!firstOf.has(k)) firstOf.set(k, [p]); else if (firstOf.get(k).length < 2 && !(firstOf.get(k)[0].ref === p.ref && firstOf.get(k)[0].number === p.number)) firstOf.get(k).push(p); }
+    let best = null;
+    const types = Array.from(firstOf.keys());
+    for (let i = 0; i < types.length; i++) for (let j = i; j < types.length; j++) {
+      const a = firstOf.get(types[i]), b = firstOf.get(types[j]);
+      if (i === j && a.length < 2) continue;
+      const v = Math.max(map[types[i]][types[j]], map[types[j]][types[i]]);
+      if (v && (!best || v > best.sev)) best = { sev: v, a: a[0], b: i === j ? a[1] : b[0], ta: types[i], tb: types[j] };
+    }
+    return best;
   }
 
   // ---------------------------------------------------------------- KiCad netlist (.net)
@@ -470,8 +519,8 @@
   const api = {
     MIL, JUNCTION_SIZES, ERC_RULES, DEFAULT_CLASS, QTY, DNP, ITEM, isQty,
     proPathOf, editPro, drawing, setDrawing, textVars, setTextVars, busAliases, setBusAliases,
-    netClassSettings, setNetClasses, netClassMap, wildcard, cssColor, kicadColor, hexOf,
-    ercSeverities, setErcSeverities, applySeverities, severityOf, KICAD_DEFAULTS,
+    netClassSettings, setNetClasses, netClassMap, classStroke, wildcard, cssColor, kicadColor, hexOf,
+    ercSeverities, setErcSeverities, applySeverities, PIN_TYPES, PIN_TYPE_NAMES, DEFAULT_PIN_MAP, pinMap, setPinMap, pinConflict, severityOf, KICAD_DEFAULTS,
     exportNetlist, bomFields, bomSettings, setBomSettings, defaultBomSettings, bomTable, bomText, refList
   };
   root.Setup = api;
