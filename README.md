@@ -434,11 +434,17 @@ Most of these are on the ribbon too, so they work by touch.
 - **New sheets** (Insert → New sheet, or S): tap two corners, name it; a new sheet file is created and is
   committed with your next save. Select a sheet for **ADD PIN** (adds the pin and the matching sheet port
   inside), **IMPORT PINS** (pins for every sheet port the sub-sheet already has) or **DELETE**.
-- **My parts** (Insert → My parts): a simple symbol editor. Type the pins one per line (number, name, then
-  optional type and side) and the fields; see it live, then SAVE & PLACE. Start from a selected part to copy
-  its pins. Parts are kept on this device under **My parts** in Add part and the stencil dock, and can be
-  downloaded as a `.kicad_sym` for KiCad. Every placed part carries its own copy inside the sheet, so
-  drawings open in KiCad and on other devices.
+- **Symbol editor** (Insert → Make → Symbol editor; KiCad's Symbol Editor). Draw a part's body with rectangles,
+  circles, arcs, lines and text, and place pins by tapping where each one connects: name, number, type
+  (input, output, power in…), shape (inverted, clock…), direction, length, hidden, and alternate pin functions.
+  **Repeat** (Insert key) adds the next pin below with the number and name counting up. Parts can have several
+  units (A, B, C…, interchangeable or not) and a De Morgan body style; fields, keywords, pin name offset,
+  hidden pin names or numbers, power symbol, in BOM / on board. **Pin list** makes a box part from a typed or
+  pasted pin table. Checks duplicate pin numbers and pins off the 1.27 mm grid before saving. Parts are kept on
+  this device under **My parts** (Add part and the stencil dock) and download as a `.kicad_sym` for KiCad.
+  To change a part already on the drawing, select it → **EDIT SYMBOL**: **APPLY TO SCHEMATIC** updates it on
+  every sheet (as KiCad's "Update symbol in schematic"). In Add part, **EDIT A COPY** starts from any KiCad
+  library part.
 - **Design blocks** (Insert → Blocks, or Shift+B): save a selection (say a standard M12 sensor drop) by
   name and place it on any sheet of any project; parts get fresh references. Export the blocks to a file to
   share them with the team, and import them on another device.
@@ -449,10 +455,12 @@ Most of these are on the ribbon too, so they work by touch.
   - **Variables**: project text variables. Type `${NAME}` in any text, field or title block.
   - **Bus aliases**: a name for a set of signals, e.g. `CAN` = `CAN_H CAN_L GND`; label a bus `{CAN}` or
     `ENG{CAN}`. Kept in the top sheet in KiCad 8 format.
-  - **Net classes**: name, wire colour on the drawing, wire width, line style, and the PCB clearance and
+  - **Net classes**: name, wire colour, wire and bus width and line style (drawn on the sheet, in print and
+    SVG, for wires that don't have their own), and the PCB clearance and
     track width; plus patterns (`*CAN*`, `+24V`) that put nets in a class. To put one net in a class
     whatever its name, tap a wire → **NET CLASS** to add a net class flag (KiCad's directive label).
-  - **ERC**: severities, see Design check.
+  - **ERC**: severities, see Design check, and KiCad's **pin conflict table**: which pin types may share a net
+    (output with output is an error, unspecified pins give warnings…). Tap a square to change it.
 - **Bill of materials** (Analyse → Outputs → BOM): KiCad's Symbol Fields Table export. Choose and order the
   columns, rename their titles, group by any fields, leave out DNP parts, filter, sort, comma, semicolon
   or tab separated, and shorten reference runs (R1-R4). The settings are saved in the project file
@@ -486,7 +494,8 @@ index.html            app shell
 css/app.css           styles
 js/kicad-core.js      S-expression parser, schematic model, hierarchy and net connectivity
 js/render.js          canvas renderer, gestures, hit-testing
-js/setup.js           schematic setup (.kicad_pro settings), net classes, ERC severities, KiCad netlist and BOM export
+js/setup.js           schematic setup (.kicad_pro settings), net classes, ERC severities and pin map, KiCad netlist and BOM export
+js/symedit.js         symbol editor model: reads and writes KiCad library symbols
 js/github.js          GitHub REST access and project discovery
 js/storage.js         IndexedDB cache for downloaded files
 js/zip.js             ZIP reader for "Download ZIP" archives, and writer for edited files
@@ -502,6 +511,7 @@ samples/              KiCad's complex_hierarchy demo (GPL-3.0, see NOTICE.md); s
 test/compare-pcb.js   node test: compares schematic nets with the pad nets in .kicad_pcb files
 test/edit-test.js     node test: applies edits, re-parses and checks connectivity
 test/library-test.js  node test: places library parts and draws shapes, then re-parses
+test/symedit-test.js  node test: KiCad library symbols round-trip through the symbol editor; building a part
 test/setup-test.js    node test: schematic setup settings, bus aliases, net classes, new ERC rules, netlist and BOM
 test/loom-test.js     node test: wire numbers, wire list, checks and self-compare on every demo project
 test/stencil-test.js  node test: stencils on wires, parts dropped in series, copy and paste, group move
