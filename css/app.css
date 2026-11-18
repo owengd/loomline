@@ -928,3 +928,9 @@ body.rb-icons .rt { min-height: 36px; min-width: 38px; padding: 2px 4px; }
 .md code.ask-link { color: var(--blue); cursor: pointer; text-decoration: underline dotted; }
 .md pre { font: 12px/1.4 var(--mono); background: var(--canvas); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; overflow-x: auto; white-space: pre; }
 .hint.err { color: var(--red); }
+/* cable ratings in the cable dialog */
+.cable-rating { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.cable-rating:empty { display: none; }
+.cr-row { display: flex; gap: 8px; } .cr-row span { color: var(--fg-dim); min-width: 88px; } .cr-row b { font-weight: 500; }
+.cr-row.warn b { color: var(--warn); }
+.cr-src { color: var(--blue); font-size: 12px; }
