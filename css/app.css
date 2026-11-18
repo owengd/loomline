@@ -902,3 +902,29 @@ body.rb-icons .rt { min-height: 36px; min-width: 38px; padding: 2px 4px; }
 }
 .sx-units .chip.on { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }
 .su-panel > .btn { align-self: flex-start; }
+
+/* ---- Ask Claude panel */
+.rail-btn .dot { position: absolute; top: 8px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
+.panel-body.ask-body { gap: 10px; }
+.ask-log { display: flex; flex-direction: column; gap: 8px; }
+.ask-msg { padding: 8px 10px; border-radius: 6px; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.ask-msg.user { align-self: flex-end; max-width: 88%; background: var(--blue-soft); color: var(--fg); white-space: pre-wrap; }
+.ask-msg.bot { background: var(--surface); border: 1px solid var(--line); }
+.ask-msg.err { background: var(--red-soft); color: var(--red); }
+.ask-tool { font: 12px/1.4 var(--ui); color: var(--fg-dim); padding-left: 4px; }
+.ask-tool::before { content: '↳ '; }
+.ask-tool.busy::before { content: ''; }
+.ask-tool.busy { animation: askPulse 1.2s ease-in-out infinite; }
+@keyframes askPulse { 50% { opacity: 0.4; } }
+.ask-sugg { display: flex; flex-direction: column; gap: 6px; }
+.ask-sugg .btn { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: 36px; padding: 6px 10px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.ask-bar { display: flex; gap: 6px; align-items: flex-end; position: sticky; bottom: -20px; padding: 6px 0 8px; background: var(--chrome); }
+.ask-in { flex: 1; resize: vertical; min-height: 44px; max-height: 40vh; font: 14px/1.4 var(--ui); padding: 8px 10px; height: auto; }
+.md p, .md ul, .md ol, .md pre, .md h4 { margin: 0 0 6px; }
+.md > :last-child { margin-bottom: 0; }
+.md ul, .md ol { padding-left: 18px; }
+.md h4 { font-size: 13.5px; }
+.md code { font: 12.5px var(--mono); background: var(--canvas); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+.md code.ask-link { color: var(--blue); cursor: pointer; text-decoration: underline dotted; }
+.md pre { font: 12px/1.4 var(--mono); background: var(--canvas); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; overflow-x: auto; white-space: pre; }
+.hint.err { color: var(--red); }
