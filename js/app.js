@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '3.5.0';
+  const VERSION = '3.5.1';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -645,7 +645,7 @@
   // Values already used in this project, offered as suggestions (and to fill the rest from a known part number).
   function knownCables() {
     const seen = new Map();
-    for (const c of (window.CABLE_CATALOGUE || [])) seen.set(c.pn, { Cable_Type: c.type, Cable_PN: c.pn, Cable_Size: c.size, Cable_Colour: '', Cable_Length: '', desc: c.desc, cores: c.cores || [], cat: true });
+    for (const c of (window.CABLE_CATALOGUE || [])) seen.set(c.pn, { Cable_Type: c.type, Cable_PN: c.pn, Cable_Size: c.size, Cable_Colour: '', Cable_Length: '', desc: c.desc, cores: c.cores || [], rating: c.rating || null, cat: true });
     for (const inst of state.project.instances) for (const l of inst.sheet.labels) if (Loom.isCableFlag(l)) { const f = Loom.cableFields(l); const k = f.Cable_PN || f.Cable_Type; if (k && !seen.has(k)) seen.set(k, f); }
     return Array.from(seen.values());
   }
@@ -706,7 +706,7 @@
       return h('div', { class: 'fieldrow' }, h('label', { text: LABELS[f][0] }), inp, vals.length && f !== 'Cable_Length' ? h('datalist', { id: listId }, ...vals.map((v) => h('option', { value: v, label: hintFor(v) || null }))) : null);
     });
     // Picking a product code, or a type that only one product code has, fills in the rest.
-    const apply = (k) => { for (const f of ['Cable_Type', 'Cable_PN', 'Cable_Size']) if (k[f]) inputs[f].value = k[f]; desc.textContent = k.desc || ''; setCores(k); };
+    const apply = (k) => { for (const f of ['Cable_Type', 'Cable_PN', 'Cable_Size']) if (k[f]) inputs[f].value = k[f]; desc.textContent = k.desc || ''; showRating(k); setCores(k); };
     const fill = (key) => () => {
       const v = inputs[key].value.trim();
       const m = known.filter((x) => x[key] && x[key] === v);
@@ -715,6 +715,22 @@
     // The catalogue as a plain list: easier than typing on a tablet.
     const cat = known.filter((k) => k.cat);
     const desc = h('p', { class: 'hint', text: (known.find((k) => k.Cable_PN && k.Cable_PN === cur.Cable_PN) || {}).desc || '' });
+    // What the maker publishes: current capacity first, so it can be checked against the load.
+    const rate = h('div', { class: 'cable-rating' });
+    const showRating = (k) => {
+      const r = k && k.rating;
+      rate.replaceChildren();
+      if (!r) return;
+      const row = (label, v, warn) => h('div', { class: 'cr-row' + (warn ? ' warn' : '') }, h('span', { text: label }), h('b', { text: v }));
+      rate.append(row('Current', r.amps || 'not published by the maker: check SAE AS50881', !r.amps));
+      if (r.ohms) rate.append(row('Resistance', r.ohms));
+      if (r.volts) rate.append(row('Voltage', r.volts));
+      if (r.temp) rate.append(row('Temperature', r.temp));
+      if (r.od) rate.append(row('Diameter', r.od));
+      if (r.other) rate.append(row('Other', r.other));
+      if (r.src) rate.append(h('a', { class: 'cr-src', href: r.src, target: '_blank', rel: 'noopener', text: 'Data sheet' }));
+    };
+    showRating(known.find((k) => k.Cable_PN && k.Cable_PN === cur.Cable_PN));
     const pick = h('select', { class: 'input', onchange: () => { const k = cat[+pick.value]; if (k) apply(k); } },
       h('option', { value: '', text: cat.length ? 'Choose from the cable list…' : 'No cable list' }),
       ...cat.map((k, i) => h('option', { value: String(i), text: `${k.Cable_Type} — ${k.Cable_PN}`, selected: k.Cable_PN === cur.Cable_PN })));
@@ -731,7 +747,7 @@
     };
     setCores(cat.find((k) => k.Cable_PN === cur.Cable_PN));
     if (c.bus) rows.splice(Loom.CABLE.indexOf('Cable_Colour'), 1);   // each member's colour comes from the cable list
-    rows.unshift(h('div', { class: 'fieldrow' }, h('label', { text: 'Cable list' }), pick), desc);
+    rows.unshift(h('div', { class: 'fieldrow' }, h('label', { text: 'Cable list' }), pick), desc, rate);
     if (!c.bus) rows.splice(2, 0, h('div', { class: 'fieldrow' }, h('label', { text: 'Core' }), coreSel));
     inputs.Cable_PN.addEventListener('change', fill('Cable_PN'));
     inputs.Cable_Type.addEventListener('change', fill('Cable_Type'));
