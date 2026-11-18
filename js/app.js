@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '3.4.0';
+  const VERSION = '3.5.0';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -796,7 +796,7 @@
   // ------------------------------------------------------------------ side panel + tool rail
   // The rail on the right (bottom on phones) opens a panel next to it, like the KiCad Editor app.
   const wideLayout = () => window.matchMedia('(min-width: 761px)').matches;
-  const TAB_TITLES = { sheets: 'SHEETS', nets: 'NET NAVIGATOR', parts: 'PARTS', info: 'PROPERTIES', check: 'DESIGN CHECK', install: 'INSTALL', reports: 'REPORTS', build: 'BUILD LOOMS', compare: 'COMPARE REVISIONS' };
+  const TAB_TITLES = { sheets: 'SHEETS', nets: 'NET NAVIGATOR', parts: 'PARTS', info: 'PROPERTIES', check: 'DESIGN CHECK', install: 'INSTALL', reports: 'REPORTS', build: 'BUILD LOOMS', compare: 'COMPARE REVISIONS', ask: 'ASK CLAUDE' };
   state.tab = 'sheets';
   state.panelOpen = false;
   function setPanel(open) {
@@ -836,6 +836,8 @@
     const body = $('panelBody');
     const top = body.scrollTop;
     body.replaceChildren();
+    body.classList.toggle('ask-body', state.tab === 'ask');
+    if (state.tab === 'ask') { renderAsk(body); return; }
     if (!state.project) { body.append(h('p', { class: 'empty', text: 'Open a project first.' })); return; }
     if (state.tab === 'sheets') renderHierarchy(body);
     else if (state.tab === 'nets') renderNetNavigator(body);
@@ -849,6 +851,239 @@
     if (state._keepScroll) body.scrollTop = top;
     state._keepScroll = false;
   }
+  // ---- Ask Claude tab: questions about the app and the open project, answered with the person's own API key
+  const ask = {
+    chat: null, draft: '', setup: false, models: null, modelErr: '',
+    key() { try { return Store.pref('claudeKey') || sessionStorage.getItem('st.claudeKey') || null; } catch (e) { return Store.pref('claudeKey'); } },
+    setKey(k, remember) {
+      try { sessionStorage.setItem('st.claudeKey', k || ''); } catch (e) { /* ignore */ }
+      Store.pref('claudeKey', remember && k ? k : null);
+    },
+    model() { return Store.pref('claudeModel') || null; }
+  };
+  function askNet(name) {
+    const P = state.project; if (!P || !name) return null;
+    const q = String(name).trim(), ql = q.toLowerCase();
+    const all = P.nets.filter((n) => n.named || n.pins.length);
+    return all.find((n) => n.name === q) || all.find((n) => plain(n.name) === q) || all.find((n) => plain(n.name).toLowerCase() === ql)
+      || all.find((n) => n.names.some((x) => plain(x.name).toLowerCase() === ql)) || all.find((n) => plain(n.name).toLowerCase().endsWith('/' + ql)) || null;
+  }
+  function askSheet(name) {
+    const P = state.project; if (!P || name === undefined || name === null) return null;
+    const q = String(name).trim().toLowerCase();
+    return P.instances.find((i) => String(i.page) === q || 'p' + i.page === q) || P.instances.find((i) => i.name.toLowerCase() === q || i.namePath.toLowerCase() === q)
+      || P.instances.find((i) => K.basename(i.sheet.path).toLowerCase() === q || K.basename(i.sheet.path).toLowerCase() === q + '.kicad_sch') || P.instances.find((i) => i.namePath.toLowerCase().includes(q)) || null;
+  }
+  const askWire = (n) => (state.A && state.A.wireNo[n.id]) || '';
+  const askSheetName = (inst) => (inst.parent ? inst.namePath : 'Root') + ' (p' + inst.page + ')';
+  function askContext() {
+    const P = state.project, out = [];
+    out.push('Loomline ' + VERSION + ', screen ' + (wideLayout() ? 'wide (tablet/laptop)' : 'narrow (phone)') + ', ' + (navigator.onLine === false ? 'offline' : 'online'));
+    if (!P) { out.push('No project open.'); return out.join('\n'); }
+    const s = state.source || {};
+    out.push('Project: ' + P.name + (s.kind === 'github' ? ' from GitHub ' + s.repo + ' branch ' + (s.ref || 'default') + (s.head && s.head.sha ? ' at ' + s.head.sha.slice(0, 7) : '') + (s.pinned ? ' (an older revision)' : '') : ' (local files)'));
+    out.push(P.instances.length + ' sheets, ' + (state.index ? state.index.parts.length : 0) + ' parts, ' + (state.index ? state.index.nets.length : 0) + ' nets');
+    if (state.inst) out.push('Showing sheet: ' + askSheetName(state.inst) + ', file ' + K.basename(state.inst.sheet.path));
+    const sel = state.sel;
+    if (sel && sel.type === 'symbol') out.push('Selected part: ' + sel.inst.refs[sel.si].ref);
+    else if (sel && sel.type === 'net') out.push('Selected net: ' + plain(sel.net.name));
+    else if (sel && sel.type === 'sheet') out.push('Selected sheet symbol on this sheet');
+    else if (sel && sel.type === 'multi') out.push('Several items selected');
+    if (state.A) { const I = shownIssues(); out.push('Design check: ' + I.filter((i) => i.sev === 'error').length + ' errors, ' + I.filter((i) => i.sev !== 'error').length + ' warnings'); }
+    const pend = typeof pendingFiles === 'function' ? pendingFiles().length : 0;
+    if (pend) out.push('Unsaved edits in ' + pend + ' file' + (pend === 1 ? '' : 's'));
+    if (state.panelOpen && state.tab !== 'ask') out.push('Side panel open: ' + (TAB_TITLES[state.tab] || state.tab));
+    return out.join('\n');
+  }
+  const ASK_TOOLS = [
+    { name: 'find', label: (i) => 'Searched for “' + i.query + '”',
+      description: 'Search the open project for parts (by reference, value or any field), nets (by name or label) and sheets. Returns the best matches.',
+      input_schema: { type: 'object', properties: { query: { type: 'string', description: 'Words to look for, e.g. "U204", "24V", "lidar", "CIS"' }, kind: { type: 'string', enum: ['any', 'part', 'net', 'sheet'] } }, required: ['query'] },
+      run(i) {
+        if (!state.index) return 'No project is open.';
+        const terms = String(i.query || '').toLowerCase().split(/\s+/).filter(Boolean), k = i.kind || 'any';
+        const hit = (hay) => terms.every((t) => hay.includes(t));
+        const out = {};
+        if (k === 'any' || k === 'part') { const r = state.index.parts.filter((p) => hit(p.hay)); out.parts = r.slice(0, 40).map((p) => p.ref + p.unit + ' = ' + p.val + ' on ' + askSheetName(p.inst)); if (r.length > 40) out.moreParts = r.length - 40; }
+        if (k === 'any' || k === 'net') { const r = state.index.nets.filter((n) => hit(n.hay)); out.nets = r.slice(0, 40).map((n) => plain(n.net.name) + ' (' + n.net.pins.length + ' pins' + (askWire(n.net) ? ', wire ' + askWire(n.net) : '') + ')'); if (r.length > 40) out.moreNets = r.length - 40; }
+        if (k === 'any' || k === 'sheet') out.sheets = state.index.sheets.filter((s) => hit(s.hay)).slice(0, 30).map((s) => askSheetName(s.inst) + ' file ' + K.basename(s.inst.sheet.path));
+        return out;
+      } },
+    { name: 'part', label: (i) => 'Looked up ' + i.ref,
+      description: 'Details of one part: value, all fields, sheet(s), and every pin with its net, wire number and what else is on that net.',
+      input_schema: { type: 'object', properties: { ref: { type: 'string', description: 'Reference designator, e.g. U204 or J3' } }, required: ['ref'] },
+      run(i) {
+        const P = state.project; if (!P) return 'No project is open.';
+        const ref = String(i.ref || '').trim();
+        const units = state.index.parts.filter((p) => p.ref.toLowerCase() === ref.toLowerCase() || (p.ref + p.unit).toLowerCase() === ref.toLowerCase());
+        if (!units.length) return 'No part ' + ref + ' in this project.';
+        const s0 = units[0].inst.sheet.symbols[units[0].si];
+        const fields = {}; for (const p of s0.props) if (p.value && p.name !== 'Reference') fields[p.name] = plain(p.value);
+        const pins = [];
+        for (const n of P.nets) for (const p of n.pins) if (p.ref === units[0].ref) {
+          const others = n.pins.filter((q) => q !== p).map((q) => q.ref + '.' + q.number + (q.name && q.name !== '~' ? ' ' + plain(q.name) : ''));
+          pins.push({ pin: p.number, name: plain(p.name || ''), type: p.type, net: (n.named || n.pins.length > 1) ? plain(n.name) : '(unconnected)', wire: askWire(n) || undefined, to: others.slice(0, 12).join(', ') + (others.length > 12 ? ' … +' + (others.length - 12) : '') });
+        }
+        pins.sort((a, b) => K.naturalCmp(a.pin, b.pin));
+        return { ref: units[0].ref, library: s0.libId || (s0.lib && s0.lib.name), fields, units: units.map((u) => (u.unit || '') + ' on ' + askSheetName(u.inst)), pins };
+      } },
+    { name: 'net', label: (i) => 'Looked up net ' + i.name,
+      description: 'Details of one net: every pin on it (part.pin name), the sheets it reaches, its other label names, wire number and the wire list (from → to).',
+      input_schema: { type: 'object', properties: { name: { type: 'string', description: 'Net or label name, e.g. 24V_ILS or /ILS/24V_ILS' } }, required: ['name'] },
+      run(i) {
+        const n = askNet(i.name); if (!n) return 'No net called ' + i.name + '. Try find.';
+        const P = state.project;
+        const sheets = Array.from(n.inst.keys()).map((k) => askSheetName(P.instances[k]));
+        const wires = state.A && state.A.wiresByNet.get(n.id);
+        return { name: plain(n.name), otherNames: Array.from(new Set(n.names.map((x) => plain(x.name)))).filter((x) => x !== plain(n.name)), wire: askWire(n) || undefined, bus: !!n.bus || undefined,
+          pins: n.pins.map((p) => p.ref + '.' + p.number + (p.name && p.name !== '~' ? ' ' + plain(p.name) : '') + ' [' + p.type + ']'), sheets,
+          wires: wires ? wires.slice(0, 60).map((w) => (w.no || '') + ': ' + w.a.ref + '.' + w.a.number + ' → ' + w.b.ref + '.' + w.b.number) : undefined };
+      } },
+    { name: 'sheets', label: () => 'Listed the sheets',
+      description: 'The sheet hierarchy: page, path, file and number of parts on each sheet.',
+      input_schema: { type: 'object', properties: {} },
+      run() {
+        const P = state.project; if (!P) return 'No project is open.';
+        return P.instances.map((i) => 'p' + i.page + '  ' + (i.parent ? i.namePath : 'Root') + '  [' + K.basename(i.sheet.path) + ']  ' + i.sheet.symbols.filter((s) => s.lib && !s.lib.power).length + ' parts').join('\n');
+      } },
+    { name: 'issues', label: () => 'Read the design check',
+      description: 'Problems found by the design check (ERC), as shown in the Check panel: counts by kind and the list (id, severity, page, zone, message). Filter by kind code, sheet or text.',
+      input_schema: { type: 'object', properties: { text: { type: 'string', description: 'Only problems whose message contains this' }, sheet: { type: 'string', description: 'Sheet name, file or page number' }, kind: { type: 'string', description: 'Kind code from the counts' } } },
+      run(i) {
+        if (!state.A) return 'No project is open.';
+        const all = shownIssues(); const counts = {};
+        for (const is of all) { const k = is.code + ' (' + (CHECK_KINDS[is.code] || kicadKinds.get(is.code) || is.code) + ')'; counts[k] = (counts[k] || 0) + 1; }
+        const sh = i.sheet ? askSheet(i.sheet) : null;
+        const list = all.map((is, id) => ({ is, id })).filter(({ is }) => (!i.kind || is.code === i.kind) && (!sh || is.inst === sh.idx) && (!i.text || is.msg.toLowerCase().includes(String(i.text).toLowerCase())));
+        return { counts, matching: list.length, problems: list.slice(0, 60).map(({ is, id }) => id + ' ' + is.sev + ' p' + is.page + ' ' + is.zone + ': ' + is.msg), hidden: checkHide.size ? Array.from(checkHide) : undefined };
+      } },
+    { name: 'show', label: (i) => 'Showed ' + (i.name || i.kind) + ' on the drawing',
+      description: 'Move the drawing to something so the person can see it: a part (selects and zooms to it), a net (highlights it and zooms to it on a sheet where it appears), a sheet (opens it), or a design-check problem by its id from issues.',
+      input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['part', 'net', 'sheet', 'issue'] }, name: { type: 'string', description: 'Reference, net name, sheet name/page, or problem id' }, sheet: { type: 'string', description: 'For a net: the sheet to show it on (optional)' } }, required: ['kind', 'name'] },
+      run(i) { return askShow(i.kind, i.name, i.sheet); } }
+  ];
+  function askShow(kind, name, sheetName) {
+    const P = state.project; if (!P) return 'No project is open.';
+    if (kind === 'part') {
+      const r = findRef(String(name).trim()) || findRef(String(name).trim().toUpperCase()); if (!r) return 'No part ' + name;
+      selectSymbol(r.inst, r.si, true); return 'Showing ' + name + ' on ' + askSheetName(r.inst);
+    }
+    if (kind === 'net') {
+      const n = askNet(name); if (!n) return 'No net ' + name;
+      let inst = sheetName ? askSheet(sheetName) : null;
+      if (!inst || !n.inst.has(inst.idx)) inst = n.inst.has(state.inst.idx) ? state.inst : P.instances[Array.from(n.inst.keys())[0]];
+      if (!inst) return 'That net is not drawn on any sheet.';
+      if (inst !== state.inst) showInstance(inst);
+      selectNet(n, null);
+      const b = netBoxOn(inst, n); if (b) view.animateTo([b[0] - 5, b[1] - 5, b[2] + 5, b[3] + 5]);
+      return 'Highlighted ' + plain(n.name) + ' on ' + askSheetName(inst);
+    }
+    if (kind === 'sheet') { const inst = askSheet(name); if (!inst) return 'No sheet ' + name; showInstance(inst); return 'Opened ' + askSheetName(inst); }
+    if (kind === 'issue') { const is = shownIssues()[+name]; if (!is) return 'No problem with id ' + name; pickIssue(is, true); return 'Showing: ' + is.msg; }
+    return 'Unknown kind ' + kind;
+  }
+  function askChat() {
+    if (!ask.chat) ask.chat = new Assistant.Chat({
+      key: () => ask.key(), model: () => ask.model(), tools: ASK_TOOLS, context: askContext,
+      system: () => Assistant.SYSTEM,
+      guide: () => Assistant.GUIDE + '\n## Keyboard shortcuts\n' + HOTKEYS.map(([t, keys]) => '- ' + t + ': ' + keys.map(([k, d]) => k + ' = ' + d).join('; ')).join('\n')
+    });
+    return ask.chat;
+  }
+  const askRefresh = () => { if (state.panelOpen && state.tab === 'ask') renderPanel(); else if (ask.chat && !ask.chat.busy) $('askDot').hidden = false; };
+  async function askSend(text) {
+    text = String(text || '').trim(); if (!text) return;
+    if (!ask.model()) { ask.setup = true; renderPanel(); toast('Choose a model first.'); return; }
+    ask.draft = '';
+    await askChat().ask(text, askRefresh);
+  }
+  async function askLoadModels(key) {
+    ask.models = null; ask.modelErr = '';
+    try { ask.models = await Assistant.listModels(key); if (!ask.models.length) ask.modelErr = 'This key has no models available.'; }
+    catch (e) { ask.modelErr = e.message || String(e); }
+  }
+  function renderAskSetup(body) {
+    const has = !!ask.key();
+    const keyIn = h('input', { class: 'input', type: 'password', id: 'askKey', placeholder: has ? 'Key saved; paste a new one to replace it' : 'sk-ant-…', autocomplete: 'off', spellcheck: 'false', autocapitalize: 'off' });
+    const rem = h('input', { type: 'checkbox', checked: Store.pref('claudeKey') ? true : !has });
+    const sel = h('select', { class: 'input', id: 'askModel' });
+    const msg = h('p', { class: 'hint' });
+    const fillModels = () => {
+      sel.replaceChildren();
+      const ms = ask.models || [];
+      const cur = ask.model() || Assistant.defaultModel(ms);
+      if (!ms.length) sel.append(h('option', { value: cur || '', text: cur || 'Check the key to list models' }));
+      for (const m of ms) sel.append(h('option', { value: m.id, text: m.name + (m.id === Assistant.defaultModel(ms) ? ' (suggested)' : ''), selected: m.id === cur }));
+      msg.textContent = ask.modelErr || (ms.length ? 'Sonnet models are quick and cheaper; Opus models are the most capable and cost more per question.' : '');
+      msg.className = 'hint' + (ask.modelErr ? ' err' : '');
+    };
+    fillModels();
+    const check = h('button', { class: 'btn small', onclick: async () => {
+      const k = keyIn.value.trim() || ask.key(); if (!k) { msg.textContent = 'Paste your API key first.'; msg.className = 'hint err'; return; }
+      msg.textContent = 'Checking the key…'; msg.className = 'hint';
+      await askLoadModels(k); fillModels();
+    } }, icon('i-sync'), 'CHECK KEY');
+    const save = h('button', { class: 'btn small primary', onclick: async () => {
+      const k = keyIn.value.trim();
+      if (k) { if (!ask.models) { msg.textContent = 'Checking the key…'; await askLoadModels(k); fillModels(); if (ask.modelErr) return; } ask.setKey(k, rem.checked); }
+      else if (has) ask.setKey(ask.key(), rem.checked);
+      if (!ask.key()) { msg.textContent = 'Paste your API key first.'; msg.className = 'hint err'; return; }
+      if (sel.value) Store.pref('claudeModel', sel.value);
+      ask.setup = false; renderPanel(); toast('Ask Claude is ready');
+    } }, icon('i-check'), 'SAVE');
+    const remove = has ? h('button', { class: 'btn small', onclick: () => { ask.setKey(null, false); ask.models = null; if (ask.chat) ask.chat.clear(); renderPanel(); toast('API key removed from this device'); } }, icon('i-trash'), 'REMOVE KEY') : null;
+    const cancel = has && ask.model() ? h('button', { class: 'btn small', onclick: () => { ask.setup = false; renderPanel(); } }, 'CANCEL') : null;
+    body.append(h('p', { class: 'hint', text: 'Ask Claude answers questions about Loomline and the open project, and can show you parts, nets, sheets and problems on the drawing. It uses your own Claude API key.' }),
+      h('div', { class: 'field' }, h('label', { for: 'askKey', text: 'Claude API key' }), keyIn),
+      h('label', { class: 'check' }, rem, 'Remember the key on this device'),
+      h('div', { class: 'field' }, h('label', { for: 'askModel', text: 'Model' }), sel), msg,
+      h('div', { class: 'actions' }, check, save, remove, cancel),
+      h('p', { class: 'hint', text: 'Get a key at console.anthropic.com → API keys (an API account with credit; it is billed per question, separately from a Claude.ai subscription). Set a monthly spend limit there if you like. The key stays on this device and is sent only to Anthropic’s API. When you ask something, your question and the parts of the schematic Claude looks up are sent to Anthropic to answer it.' }));
+  }
+  const ASK_SUGGEST = ['How do I trace a net from one connector to another?', 'What problems does the design check show on this sheet?', 'What is connected to the selected part?', 'How do I save my edits to GitHub?'];
+  function renderAsk(body) {
+    $('askDot').hidden = true;
+    if (ask.setup || !ask.key() || !ask.model()) { renderAskSetup(body); return; }
+    const chat = askChat();
+    const linkCode = (el, t) => {
+      const P = state.project; if (!P) return;
+      const go = findRef(t) ? ['part', t] : askNet(t) ? ['net', t] : askSheet(t) && !/^\d+$/.test(t) ? ['sheet', t] : null;
+      if (!go) return;
+      el.classList.add('ask-link'); el.setAttribute('role', 'link'); el.tabIndex = 0;
+      el.addEventListener('click', () => { askShow(go[0], go[1]); afterPick(); });
+    };
+    const log = h('div', { class: 'ask-log', id: 'askLog' });
+    if (!chat.log.length) {
+      log.append(h('p', { class: 'hint', text: 'Ask about how to do something in Loomline, or about the open project: what a part connects to, where a net goes, why a problem is flagged.' }));
+      log.append(h('div', { class: 'ask-sugg' }, ...ASK_SUGGEST.map((q) => h('button', { class: 'btn small', onclick: () => askSend(q) }, q))));
+    }
+    let lastQ = null;
+    for (const m of chat.log) {
+      if (m.role === 'user') log.append(lastQ = h('div', { class: 'ask-msg user', text: m.text }));
+      else if (m.role === 'assistant') { const d = h('div', { class: 'ask-msg bot' }); d.append(Assistant.render(m.text, document, linkCode)); log.append(d); }
+      else if (m.role === 'tool') log.append(h('div', { class: 'ask-tool', text: m.text }));
+      else log.append(h('div', { class: 'ask-msg err', text: m.text }));
+    }
+    if (chat.busy) log.append(h('div', { class: 'ask-tool busy', text: 'Thinking…' }));
+    const ta = h('textarea', { class: 'input ask-in', id: 'askIn', rows: 2, placeholder: 'Ask Claude…', 'aria-label': 'Question for Claude', oninput: (e) => { ask.draft = e.target.value; },
+      onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!chat.busy) askSend(ta.value); } } });
+    ta.value = ask.draft;
+    const send = chat.busy ? h('button', { class: 'btn small', onclick: () => chat.stop() }, icon('i-close'), 'STOP')
+      : h('button', { class: 'btn small primary', onclick: () => askSend(ta.value) }, icon('i-next'), 'ASK');
+    const u = chat.usage;
+    body.append(log, h('div', { class: 'ask-bar' }, ta, send),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn small', disabled: chat.busy || !chat.log.length, onclick: () => { chat.clear(); renderPanel(); } }, icon('i-plus'), 'NEW CHAT'),
+        h('button', { class: 'btn small', disabled: chat.busy, onclick: () => { ask.setup = true; if (!ask.models) askLoadModels(ask.key()).then(() => { if (state.tab === 'ask') renderPanel(); }); renderPanel(); } }, icon('i-props'), 'KEY & MODEL')),
+      h('p', { class: 'hint', text: (ask.model() || '') + (u.input || u.output ? ' · this chat: ' + Math.round((u.input + u.cacheRead + u.cacheWrite) / 1000) + 'k tokens in, ' + Math.round(u.output / 1000 * 10) / 10 + 'k out' : '') }));
+    // While waiting, keep the bottom in view; once answered, start at the question so a long answer reads from the top.
+    requestAnimationFrame(() => {
+      if (chat.busy || !lastQ) body.scrollTop = body.scrollHeight;
+      else body.scrollTop = Math.max(0, lastQ.offsetTop - body.offsetTop - 8);
+      if (!chat.busy && wideLayout()) ta.focus({ preventScroll: true });
+    });
+  }
+
   // ---- Parts tab
   function renderParts(body) {
     const input = h('input', { class: 'input', type: 'search', placeholder: 'Filter: ref, value, footprint', value: state.partFilter || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
@@ -3218,6 +3453,7 @@
         { label: immersive.on ? 'Exit full' : 'Full screen', icon: immersive.on ? 'i-shrink' : 'i-expand', run: () => { setImmersive(!immersive.on); renderRibbon(); } },
         { label: 'Tool labels', icon: 'i-text', on: !document.body.classList.contains('rb-icons'), run: () => { const on = document.body.classList.toggle('rb-icons'); Store.pref('rbIcons', on); renderRibbon(); requestAnimationFrame(() => view.resize()); } },
         { label: 'Keys', icon: 'i-info', run: showHotkeys },
+        { label: 'Ask Claude', icon: 'i-ask', on: state.panelOpen && state.tab === 'ask', run: () => { if (state.panelOpen && state.tab === 'ask') setPanel(false); else showTab('ask', true); } },
         { label: 'Theme', icon: 'i-theme', run: () => { const order = ['auto', 'light', 'dark']; const t = order[(order.indexOf(Store.pref('theme') || 'auto') + 1) % 3]; Store.pref('theme', t); applyTheme(); toast('Theme: ' + t); renderRibbon(); } }] }
     ];
     return [];
