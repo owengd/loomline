@@ -550,10 +550,32 @@
     return { path: sheet.path, text: sp.apply() };
   }
 
-  function rotateLabel(sheet, label) {
+  function rotateLabel(sheet, label) { return rotateLabels(sheet, [label]); }
+  /** Rotate labels 90° in place, each about its own anchor. A cable / net class flag turns too: its text
+   *  goes horizontal ↔ vertical and steps round the sides (0°, 90°, 180°, 270°). */
+  function rotateLabels(sheet, labels) {
+    const sp = new Splicer(sheet.text);
+    for (const l of labels) {
+      if (l.kind === 'directive') rotateFlagInto(sp, sheet, l);
+      else rotateLabelInto(sp, l);
+    }
+    return { path: sheet.path, text: sp.apply() };
+  }
+  function rotateFlagInto(sp, sheet, label) {
+    const v8 = !sheet.version || sheet.version >= 20231120;
+    const text = sheet.text;
+    const angle = ((Math.round((label.angle || 0) / 90) * 90 + 90) % 360 + 360) % 360;
+    const vertical = angle === 90 || angle === 270, side = angle === 180 || angle === 270 ? 'b' : 'a';
+    const fields = {}; for (const p of label.props) if (CABLE_FIELDS.includes(p.name)) fields[p.name] = p.value;
+    const at = cableTextAt(label.p, vertical, side);
+    // Other fields (e.g. Netclass) are kept and moved beside the flag in the new direction.
+    const extra = label.props.filter((p) => !CABLE_FIELDS.includes(p.name)).map((p) => cableFieldLines(p.name, p.value, at, vertical ? 90 : 0, !!(p.fx && p.fx.hide), v8).join(' '));
+    const r = nodeRange(text, label.src);
+    sp.replace(r[0], r[1], block(cableFlagLines(label.p, vertical, fields, v8, label.uuid, extra, side), indentAt(text, label.src.s)));
+  }
+  function rotateLabelInto(sp, label) {
     const order = ['right', 'up', 'left', 'bottom'];
     const spin = order[(order.indexOf(label.spin) + 1) % 4];
-    const sp = new Splicer(sheet.text);
     const a = atNode(label.src);
     if (a.length > 3) setTok(sp, a, 3, String(SPIN_ANGLE[spin])); else sp.insert(K.tokSpan(sp.text, a, 2)[1], ' ' + SPIN_ANGLE[spin]);
     const fx = K.find(label.src, 'effects');
@@ -561,7 +583,6 @@
     const jtext = justifyFor(label.kind === 'directive' ? 'global' : label.kind, spin);
     if (just) sp.replace(just.s, just.e, jtext);
     else if (fx) sp.insert(fx.e - 1, ' ' + jtext);
-    return { path: sheet.path, text: sp.apply() };
   }
 
   /** Delete items; junctions left with fewer than three connections are tidied away. */
@@ -1965,7 +1986,7 @@
   root.KiEdit = {
     CABLE_FIELDS, addCableFlag, setCableFields, cableSideOf, cableTextAt,
     GRID, snap, same, fnum, qstr, uuid, connectionPoints,
-    setSymbolFields, setFieldMany, renameLabel, editText, moveItems, transformSymbol, rotateLabel, deleteItems, copySymbol, setDefaults, defaults, addWires, addWireSegs, addNetClassFlag, setNetClassOfFlag, addLabel, addNoConnect, addJunction, nextReference,
+    setSymbolFields, setFieldMany, renameLabel, editText, moveItems, transformSymbol, rotateLabel, rotateLabels, deleteItems, copySymbol, setDefaults, defaults, addWires, addWireSegs, addNetClassFlag, setNetClassOfFlag, addLabel, addNoConnect, addJunction, nextReference,
     reparse, connectAt, insertInWire, copyItems, pasteItems,
     flattenLibSymbol, addLibSymbol, addUnit, libUnits, addGraphic, moveNode, deleteNode, styleNode, pretty,
     setSnapGrid, snapGrid, setReferences, annotate, replaceInSheet, placeFields,

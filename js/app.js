@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '3.5.2';
+  const VERSION = '3.5.3';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -1944,6 +1944,7 @@
         A.push({ label: 'CABLE', icon: 'i-cable', run: () => cableDialog(s) });
         if (Loom.isCableFlag(o)) A.push({ label: 'FLIP SIDE', icon: 'i-flip', run: () => run('Flip cable tag', () => { const f = Loom.cableFields(o); f.Cable_Label = Loom.cableLabel(f); return E.setCableFields(sh, o, f, E.cableSideOf(o) === 'a' ? 'b' : 'a'); }) });
         A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'label', uuid: uuidOf(o), name: 'cable flag' }) });
+        A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate ' + (Loom.isCableFlag(o) ? 'cable tag' : 'flag'), () => E.rotateLabel(sh, o)) });
         A.push({ label: 'DELETE', icon: 'i-trash', danger: true, run: () => run('Delete cable flag', () => E.deleteItems(sh, [{ type: 'label', label: o }]), { anchor: null }) });
       } else if (it && it.type === 'label' && o) {
         A.push({ label: 'RENAME', icon: 'i-edit', run: () => labelDialog({ rename: o }) });
@@ -1984,6 +1985,13 @@
       const r = multiResolve(s.m), n = r.items.length;
       A.push({ label: 'MOVE', icon: 'i-move', run: () => startMove({ type: 'multi', name: n + ' items' }) });
       A.push({ label: 'EDIT ALL', icon: 'i-edit', run: multiEditDialog });
+      // Rotate: one part turns about its anchor (as when tapped). Labels and cable tags each turn in place;
+      // a box round a tag usually catches a bit of its wire too, and wires, junctions and no-connects
+      // just stay where they are.
+      const lbls = r.items.filter((x) => x.type === 'label').map((x) => x.label);
+      const others = r.items.filter((x) => x.type !== 'label' && x.type !== 'wire' && x.type !== 'junction' && x.type !== 'nc');
+      if (n === 1 && r.items[0].type === 'symbol') { const sym = r.items[0].sym; A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run('Rotate part', () => E.transformSymbol(sh, sym, 'rotate'), { checkMerges: true }) }); }
+      else if (lbls.length && !others.length) A.push({ label: 'ROTATE', icon: 'i-rotate', run: () => run(lbls.length === 1 ? (Loom.isCableFlag(lbls[0]) ? 'Rotate cable tag' : 'Rotate label') : `Rotate ${lbls.length} labels`, () => E.rotateLabels(sh, lbls)) });
       if (r.syms.size) A.push({ label: 'LOOM', icon: 'i-tag', run: () => loomDialog(Array.from(r.syms).map((si) => ({ inst: state.inst, si }))) });
       A.push({ label: 'COPY', icon: 'i-copy2', run: copySel });
       A.push({ label: 'DUPLICATE', icon: 'i-dup', run: duplicateSel });
