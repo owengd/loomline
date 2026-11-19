@@ -934,3 +934,5 @@ body.rb-icons .rt { min-height: 36px; min-width: 38px; padding: 2px 4px; }
 .cr-row { display: flex; gap: 8px; } .cr-row span { color: var(--fg-dim); min-width: 88px; } .cr-row b { font-weight: 500; }
 .cr-row.warn b { color: var(--warn); }
 .cr-src { color: var(--blue); font-size: 12px; }
+.cr-note { color: var(--fg-dim); font-size: 11.5px; line-height: 1.4; margin: 0 0 4px 96px; } .cr-note a { color: var(--blue); }
+@media (max-width: 760px) { .cr-note { margin-left: 0; } }
