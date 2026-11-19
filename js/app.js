@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '3.5.1';
+  const VERSION = '3.5.2';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -722,7 +722,8 @@
       rate.replaceChildren();
       if (!r) return;
       const row = (label, v, warn) => h('div', { class: 'cr-row' + (warn ? ' warn' : '') }, h('span', { text: label }), h('b', { text: v }));
-      rate.append(row('Current', r.amps || 'not published by the maker: check SAE AS50881', !r.amps));
+      rate.append(row('Current', r.amps || 'no rating', !r.amps));
+      if (r.ampsNote) rate.append(h('div', { class: 'cr-note' }, r.ampsNote, r.ampsSrc ? h('a', { href: r.ampsSrc, target: '_blank', rel: 'noopener', text: ' Source' }) : null));
       if (r.ohms) rate.append(row('Resistance', r.ohms));
       if (r.volts) rate.append(row('Voltage', r.volts));
       if (r.temp) rate.append(row('Temperature', r.temp));
