@@ -51,4 +51,11 @@ colour pinouts, a DE-9 CAN connector to
 CiA 303-1, BNC, RP-SMA and 2.1 mm DC plug and jack. Manufacturer, part number, series, contacts,
 wedgelock, mating half and data sheet are in hidden fields. `connectors.json` is the same for the app.
 
+`Loomline_Power.kicad_sym` has DC/DC converters, reference PS: the Cosel CQHS3004850 (quarter brick,
+300 W, 36-76 V in, 50 V 6 A out), from Cosel's data sheet SFE_CQHS and instruction manual CME_CQHS
+(31 Jan 2026). Input pins on the left (1 +VIN, 2 RC, 3 -VIN), output pins on the right (4 +VOUT, 5 +S,
+6 TRM, 7 -S, 8 -VOUT), and the base plate / mounting hole as pin MH at the bottom for the CY capacitor.
+The external parts and wiring (fuse, Cin, CY, Cout, remote ON/OFF, sensing, trim) are in hidden fields.
+`power.json` is the same for the app.
+
 Marine switching and industrial controls will follow, drawn to IEC 60617.

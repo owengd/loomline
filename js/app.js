@@ -4,7 +4,7 @@
   'use strict';
   const K = window.KiCore, R = window.KiRender;
   const $ = (id) => document.getElementById(id);
-  const VERSION = '3.5.4';
+  const VERSION = '3.5.5';
 
   // ------------------------------------------------------------------ DOM helper
   function h(tag, attrs, ...kids) {
@@ -3088,7 +3088,8 @@
     { id: 'ourconn', title: 'Our connectors (Deutsch, ASC, M8/M12)', lib: 'Loomline_Connectors' },
     { id: 'passive', title: 'Passives', parts: ['Device:R', 'Device:C', 'Device:C_Polarized', 'Device:L', 'Device:D_Schottky', 'Device:Thermistor_NTC', 'Device:Antenna'] },
     { id: 'beckhoff', title: 'Beckhoff I/O', lib: 'Loomline_Beckhoff' },
-    { id: 'hyd', title: 'Hydraulic valves', lib: 'Loomline_Hydraulics' }
+    { id: 'hyd', title: 'Hydraulic valves', lib: 'Loomline_Hydraulics' },
+    { id: 'dcdc', title: 'DC/DC converters', lib: 'Loomline_Power' }
   ];
   const stKey = (st) => st.kind === 'part' ? 'p:' + st.lib + ':' + st.name : 's:' + st.id;
   function stencilById(id) { return WIRE_STENCILS.concat(LABEL_STENCILS).find((x) => x.id === id); }

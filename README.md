@@ -344,7 +344,8 @@ the stencil panel in Capital X:
   crossing without joining), a junction dot and a no-connect flag.
 - **Labels & connectors**: net label, off-sheet connector, sheet port, cable tag and text.
 - **Parts**: power symbols, fuses and protection, switches, relays, loads and indicators,
-  connectors, passives, the Beckhoff I/O terminals and the Bucher hydraulic valves, each with a
+  connectors, passives, the Beckhoff I/O terminals, the Bucher hydraulic valves and DC/DC converters
+  (Cosel CQHS3004850), each with a
   picture. **All 10,000 parts…** opens the full library; the search box at the top searches the
   stencils and the library together. **Recently used** keeps your last twelve.
 
