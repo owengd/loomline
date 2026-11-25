@@ -299,6 +299,63 @@ for (const c of CONN) {
 }
 libs.push({ meta: writeLib('Loomline_Connectors', 'Connectors', 'connectors.json', conn), rows: connRows });
 
+// ---- DC/DC converters: input side on the left, output side on the right, base plate at the bottom.
+// Cosel CQHS300 (quarter brick, 300 W, isolated), data sheet SFE_CQHS and instruction manual CME_CQHS
+// (31 Jan 2026). Pins: 1 +VIN, 2 RC, 3 -VIN, 4 +VOUT, 5 +S, 6 TRM, 7 -S, 8 -VOUT; the mounting holes
+// (base plate) take the decoupling capacitor CY, so they are a pin too ('MH').
+const COSEL_DS = 'https://www.cosel.com/tool/tag.php/pdf/SFE_CQHS.pdf';
+const DCDC = [
+  { code: 'CQHS3004850', mfr: 'Cosel', ds: COSEL_DS, head: 'DC/DC 300 W', sub: '48 V → 50 V',
+    desc: 'isolated DC/DC converter, quarter brick, 300 W, input 36-76 V DC (48 V nominal), output 50 V 6.0 A (adjustable 45-55 V), 94% efficiency, remote ON/OFF (negative logic), remote sensing, conduction cooled base plate -40 to +100 °C',
+    fields: {
+      Input: '36-76 V DC, 48 V nominal; 6.65 A typ at 48 V full load; starts at 32-36 V; input ripple under 4 Vp-p',
+      Output: '50 V, 6.0 A, 300 W; set 49.5-50.5 V; adjust 45-55 V with TRM (less upward range below 40 V in); ripple noise 500 mVp-p max',
+      Fuse_F1: '20 A normal-blow in +VIN, one per module (no internal fuse)',
+      Cin: 'At least 2 x 68 uF across +VIN/-VIN within 50 mm of the pins; ceramic below -20 °C, electrolytic or ceramic -20 to +100 °C; check ripple current rating',
+      CY: 'At least 4700 pF from the input to the mounting hole (base plate) within 50 mm; total CY no more than 15000 pF or input-output isolation suffers',
+      Cout: '330 uF across +VOUT/-VOUT within 50 mm (2 x 330 uF below -20 °C), maximum 2200 uF; low-ESR high-frequency electrolytic',
+      Remote_ONOFF: 'RC to -VIN: short or 0-1.2 V = ON, open or 3.5-7 V = OFF (standard negative logic; option -R is positive logic). 0.5 mA flows out of RC. Not used: short RC to -VIN',
+      Remote_Sense: 'Not used: short +S to +VOUT and -S to -VOUT at the pins. Used: twisted pair or shielded pair to the load, keep power line drop under 0.3 V',
+      Trim: 'Leave TRM open for 50 V. Lower: RD from TRM to -S, RD = 100/d% - 2 kOhm. Raise: RU from TRM to +S, RU = 50 x (100 + d%) / (1.225 x d%) - (100 + 2 x d%) / d% kOhm. Pot: R1 82k from +S, 5k cermet VR1 to -S, wiper via R2 (11k for +/-5%, 6.2k for +/-10%) to TRM',
+      Protection: 'Overcurrent above 105% and undervoltage shut down; overvoltage 56.5-67.5 V; overtemperature at 100 °C base plate. Latches off: reset by dropping input below 5 V for 1 s or toggling RC for 1 s',
+      Isolation: 'In-out and in-base plate 1500 V DC / 500 V AC 1 min; out-base plate 500 V AC. Functional only: no basic or reinforced isolation',
+      Reverse_Polarity: 'No internal protection: fit a diode across the input (or series diode) ahead of the fuse',
+      Mounting: 'Quarter brick 57.9 x 36.8 x 12.7 mm, 75 g; base plate on a heat sink, 2 x M3 tapped holes, 0.49 Nm max (option -T: 3.4 mm through holes)'
+    },
+    kw: 'Cosel CQHS CQHS300 CQHS3004850 DC/DC DC-DC converter isolated quarter brick bus converter 48V 50V 300W power supply module PSU' }
+];
+function dcdcSymbol(d) {
+  const P = 2.54, w = 11.43;
+  const top = 3 * P + 2 * P, bottom = -3 * P;                 // header row of two lines over five pin rows
+  const left = [['1', '+VIN', 'passive', 2 * P], ['2', 'RC', 'input', 0], ['3', '-VIN', 'passive', -2 * P]];
+  const right = [['4', '+VOUT', 'power_out', 2 * P], ['5', '+S', 'input', P], ['6', 'TRM', 'passive', 0], ['7', '-S', 'input', -P], ['8', '-VOUT', 'passive', -2 * P]];
+  const body = [
+    `(rectangle (start ${f(-w)} ${f(top)}) (end ${f(w)} ${f(bottom)}) (stroke (width 0.254) (type default)) (fill (type background)))`,
+    `(polyline (pts (xy ${f(-w)} ${f(3 * P)}) (xy ${f(w)} ${f(3 * P)})) (stroke (width 0) (type default)) (fill (type none)))`,
+    `(polyline (pts (xy 0 ${f(3 * P)}) (xy 0 ${f(-0.75 * P)})) (stroke (width 0) (type dash)) (fill (type none)))`,   // isolation barrier
+    `(text ${q(d.head)} (at 0 ${f(top - 1.27)} 0) ${font(1.27, {})})`,
+    `(text ${q(d.sub)} (at 0 ${f(top - 3.556)} 0) ${font(1.016, {})})`
+  ];
+  const hidden = (k, v, i) => prop(k, v, 0, bottom - 5.08 - i * 1.27, { hide: true });
+  const extras = Object.entries(d.fields);
+  const fields = [
+    prop('Reference', 'PS', -w, top + 1.27, { justify: 'left' }), prop('Value', d.code, w, top + 1.27, { justify: 'right' }),
+    hidden('Footprint', '', 0), hidden('Datasheet', d.ds, 1),
+    hidden('Description', d.mfr + ' ' + d.code + ': ' + d.desc, 2),
+    hidden('Manufacturer', d.mfr, 3), hidden('MPN', d.code, 4),
+    ...extras.map(([k, v], i) => hidden(k, v, 5 + i)),
+    prop('ki_keywords', d.kw, 0, 0, { hide: true })
+  ];
+  const pin = ([n, name, type, y], x, ang) => `(pin ${type} line (at ${f(x)} ${f(y)} ${ang}) (length 2.54) (name ${q(name)} ${font(1.27)}) (number ${q(n)} ${font(1.27)}))`;
+  const pins = left.map((p) => pin(p, -w - 2.54, 0)).concat(right.map((p) => pin(p, w + 2.54, 180)));
+  pins.push(`(pin passive line (at 0 ${f(bottom - 2.54)} 90) (length 2.54) (name "BASE" ${font(1.016)}) (number "MH" ${font(1.27)}))`);
+  return `(symbol ${q(d.code)} (pin_names (offset 0.508)) (exclude_from_sim yes) (in_bom yes) (on_board yes) ${fields.join(' ')} ` +
+    `(symbol ${q(d.code + '_0_1')} ${body.join(' ')}) (symbol ${q(d.code + '_1_1')} ${pins.join(' ')}))`;
+}
+const pwr = {}, pwrRows = [];
+for (const d of DCDC) { pwr[d.code] = dcdcSymbol(d); pwrRows.push([d.code, d.mfr + ' ' + d.code + ': ' + d.desc, d.kw, 'PS', 1, 9, 0]); }
+libs.push({ meta: writeLib('Loomline_Power', 'Power conversion', 'power.json', pwr), rows: pwrRows });
+
 // ---- merge into the app's index, Loomline libraries first
 const idxPath = path.join(out, 'index.json');
 const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
